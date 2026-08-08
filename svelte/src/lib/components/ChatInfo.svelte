@@ -148,4 +148,15 @@
   .muted {
     color: var(--text-dim);
   }
+
+  /* Phones have no room for a third column — show it as a full-screen sheet. */
+  @media (max-width: 720px) {
+    .info {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      background: var(--bg);
+      z-index: 80;
+    }
+  }
 </style>
