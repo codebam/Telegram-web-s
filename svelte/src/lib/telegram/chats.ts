@@ -1483,15 +1483,63 @@ async function membersFrom(participants: any[], selfId: number): Promise<MemberI
 
 export type NewMessageHandler = (peerId: number, mid: number, threadId?: number) => void;
 
-/** Subscribe to appended messages; returns an unsubscribe callback. */
+/**
+ * Subscribe to messages appearing in a chat.
+ *
+ * Three events matter and only listening to one of them loses messages:
+ * `history_append` is the main path when a message is saved into a history
+ * storage, `history_multiappend` covers the batched update path, and a message
+ * we send ourselves lands first under a temporary id. Callers dedupe by mid.
+ */
 export async function onNewMessage(callback: NewMessageHandler): Promise<() => void> {
   const {default: rootScope} = await import('@lib/rootScope');
 
-  const handler = (message: any) => {
-    // Cache it right away so a following getMessage/loadMediaUrl is a local hit.
+  const emit = (message: any) => {
+    if(!message) return;
     callback(Number(message.peerId), message.mid, message.reply_to?.reply_to_top_id);
   };
 
-  rootScope.addEventListener('history_multiappend', handler);
-  return () => rootScope.removeEventListener('history_multiappend', handler);
+  const onMultiAppend = (message: any) => emit(message);
+  const onAppend = ({message}: any) => emit(message);
+
+  rootScope.addEventListener('history_multiappend', onMultiAppend);
+  rootScope.addEventListener('history_append', onAppend);
+
+  return () => {
+    rootScope.removeEventListener('history_multiappend', onMultiAppend);
+    rootScope.removeEventListener('history_append', onAppend);
+  };
+}
+
+/** Messages removed by anyone; the payload is a set of ids for one peer. */
+export async function onMessagesDeleted(
+  callback: (peerId: number, mids: number[]) => void
+): Promise<() => void> {
+  const {default: rootScope} = await import('@lib/rootScope');
+
+  const handler = ({peerId, msgs}: any) => {
+    // `msgs` is a Set on the wire; normalise before it reaches the UI.
+    callback(Number(peerId), Array.from(msgs ?? [], Number));
+  };
+
+  rootScope.addEventListener('history_delete', handler);
+  return () => rootScope.removeEventListener('history_delete', handler);
+}
+
+/**
+ * A message we sent has been acknowledged: its temporary id is replaced by the
+ * real one. Without this the optimistic copy lingers and the confirmed message
+ * arrives as a duplicate.
+ */
+export async function onMessageSent(
+  callback: (peerId: number, tempId: number, mid: number) => void
+): Promise<() => void> {
+  const {default: rootScope} = await import('@lib/rootScope');
+
+  const handler = ({tempId, mid, message}: any) => {
+    callback(Number(message?.peerId ?? 0), tempId, mid);
+  };
+
+  rootScope.addEventListener('message_sent', handler);
+  return () => rootScope.removeEventListener('message_sent', handler);
 }
