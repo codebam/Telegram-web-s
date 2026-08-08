@@ -159,7 +159,10 @@ export async function loadStories(peerId: number, ids: number[]): Promise<StoryI
   const {managers} = await bootTelegram();
 
   try {
-    const stories: any[] = await managers.appStoriesManager.getStoriesById(peerId, ids);
+    // Copy to a plain array: callers hold these in Svelte state, and a $state
+    // proxy is not structured-cloneable — postMessage drops the request.
+    const plainIds = Array.from(ids, Number);
+    const stories: any[] = await managers.appStoriesManager.getStoriesById(peerId, plainIds);
     return (stories ?? []).map((story: any) => {
       rawStories.set(storyKey(peerId, story.id), story);
       return {
@@ -181,6 +184,9 @@ export async function loadStoryUrl(peerId: number, id: number): Promise<string |
 
   const story = rawStories.get(key);
   const media = story?.media;
+  // The feed returns storyItemSkipped entries with no media; the full story
+  // arrives later from getStoriesById. Return without caching so the retry
+  // after it lands is not answered from a poisoned negative cache.
   if(!media) return null;
 
   await bootTelegram();
@@ -193,10 +199,11 @@ export async function loadStoryUrl(peerId: number, id: number): Promise<string |
   if(!target) return null;
 
   try {
-    const isVideo = (target.attributes ?? []).some((a: any) => a._ === 'documentAttributeVideo');
+    // Photos need an explicit size: without one the download resolves against
+    // photoSizeEmpty and throws. Videos download their poster frame.
     const url = await appDownloadManager.downloadMediaURL({
       media: target,
-      thumb: isVideo ? choosePhotoSize(target, 720, 1280, true) : undefined
+      thumb: choosePhotoSize(target, 720, 1280, true)
     });
     storyUrls.set(key, url ?? null);
     return url ?? null;
