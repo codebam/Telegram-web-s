@@ -1399,6 +1399,31 @@ export async function leaveOrDelete(peerId: number): Promise<void> {
   rawPeers.delete(peerId);
 }
 
+/**
+ * Enough about a peer to open it as a chat, for peers that may not have a
+ * dialog yet — a group member you have never messaged, for instance.
+ */
+export async function getPeerBrief(peerId: number): Promise<{
+  peerId: number;
+  title: string;
+  isUser: boolean;
+  isSelf: boolean;
+  isBroadcast: boolean;
+  isForum: boolean;
+}> {
+  const selfId = await getSelfId();
+  const peer = await getPeer(peerId);
+
+  return {
+    peerId,
+    title: peerTitle(peer, selfId),
+    isUser: peer?._ === 'user',
+    isSelf: peerId === selfId,
+    isBroadcast: peer?._ === 'channel' && !!peer?.pFlags?.broadcast,
+    isForum: !!peer?.pFlags?.forum
+  };
+}
+
 /* ------------------------------------------------------------------ */
 /* Chat / group / channel info                                         */
 /* ------------------------------------------------------------------ */

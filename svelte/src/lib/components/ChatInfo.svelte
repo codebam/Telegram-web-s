@@ -2,7 +2,19 @@
   import Avatar from './Avatar.svelte';
   import {loadChatInfo, type ChatInfo} from '$lib/telegram/chats';
 
-  let {peerId, onclose}: {peerId: number; onclose: () => void} = $props();
+  let {
+    peerId,
+    onclose,
+    onmessage,
+    onpeer
+  }: {
+    peerId: number;
+    onclose: () => void;
+    /** Open a direct chat with this peer. */
+    onmessage?: (peerId: number) => void;
+    /** Drill into another profile, e.g. a member of this group. */
+    onpeer?: (peerId: number) => void;
+  } = $props();
 
   let info = $state<ChatInfo | null>(null);
   let error = $state('');
@@ -41,6 +53,12 @@
             · {info.membersCount.toLocaleString()} {info.isChannel ? 'subscribers' : 'members'}
           {/if}
         </p>
+
+        {#if onmessage}
+          <button class="primary" onclick={() => onmessage(info.peerId)}>
+            {info.isChannel || info.isGroup ? 'Open chat' : 'Send message'}
+          </button>
+        {/if}
       </div>
 
       {#if info.about}
@@ -54,10 +72,10 @@
         <section>
           <p class="label">Members</p>
           {#each info.members as member (member.peerId)}
-            <div class="member">
+            <button class="member" onclick={() => onpeer?.(member.peerId)}>
               <Avatar peerId={member.peerId} title={member.title} size={32} />
               <span>{member.title}</span>
-            </div>
+            </button>
           {/each}
         </section>
       {/if}
@@ -144,8 +162,30 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 6px 0;
+    width: 100%;
+    padding: 6px 4px;
+    border: none;
+    border-radius: 8px;
+    background: none;
+    color: inherit;
     font-size: 14px;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .member:hover {
+    background: color-mix(in srgb, var(--text) 8%, transparent);
+  }
+
+  .primary {
+    margin-top: 10px;
+    padding: 9px 18px;
+    border: none;
+    border-radius: 999px;
+    background: var(--accent);
+    color: #fff;
+    font-weight: 600;
+    cursor: pointer;
   }
 
   .muted {

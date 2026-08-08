@@ -23,6 +23,7 @@
     getDraftText,
     editMessage,
     getMessage,
+    getPeerBrief,
     getPresence,
     getReadOutboxMaxId,
     leaveOrDelete,
@@ -124,6 +125,8 @@
   let folderEditorOpen = $state(false);
   let menuFor = $state<DialogItem | null>(null);
   let showInfo = $state(false);
+  /** Profile being viewed from a message sender or member list, if any. */
+  let profilePeerId = $state<number | null>(null);
   let showPicker = $state(false);
   let reactionPalette = $state<string[]>([]);
   let reactingTo = $state<number | null>(null);
@@ -666,6 +669,38 @@
     const previous = rendered[index - 1]?.items[0];
     const current = rendered[index]?.items[0];
     return !!previous && !!current && dayOf(previous.date) !== dayOf(current.date);
+  }
+
+  /**
+   * Open any peer as a chat, even one with no dialog yet — clicking a group
+   * member you have never messaged should still land in a conversation.
+   */
+  async function openPeerChat(peerId: number) {
+    profilePeerId = null;
+    showInfo = false;
+    showSidebarOnMobile = false;
+
+    try {
+      const brief = await getPeerBrief(peerId);
+      activePeerId = brief.peerId;
+      activeTitle = brief.title;
+      activeIsUser = brief.isUser;
+      activeIsSelf = brief.isSelf;
+      activeIsChannel = brief.isBroadcast;
+      activeIsForum = brief.isForum;
+      activeThreadId = undefined;
+      topics = [];
+      replyTo = null;
+
+      if (brief.isForum) {
+        topics = await loadTopics(peerId);
+        return;
+      }
+
+      await openHistory(peerId);
+    } catch (err: any) {
+      error = errorOf(err, 'Could not open that chat');
+    }
   }
 
   /** Small groups can list who has read a message; larger ones cannot. */
@@ -1355,9 +1390,14 @@
                 {#if !message.out}
                   <!-- Sender photo, like the official clients. Hidden on
                        consecutive messages from the same person. -->
-                  <span class="line-avatar" class:hidden={sameSenderAsPrevious(group)}>
+                  <button
+                    class="line-avatar"
+                    class:hidden={sameSenderAsPrevious(group)}
+                    onclick={() => (profilePeerId = message.fromId)}
+                    aria-label="View {message.fromTitle}"
+                  >
                     <Avatar peerId={message.fromId} title={message.fromTitle} size={32} />
-                  </span>
+                  </button>
                 {/if}
               <div
                 class="bubble"
@@ -1374,7 +1414,9 @@
                 role="presentation"
               >
                 {#if !message.out && message.fromTitle}
-                  <span class="author">{message.fromTitle}</span>
+                  <button class="author" onclick={() => (profilePeerId = message.fromId)}>
+                    {message.fromTitle}
+                  </button>
                 {/if}
 
                 {#if message.forwardedFrom}
@@ -1599,8 +1641,19 @@
     />
   {/if}
 
-  {#if showInfo && activePeerId !== null}
-    <ChatInfo peerId={activePeerId} onclose={() => (showInfo = false)} />
+  {#if profilePeerId !== null}
+    <ChatInfo
+      peerId={profilePeerId}
+      onclose={() => (profilePeerId = null)}
+      onmessage={openPeerChat}
+      onpeer={(id) => (profilePeerId = id)}
+    />
+  {:else if showInfo && activePeerId !== null}
+    <ChatInfo
+      peerId={activePeerId}
+      onclose={() => (showInfo = false)}
+      onpeer={(id) => (profilePeerId = id)}
+    />
   {/if}
 </div>
 
@@ -2136,6 +2189,11 @@
   .line-avatar {
     flex: none;
     align-self: flex-end;
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    line-height: 0;
   }
 
   .line-avatar.hidden {
@@ -2167,6 +2225,16 @@
     font-size: 12px;
     font-weight: 600;
     color: var(--action);
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    text-align: left;
+    justify-self: start;
+  }
+
+  .author:hover {
+    text-decoration: underline;
   }
 
   .bubble.out .author {
