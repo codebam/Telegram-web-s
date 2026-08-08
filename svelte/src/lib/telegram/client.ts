@@ -60,6 +60,13 @@ async function doBoot(): Promise<TelegramClient> {
   const {default: appDownloadManager} = await import('@lib/appDownloadManager');
   appDownloadManager.construct(managers as any);
 
+  // Register this tab with the worker. Several worker-side flows deliver to a
+  // *known* tab rather than broadcasting — call updates are routed with
+  // appTabsManager.getTabs(), which only counts tabs that have sent their
+  // state. Without this a call is created and then never progresses, because
+  // its phoneCall updates have nowhere to go.
+  apiManagerProxy.updateTabState('idleStartTime', 0);
+
   // Subscribe to server updates. Without this the worker never opens the
   // updates loop, so nothing arrives after load: no incoming messages, no
   // deletions, no edits — only the local echo of what we send ourselves.
