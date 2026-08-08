@@ -11,6 +11,7 @@
   --bg: #0e0f1a;
   --bg-elevated: rgba(255, 255, 255, 0.055);
   --bg-solid: #14161f;
+  --bubble-in: rgba(255, 255, 255, 0.08);
   --border: rgba(255, 255, 255, 0.09);
   --text: #f0f1f8;
   --text-dim: #9ba0bb;
@@ -35,30 +36,32 @@
 /* System preference (theme mode "system" leaves data-theme unset). */
 @media (prefers-color-scheme: light) {
   :root:not([data-theme]) {
-    --bg: #eef0f8;
-    --bg-elevated: rgba(255, 255, 255, 0.72);
+    --bg: #e4e7f4;
+    --bg-elevated: rgba(255, 255, 255, 0.88);
     --bg-solid: #ffffff;
-    --border: rgba(19, 22, 40, 0.09);
-    --text: #131628;
-    --text-dim: #646b86;
+    --bubble-in: #ffffff;
+    --border: rgba(19, 22, 40, 0.13);
+    --text: #0f1222;
+    --text-dim: #5b6279;
     --field:
-      radial-gradient(120% 90% at 8% 0%, rgba(110, 99, 255, 0.2), transparent 55%),
-      radial-gradient(90% 80% at 95% 110%, rgba(255, 122, 92, 0.18), transparent 55%);
+      radial-gradient(120% 90% at 8% 0%, rgba(110, 99, 255, 0.26), transparent 58%),
+      radial-gradient(90% 80% at 95% 110%, rgba(255, 122, 92, 0.2), transparent 58%);
     color-scheme: light;
   }
 }
 
 /* Explicit choices from Settings → Appearance win over the media query. */
 :root[data-theme='light'] {
-  --bg: #eef0f8;
-  --bg-elevated: rgba(255, 255, 255, 0.72);
+  --bg: #e4e7f4;
+  --bg-elevated: rgba(255, 255, 255, 0.88);
   --bg-solid: #ffffff;
-  --border: rgba(19, 22, 40, 0.09);
-  --text: #131628;
-  --text-dim: #646b86;
+  --bubble-in: #ffffff;
+  --border: rgba(19, 22, 40, 0.13);
+  --text: #0f1222;
+  --text-dim: #5b6279;
   --field:
-    radial-gradient(120% 90% at 8% 0%, rgba(110, 99, 255, 0.2), transparent 55%),
-    radial-gradient(90% 80% at 95% 110%, rgba(255, 122, 92, 0.18), transparent 55%);
+    radial-gradient(120% 90% at 8% 0%, rgba(110, 99, 255, 0.26), transparent 58%),
+    radial-gradient(90% 80% at 95% 110%, rgba(255, 122, 92, 0.2), transparent 58%);
   color-scheme: light;
 }
 
@@ -66,6 +69,7 @@
   --bg: #0e0f1a;
   --bg-elevated: rgba(255, 255, 255, 0.055);
   --bg-solid: #14161f;
+  --bubble-in: rgba(255, 255, 255, 0.08);
   --border: rgba(255, 255, 255, 0.09);
   --text: #f0f1f8;
   --text-dim: #9ba0bb;
@@ -151,6 +155,7 @@ button {
 /* scoped component styles.                                            */
 /* ------------------------------------------------------------------ */
 :root[data-density='console'] {
+  --bubble-in: transparent;
   --pane-radius: 6px;
   --bubble-radius: 4px;
   --blur: 0px;
@@ -168,9 +173,15 @@ button {
   padding: 10px 12px;
 }
 
-/* Rows, not bubbles: the sender column lines up down the whole thread. */
-:root[data-density='console'] .line {
+/* Rows, not bubbles: the sender column lines up down the whole thread. Outgoing
+   rows must not right-justify, or their columns shift out of the grid. */
+/* .messages in the selector so this outranks the component's own
+   `.line.out { justify-content: flex-end }` — without it the two tie on
+   specificity and the later-loaded component style wins. */
+:root[data-density='console'] .messages .line,
+:root[data-density='console'] .messages .line.out {
   align-items: baseline;
+  justify-content: flex-start;
   gap: 8px;
 }
 
@@ -186,7 +197,8 @@ button {
   border: none;
   border-radius: 0;
   display: grid;
-  grid-template-columns: 96px minmax(0, 1fr);
+  /* time · sender · text, so all three line up down the whole thread */
+  grid-template-columns: 78px 104px minmax(0, 1fr);
   gap: 2px 10px;
   align-items: baseline;
 }
@@ -198,7 +210,7 @@ button {
 }
 
 :root[data-density='console'] .bubble .author {
-  grid-column: 1;
+  grid-column: 2;
   grid-row: 1;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -209,7 +221,7 @@ button {
 
 :root[data-density='console'] .bubble.out::before {
   content: 'you';
-  grid-column: 1;
+  grid-column: 2;
   grid-row: 1;
   color: var(--action);
 }
@@ -220,18 +232,47 @@ button {
 :root[data-density='console'] .bubble .poll,
 :root[data-density='console'] .bubble .reactions,
 :root[data-density='console'] .bubble .frame,
-:root[data-density='console'] .bubble .file {
-  grid-column: 2;
+:root[data-density='console'] .bubble .file,
+:root[data-density='console'] .bubble .read-by {
+  grid-column: 3;
 }
 
+/* The stamp becomes the leading time column; its buttons stay hover-only. */
 :root[data-density='console'] .bubble .stamp {
-  grid-column: 2;
+  grid-column: 1;
+  grid-row: 1;
   justify-content: flex-start;
+  gap: 6px;
   opacity: 0.55;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+:root[data-density='console'] .bubble .stamp .reply-btn,
+:root[data-density='console'] .bubble .stamp .ticks,
+:root[data-density='console'] .bubble .stamp .views,
+:root[data-density='console'] .bubble .stamp .replies {
+  position: absolute;
+  right: 12px;
+  background: var(--bg-solid);
+  padding-left: 6px;
+}
+
+:root[data-density='console'] .bubble {
+  position: relative;
 }
 
 :root[data-density='console'] .bubble .frame {
   max-width: 220px;
+}
+
+:root[data-density='console'] .sticker-bubble,
+:root[data-density='console'] .sticker-bubble.out {
+  align-self: flex-start;
+  justify-items: start;
+  transform: scale(0.5);
+  transform-origin: left center;
+  margin: -26px 0;
 }
 
 /* One line per chat in the list. */
@@ -256,6 +297,39 @@ button {
 
 :root[data-density='console'] .row-button .preview {
   display: none;
+}
+
+:root[data-density='console'] .row-button .title {
+  font-weight: 400;
+  text-transform: lowercase;
+}
+
+:root[data-density='console'] .row-button .time {
+  display: none;
+}
+
+/* Signal dot in place of the avatar: filled when the chat has activity. */
+:root[data-density='console'] .row-button .avatar {
+  width: 8px !important;
+  height: 8px !important;
+  border-radius: 50% !important;
+  font-size: 0 !important;
+  background: color-mix(in srgb, var(--text) 35%, transparent) !important;
+}
+
+:root[data-density='console'] .row-button .avatar img {
+  display: none;
+}
+
+:root[data-density='console'] .row-button:has(.badge) .avatar {
+  background: var(--accent) !important;
+}
+
+/* Uppercase headers, terminal-style. */
+:root[data-density='console'] header {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 11px;
 }
 
 :root[data-density='console'] .badge,

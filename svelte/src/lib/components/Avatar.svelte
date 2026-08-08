@@ -16,7 +16,10 @@
   });
 </script>
 
-<span class="avatar" style="width: {size}px; height: {size}px; font-size: {Math.round(size / 2.4)}px">
+<span
+  class="avatar"
+  style="width: {size}px; height: {size}px; font-size: {Math.round(size / 2.4)}px; border-radius: {Math.max(6, Math.round(size / 2.8))}px"
+>
   {#if url}
     <img src={url} alt="" />
   {:else}
@@ -25,9 +28,10 @@
 </span>
 
 <style>
+  /* Rounded squares, not circles — the squircle reads as current and keeps
+     initials optically centred at small sizes. */
   .avatar {
     flex: none;
-    border-radius: 50%;
     display: grid;
     place-items: center;
     overflow: hidden;
