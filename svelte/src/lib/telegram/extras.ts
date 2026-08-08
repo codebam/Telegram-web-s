@@ -251,6 +251,8 @@ export type CallState = {
   duration: number;
   /** Four emoji both sides can compare to verify the call is not intercepted. */
   fingerprint: string[];
+  /** Why the call ended, once it has: 'busy', 'declined', 'missed', 'ended'. */
+  endReason: string;
 };
 
 /**
@@ -276,6 +278,17 @@ async function getCallsController() {
   })());
 }
 
+/** Human-readable reason a call ended, so the UI can say more than nothing. */
+function endReasonOf(call: any): string {
+  switch(call?.discardReason?._) {
+    case 'phoneCallDiscardReasonBusy': return 'busy';
+    case 'phoneCallDiscardReasonHangup': return 'ended';
+    case 'phoneCallDiscardReasonDisconnect': return 'disconnected';
+    case 'phoneCallDiscardReasonMissed': return 'missed';
+    default: return '';
+  }
+}
+
 async function phaseOf(call: any): Promise<CallPhase> {
   const {default: CALL_STATE} = await import('@lib/calls/callState');
 
@@ -289,14 +302,50 @@ async function phaseOf(call: any): Promise<CallPhase> {
   }
 }
 
-export async function startCall(userId: number, isVideo = false): Promise<boolean> {
+export type CallStartResult =
+  | {ok: true}
+  | {ok: false; reason: 'mic-blocked' | 'no-mic' | 'failed'; detail?: string};
+
+/**
+ * Ask for the microphone before placing the call.
+ *
+ * The P2P engine acquires its own stream, but it does so deep inside the call
+ * setup where a rejection surfaces as a silent failure — the UI would open and
+ * the call would never ring. Probing first turns "nothing happens" into a
+ * message that says which permission is missing.
+ */
+async function checkMicrophone(isVideo: boolean): Promise<CallStartResult> {
+  if(!navigator.mediaDevices?.getUserMedia) {
+    return {ok: false, reason: 'no-mic', detail: 'This browser cannot access the microphone.'};
+  }
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({audio: true, video: isVideo});
+    // Release it immediately; the engine opens its own.
+    stream.getTracks().forEach((track) => track.stop());
+    return {ok: true};
+  } catch(err: any) {
+    const name = err?.name ?? '';
+    if(name === 'NotAllowedError' || name === 'SecurityError') {
+      return {ok: false, reason: 'mic-blocked'};
+    }
+    if(name === 'NotFoundError' || name === 'OverconstrainedError') {
+      return {ok: false, reason: 'no-mic'};
+    }
+    return {ok: false, reason: 'failed', detail: err?.message};
+  }
+}
+
+export async function startCall(userId: number, isVideo = false): Promise<CallStartResult> {
+  const permission = await checkMicrophone(isVideo);
+  if(!permission.ok) return permission;
+
   const controller = await getCallsController();
   try {
     await controller.startCallInternal(userId, isVideo);
-    return true;
-  } catch(err) {
-    console.error('[call] could not start', err);
-    return false;
+    return {ok: true};
+  } catch(err: any) {
+    return {ok: false, reason: 'failed', detail: err?.message ?? String(err)};
   }
 }
 
@@ -373,7 +422,8 @@ export async function onCallState(callback: (state: CallState | null) => void): 
       sharingVideo: !!call.isSharingVideo,
       sharingScreen: !!call.isSharingScreen,
       duration: call.duration ?? 0,
-      fingerprint
+      fingerprint,
+      endReason: endReasonOf(call)
     });
   };
 

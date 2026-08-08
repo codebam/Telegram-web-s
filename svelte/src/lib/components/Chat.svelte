@@ -671,6 +671,21 @@
     return !!previous && !!current && dayOf(previous.date) !== dayOf(current.date);
   }
 
+  /** Place a call, explaining the failure rather than opening a dead screen. */
+  async function placeCall() {
+    if (activePeerId === null) return;
+
+    const result = await startCall(activePeerId);
+    if (result.ok) return;
+
+    error =
+      result.reason === 'mic-blocked' ?
+        'Microphone blocked. Allow microphone access for this site in your browser settings, then try again.' :
+      result.reason === 'no-mic' ?
+        (result.detail ?? 'No microphone found. Connect one and try again.') :
+        `Could not start the call${result.detail ? `: ${result.detail}` : ''}`;
+  }
+
   /**
    * Open any peer as a chat, even one with no dialog yet — clicking a group
    * member you have never messaged should still land in a conversation.
@@ -1288,7 +1303,7 @@
             : presence}
         </span>
         {#if activeIsUser && !activeIsSelf}
-          <button class="icon-button" onclick={() => startCall(activePeerId!)} aria-label="Call">📞</button>
+          <button class="icon-button" onclick={placeCall} aria-label="Call">📞</button>
         {/if}
         <button class="icon-button" onclick={() => (chatSearchOpen = !chatSearchOpen)} aria-label="Search messages">🔍</button>
       </header>
@@ -1719,7 +1734,9 @@
   />
 {/if}
 
-{#if error}<p class="error">{error}</p>{/if}
+{#if error}
+  <button class="error" onclick={() => (error = '')} title="Dismiss">{error}</button>
+{/if}
 
 <style>
   /* 100dvh (not vh) so mobile browser chrome does not push the composer off
@@ -2777,10 +2794,17 @@
     bottom: 16px;
     left: 50%;
     transform: translateX(-50%);
+    z-index: 130;
+    max-width: min(520px, calc(100vw - 32px));
     margin: 0;
     padding: 10px 16px;
+    border: none;
     border-radius: 10px;
     background: var(--danger);
     color: #fff;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    box-shadow: 0 10px 26px rgba(0, 0, 0, 0.35);
   }
 </style>
