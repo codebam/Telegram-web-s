@@ -82,6 +82,12 @@
   let activeThreadId = $state<number | undefined>(undefined);
   let activeTitle = $state('');
   let activeIsForum = $state(false);
+  /**
+   * Whether a row in a topic chat has been opened. "All messages" has no
+   * threadId, so the thread id alone cannot distinguish "showing the main
+   * timeline" from "nothing picked yet".
+   */
+  let topicOpen = $state(false);
   /** Calls are one-to-one only, and never to Saved Messages. */
   let activeIsUser = $state(false);
   let activeIsSelf = $state(false);
@@ -733,6 +739,7 @@
       activeIsChannel = brief.isBroadcast;
       activeIsForum = brief.isForum;
       activeThreadId = undefined;
+      topicOpen = false;
       topics = [];
       replyTo = null;
 
@@ -1018,6 +1025,8 @@
     replyTo = null;
     error = '';
 
+    topicOpen = false;
+
     if (dialog.isForum) {
       try {
         topics = await loadTopics(dialog.peerId);
@@ -1035,6 +1044,7 @@
     // not a thread. A forum still has a main timeline and hiding it makes
     // anything posted outside a topic unreachable.
     const threadId = topic.threadId || undefined;
+    topicOpen = true;
     activeThreadId = threadId;
     activeTitle = threadId === undefined ? (dialogs.find((d) => d.peerId === activePeerId)?.title ?? 'All messages') : topic.title;
     replyTo = null;
@@ -1078,7 +1088,8 @@
 
   function backToChats() {
     showSidebarOnMobile = true;
-    if (activeThreadId !== undefined) {
+    if (topicOpen) {
+      topicOpen = false;
       activeThreadId = undefined;
       messages = [];
       const dialog = dialogs.find((d) => d.peerId === activePeerId);
@@ -1317,7 +1328,7 @@
     ondrop={onDrop}
     aria-label="Conversation"
   >
-    {#if activePeerId === null || (activeIsForum && activeThreadId === undefined)}
+    {#if activePeerId === null || (activeIsForum && !topicOpen)}
       <div class="empty">
         <p class="muted">{activeIsForum ? 'Select a topic' : 'Select a chat'}</p>
       </div>
