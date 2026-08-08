@@ -13,7 +13,9 @@
   import {
     availableReactions,
     deleteMessage,
+    deleteMessages,
     forwardMessage,
+    getDraftText,
     editMessage,
     getMessage,
     getPresence,
@@ -31,7 +33,12 @@
     onFoldersUpdate,
     onNewMessage,
     onTyping,
+    onUserUpdate,
+    openDiscussion,
     readUpTo,
+    saveDraftText,
+    searchMessages,
+    setOwnOnline,
     searchDialogs,
     sendDocument,
     sendFiles,
@@ -40,6 +47,7 @@
     toggleMute,
     togglePin,
     toggleReaction,
+    votePoll,
     type DialogItem,
     type FolderItem,
     type MessageItem,
@@ -94,6 +102,15 @@
   let pinnedMessage = $state<MessageItem | null>(null);
   let forwarding = $state<MessageItem | null>(null);
   let atBottom = $state(true);
+  let chatQuery = $state('');
+  let chatResults = $state<MessageItem[] | null>(null);
+  let chatSearchOpen = $state(false);
+  let chatSearchTimer: ReturnType<typeof setTimeout> | undefined;
+  let selecting = $state(false);
+  let selected = $state<Set<number>>(new Set());
+  let messageMenu = $state<{mid: number; x: number; y: number} | null>(null);
+  let lastTypingSent = 0;
+  let showSidebarOnMobile = $state(true);
 
   /** Media messages in order — the lightbox pages through these. */
   const mediaMessages = $derived(
@@ -186,6 +203,7 @@
   onMount(() => {
     let unsubscribe: (() => void) | undefined;
     let disposed = false;
+    const stopPresence = trackOwnPresence();
 
     (async () => {
       try {
@@ -231,6 +249,12 @@
         if (!folders.some((f) => f.id === activeFolder)) activeFolder = 0;
       });
 
+      const offUsers = await onUserUpdate(async (userId) => {
+        if (userId === activePeerId) {
+          presence = (await getPresence(userId)).text;
+        }
+      });
+
       const offTyping = await onTyping((peerId, threadId, names) => {
         if (peerId === activePeerId && (activeThreadId === undefined || threadId === activeThreadId)) {
           typingNames = names;
@@ -242,6 +266,7 @@
         offTyping();
         offDialogs();
         offFolders();
+        offUsers();
       };
 
       if (disposed) all();
@@ -251,6 +276,7 @@
     return () => {
       disposed = true;
       unsubscribe?.();
+      stopPresence();
       observer?.disconnect();
       readObserver?.disconnect();
     };
@@ -331,6 +357,130 @@
     return !!previous && !previous.service && previous.fromId === group.items[0].fromId;
   }
 
+  /* ---------- own presence ---------- */
+
+  /**
+   * Publish our own online status: once on load, refreshed every minute (the
+   * server expires it), and switched to offline when the tab is hidden or
+   * unloaded so contacts do not see us online forever.
+   */
+  function trackOwnPresence() {
+    let timer: ReturnType<typeof setInterval> | undefined;
+
+    const goOnline = () => setOwnOnline(true).catch(() => {});
+    const goOffline = () => setOwnOnline(false).catch(() => {});
+
+    const onVisibility = () => {
+      if (document.hidden) goOffline();
+      else goOnline();
+    };
+
+    goOnline();
+    timer = setInterval(() => {
+      if (!document.hidden) goOnline();
+    }, 60_000);
+
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pagehide', goOffline);
+
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pagehide', goOffline);
+      goOffline();
+    };
+  }
+
+  /* ---------- in-chat search ---------- */
+
+  function onChatQueryInput() {
+    clearTimeout(chatSearchTimer);
+    chatSearchTimer = setTimeout(async () => {
+      if (activePeerId === null || !chatQuery.trim()) {
+        chatResults = null;
+        return;
+      }
+      try {
+        chatResults = await searchMessages(activePeerId, chatQuery, {threadId: activeThreadId});
+      } catch (err: any) {
+        error = errorOf(err, 'Search failed');
+      }
+    }, 300);
+  }
+
+  function closeChatSearch() {
+    chatSearchOpen = false;
+    chatQuery = '';
+    chatResults = null;
+  }
+
+  /* ---------- selection ---------- */
+
+  function toggleSelected(mid: number) {
+    const next = new Set(selected);
+    if (next.has(mid)) next.delete(mid);
+    else next.add(mid);
+    selected = next;
+    if (!next.size) selecting = false;
+  }
+
+  function startSelecting(mid: number) {
+    selecting = true;
+    selected = new Set([mid]);
+    messageMenu = null;
+  }
+
+  async function deleteSelected() {
+    if (activePeerId === null || !selected.size) return;
+    const mids = [...selected];
+    selecting = false;
+    selected = new Set();
+
+    try {
+      await deleteMessages(activePeerId, mids);
+      messages = messages.filter((m) => !mids.includes(m.mid));
+    } catch (err: any) {
+      error = errorOf(err, 'Delete failed');
+    }
+  }
+
+  async function forwardSelected() {
+    if (!selected.size) return;
+    forwarding = messages.find((m) => selected.has(m.mid)) ?? null;
+    allDialogs = await loadDialogs(100, 0);
+  }
+
+  /* ---------- polls and discussions ---------- */
+
+  async function vote(message: MessageItem, index: number) {
+    if (activePeerId === null || message.poll?.closed) return;
+    try {
+      await votePoll(activePeerId, message.mid, [index]);
+      const updated = await getMessage(activePeerId, message.mid);
+      if (updated) messages = messages.map((m) => (m.mid === message.mid ? updated : m));
+    } catch (err: any) {
+      error = errorOf(err, 'Vote failed');
+    }
+  }
+
+  async function openComments(message: MessageItem) {
+    if (activePeerId === null) return;
+    try {
+      const discussion = await openDiscussion(activePeerId, message.mid);
+      if (!discussion) {
+        error = 'No discussion for this post';
+        return;
+      }
+      activePeerId = discussion.peerId;
+      activeThreadId = discussion.threadId;
+      activeTitle = 'Comments';
+      activeIsForum = false;
+      await openHistory(discussion.peerId, discussion.threadId);
+    } catch (err: any) {
+      error = errorOf(err, 'Could not open comments');
+    }
+  }
+
   /* ---------- jumping to a message ---------- */
 
   /**
@@ -374,11 +524,14 @@
 
   async function doForward(toPeerId: number) {
     const message = forwarding;
+    const mids = selecting && selected.size ? [...selected] : message ? [message.mid] : [];
     forwarding = null;
-    if (!message || activePeerId === null) return;
+    selecting = false;
+    selected = new Set();
+    if (!mids.length || activePeerId === null) return;
 
     try {
-      await forwardMessage(activePeerId, [message.mid], toPeerId);
+      await forwardMessage(activePeerId, mids, toPeerId);
     } catch (err: any) {
       error = errorOf(err, 'Forward failed');
     }
@@ -518,10 +671,23 @@
 
   function onDraftInput() {
     if (activePeerId === null || editing) return;
+
+    // The server expires a typing status after ~6s, so keep re-sending while
+    // the user is still typing rather than firing once per keystroke.
+    const now = Date.now();
+    if (now - lastTypingSent > 4000) {
+      lastTypingSent = now;
+      sendTyping(activePeerId, activeThreadId).catch(() => {});
+    }
+
+    // Persist the draft so it survives switching chats or reloading.
     clearTimeout(typingTimer);
+    const peerId = activePeerId;
+    const threadId = activeThreadId;
+    const text = draft;
     typingTimer = setTimeout(() => {
-      sendTyping(activePeerId!, activeThreadId).catch(() => {});
-    }, 300);
+      saveDraftText(peerId, threadId, text).catch(() => {});
+    }, 700);
   }
 
   function errorOf(err: any, fallback: string) {
@@ -529,6 +695,8 @@
   }
 
   async function openChat(dialog: DialogItem) {
+    // On a phone the two panes are stacked; opening a chat swaps the view.
+    showSidebarOnMobile = false;
     activePeerId = dialog.peerId;
     activeTitle = dialog.title;
     activeIsForum = dialog.isForum;
@@ -566,6 +734,9 @@
     editing = null;
     getPresence(peerId).then((info) => (presence = info.text)).catch(() => (presence = ''));
     loadPinned(peerId, threadId).then((message) => (pinnedMessage = message)).catch(() => (pinnedMessage = null));
+    getDraftText(peerId, threadId).then((text) => {
+      if (activePeerId === peerId && activeThreadId === threadId) draft = text;
+    }).catch(() => {});
 
     try {
       messages = await loadHistory(peerId, {threadId});
@@ -586,6 +757,7 @@
   }
 
   function backToChats() {
+    showSidebarOnMobile = true;
     if (activeThreadId !== undefined) {
       activeThreadId = undefined;
       messages = [];
@@ -681,6 +853,8 @@
 
     try {
       await sendMessage(activePeerId, text, {replyToMsgId, threadId: activeThreadId});
+      lastTypingSent = 0;
+      sendTyping(activePeerId, activeThreadId, 'cancel').catch(() => {});
       // The outgoing message arrives back through history_multiappend.
       await scrollToBottom();
     } catch (err: any) {
@@ -694,7 +868,7 @@
   }
 </script>
 
-<div class="shell">
+<div class="shell" class:show-sidebar={showSidebarOnMobile} class:show-chat={!showSidebarOnMobile}>
   <aside>
     <header>
       {#if activeIsForum && activePeerId !== null}
@@ -827,6 +1001,7 @@
       </div>
     {:else}
       <header>
+        <button class="back-mobile" onclick={() => (showSidebarOnMobile = true)} aria-label="Back">←</button>
         <button class="title-button" onclick={() => (showInfo = !showInfo)}>{activeTitle}</button>
         {#if activeThreadId !== undefined}<span class="thread-tag">topic</span>{/if}
         <span class="presence">
@@ -834,7 +1009,39 @@
             ? `${typingNames.join(', ')} ${typingNames.length > 1 ? 'are' : 'is'} typing…`
             : presence}
         </span>
+        <button class="icon-button" onclick={() => (chatSearchOpen = !chatSearchOpen)} aria-label="Search messages">🔍</button>
       </header>
+
+      {#if chatSearchOpen}
+        <div class="chat-search">
+          <input placeholder="Search in chat" bind:value={chatQuery} oninput={onChatQueryInput} />
+          <button onclick={closeChatSearch} aria-label="Close search">✕</button>
+        </div>
+        {#if chatResults}
+          <div class="results">
+            {#if !chatResults.length}
+              <p class="muted">Nothing found.</p>
+            {:else}
+              {#each chatResults as result (result.mid)}
+                <button class="result" onclick={() => { closeChatSearch(); jumpTo(result.mid); }}>
+                  <span class="result-from">{result.fromTitle}</span>
+                  <span class="result-text">{result.text || 'Media'}</span>
+                </button>
+              {/each}
+            {/if}
+          </div>
+        {/if}
+      {/if}
+
+      {#if selecting}
+        <div class="selection-bar">
+          <span>{selected.size} selected</span>
+          <span class="spacer"></span>
+          <button onclick={forwardSelected}>Forward</button>
+          <button class="danger" onclick={deleteSelected}>Delete</button>
+          <button onclick={() => { selecting = false; selected = new Set(); }}>Cancel</button>
+        </div>
+      {/if}
 
       {#if pinnedMessage}
         <button class="pinned-bar" onclick={() => jumpTo(pinnedMessage!.mid)}>
@@ -910,8 +1117,15 @@
                 class="bubble"
                 class:out={message.out}
                 class:highlighted={highlightedMid === message.mid}
+                class:selected={selected.has(message.mid)}
                 data-mid={message.mid}
                 use:observeForRead={message.mid}
+                oncontextmenu={(e) => {
+                  e.preventDefault();
+                  messageMenu = {mid: message.mid, x: e.clientX, y: e.clientY};
+                }}
+                onclick={() => selecting && toggleSelected(message.mid)}
+                role="presentation"
               >
                 {#if !message.out && message.fromTitle}
                   <span class="author">{message.fromTitle}</span>
@@ -965,12 +1179,17 @@
                 {#if message.poll}
                   <div class="poll">
                     <span class="poll-q">{message.poll.question}</span>
-                    {#each message.poll.answers as answer}
-                      <span class="poll-a" class:chosen={answer.chosen}>
+                    {#each message.poll.answers as answer, answerIndex}
+                      <button
+                        class="poll-a"
+                        class:chosen={answer.chosen}
+                        disabled={message.poll.closed}
+                        onclick={() => vote(message, answerIndex)}
+                      >
                         <span class="poll-bar" style="width: {answer.percent}%"></span>
                         <span class="poll-text">{answer.text}</span>
                         <span class="poll-pct">{answer.percent}%</span>
-                      </span>
+                      </button>
                     {/each}
                     <span class="poll-total">
                       {message.poll.totalVoters} voters{message.poll.closed ? ' · closed' : ''}
@@ -1000,7 +1219,9 @@
 
                 <span class="stamp">
                   {#if message.repliesCount}
-                    <span class="replies">{message.repliesCount} 💬</span>
+                    <button class="reply-btn" onclick={() => openComments(message)}>
+                      {message.repliesCount} 💬
+                    </button>
                   {/if}
                   <button
                     class="reply-btn"
@@ -1093,6 +1314,25 @@
     bind:index={lightboxIndex}
     onclose={() => (lightboxIndex = null)}
   />
+{/if}
+
+{#if messageMenu}
+  {@const menuMessage = messages.find((m) => m.mid === messageMenu!.mid)}
+  <div class="menu-backdrop" onclick={() => (messageMenu = null)} role="presentation"></div>
+  <div class="context-menu" style="left: {messageMenu.x}px; top: {messageMenu.y}px">
+    {#if menuMessage}
+      <button onclick={() => { replyTo = menuMessage; messageMenu = null; }}>Reply</button>
+      {#if menuMessage.text}
+        <button onclick={() => { copyText(menuMessage); messageMenu = null; }}>Copy text</button>
+      {/if}
+      <button onclick={() => { openForward(menuMessage); messageMenu = null; }}>Forward</button>
+      <button onclick={() => startSelecting(menuMessage.mid)}>Select</button>
+      {#if menuMessage.editable}
+        <button onclick={() => { startEdit(menuMessage); messageMenu = null; }}>Edit</button>
+        <button class="danger" onclick={() => { removeMessage(menuMessage); messageMenu = null; }}>Delete</button>
+      {/if}
+    {/if}
+  </div>
 {/if}
 
 {#if forwarding}
@@ -1594,6 +1834,154 @@
     font-size: 13px;
   }
 
+  .chat-search {
+    display: flex;
+    gap: 8px;
+    padding: 10px 18px;
+    border-bottom: 1px solid var(--border);
+    flex: none;
+  }
+
+  .chat-search input {
+    flex: 1;
+    min-width: 0;
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: transparent;
+    color: inherit;
+    outline: none;
+  }
+
+  .chat-search button,
+  .icon-button {
+    background: none;
+    border: none;
+    color: inherit;
+    cursor: pointer;
+    font-size: 15px;
+  }
+
+  .results {
+    max-height: 40%;
+    overflow-y: auto;
+    border-bottom: 1px solid var(--border);
+    flex: none;
+  }
+
+  .result {
+    display: grid;
+    gap: 2px;
+    width: 100%;
+    padding: 8px 18px;
+    background: none;
+    border: none;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .result:hover {
+    background: color-mix(in srgb, var(--text) 6%, transparent);
+  }
+
+  .result-from {
+    font-size: 12px;
+    color: var(--accent);
+  }
+
+  .result-text {
+    font-size: 13px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .selection-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 18px;
+    border-bottom: 1px solid var(--border);
+    flex: none;
+  }
+
+  .selection-bar button {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 6px 10px;
+    color: inherit;
+    cursor: pointer;
+    font-size: 13px;
+  }
+
+  .selection-bar .danger {
+    color: var(--danger);
+  }
+
+  .bubble.selected {
+    outline: 2px solid var(--accent);
+  }
+
+  button.poll-a {
+    width: 100%;
+    border: none;
+    color: inherit;
+    cursor: pointer;
+    text-align: left;
+  }
+
+  button.poll-a:disabled {
+    cursor: default;
+  }
+
+  .menu-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+  }
+
+  .context-menu {
+    position: fixed;
+    z-index: 61;
+    display: grid;
+    min-width: 160px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+  }
+
+  .context-menu button {
+    padding: 9px 12px;
+    background: none;
+    border: none;
+    text-align: left;
+    color: inherit;
+    cursor: pointer;
+    font-size: 13px;
+  }
+
+  .context-menu button:hover {
+    background: color-mix(in srgb, var(--text) 8%, transparent);
+  }
+
+  .context-menu .danger {
+    color: var(--danger);
+  }
+
+  .back-mobile {
+    display: none;
+    background: none;
+    border: none;
+    color: var(--accent);
+    font-size: 18px;
+    cursor: pointer;
+    padding: 0;
+  }
+
   .day-divider {
     align-self: center;
     margin: 10px 0 4px;
@@ -1810,6 +2198,43 @@
   .muted {
     color: var(--text-dim);
     padding: 16px;
+  }
+
+  /* Phones: one pane at a time, driven by .show-sidebar / .show-chat. */
+  @media (max-width: 720px) {
+    .shell {
+      grid-template-columns: 1fr;
+    }
+
+    .shell.show-sidebar section,
+    .shell.show-chat aside {
+      display: none;
+    }
+
+    .back-mobile {
+      display: block;
+    }
+
+    .bubble {
+      max-width: 88%;
+    }
+
+    .to-bottom {
+      right: 14px;
+      bottom: 78px;
+    }
+
+    form,
+    .chat-search,
+    .selection-bar,
+    header {
+      padding-left: 12px;
+      padding-right: 12px;
+    }
+
+    .messages {
+      padding: 12px;
+    }
   }
 
   .error {

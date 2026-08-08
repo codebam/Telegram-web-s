@@ -549,6 +549,90 @@ export async function loadAround(
   return items.reverse();
 }
 
+/** Full-text search inside one chat (or one thread). */
+export async function searchMessages(
+  peerId: number,
+  query: string,
+  options: {threadId?: number; limit?: number} = {}
+): Promise<MessageItem[]> {
+  if(!query.trim()) return [];
+
+  const {managers} = await bootTelegram();
+  const selfId = await getSelfId();
+
+  const result = await managers.appMessagesManager.getHistory({
+    peerId,
+    threadId: options.threadId,
+    query: query.trim(),
+    inputFilter: {_: 'inputMessagesFilterEmpty'},
+    limit: options.limit ?? 40
+  });
+
+  const messages = await Promise.all(
+    result.history.map((mid: number) => managers.appMessagesManager.getMessageByPeer(peerId, mid))
+  );
+
+  return Promise.all(
+    messages.filter(Boolean).map((message: any) => toItem(message, peerId, selfId))
+  );
+}
+
+export async function votePoll(peerId: number, mid: number, optionIndexes: number[]): Promise<void> {
+  const {managers} = await bootTelegram();
+  const message = rawMessages.get(messageKey(peerId, mid)) ??
+    await managers.appMessagesManager.getMessageByPeer(peerId, mid);
+  if(!message) throw new Error('Message not found');
+  await managers.appPollsManager.sendVote(message, optionIndexes);
+}
+
+/**
+ * Opens the comment thread attached to a channel post. The discussion lives in
+ * the linked group, so this returns a different peer plus the thread id.
+ */
+export async function openDiscussion(
+  peerId: number,
+  mid: number
+): Promise<{peerId: number; threadId: number} | null> {
+  const {managers} = await bootTelegram();
+
+  try {
+    const result: any = await managers.appMessagesManager.getDiscussionMessage(peerId, mid);
+    const message = result?.message ?? result;
+    if(!message?.mid) return null;
+    return {peerId: Number(message.peerId), threadId: message.mid};
+  } catch(err) {
+    return null;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Drafts                                                              */
+/* ------------------------------------------------------------------ */
+
+export async function getDraftText(peerId: number, threadId?: number): Promise<string> {
+  const {managers} = await bootTelegram();
+  try {
+    const draft: any = await managers.appDraftsManager.getDraft(peerId, threadId);
+    return draft?.message ?? '';
+  } catch(err) {
+    return '';
+  }
+}
+
+export async function saveDraftText(peerId: number, threadId: number | undefined, text: string): Promise<void> {
+  const {managers} = await bootTelegram();
+  try {
+    await managers.appDraftsManager.setDraft(peerId, threadId ?? 0, text);
+  } catch(err) {
+    // Drafts are a convenience; never surface a failure to the composer.
+  }
+}
+
+export async function deleteMessages(peerId: number, mids: number[], revoke = true): Promise<void> {
+  const {managers} = await bootTelegram();
+  await managers.appMessagesManager.deleteMessages(peerId, mids, revoke);
+}
+
 export async function forwardMessage(
   fromPeerId: number,
   mids: number[],
@@ -614,10 +698,50 @@ export async function sendFiles(
   }
 }
 
-/** Tell the peer we are typing; tweb throttles the actual API calls. */
-export async function sendTyping(peerId: number, threadId?: number): Promise<void> {
+/**
+ * Tell the peer we are typing.
+ *
+ * The server expires a typing status after ~6s, so a long message needs the
+ * action re-sent periodically — the caller throttles to ~4s. Sending the cancel
+ * action clears it immediately once the message goes out.
+ */
+export async function sendTyping(
+  peerId: number,
+  threadId?: number,
+  action: 'typing' | 'cancel' = 'typing'
+): Promise<void> {
   const {managers} = await bootTelegram();
-  await managers.appMessagesManager.setTyping(peerId, {_: 'sendMessageTypingAction'}, undefined, threadId);
+  await managers.appMessagesManager.setTyping(
+    peerId,
+    {_: action === 'cancel' ? 'sendMessageCancelAction' : 'sendMessageTypingAction'},
+    undefined,
+    threadId
+  );
+}
+
+/**
+ * Publish our own online status. The server expires it after a few minutes, so
+ * the caller refreshes it on a timer and sends `offline: true` when the tab is
+ * hidden or closed — otherwise contacts keep seeing us as online.
+ */
+export async function setOwnOnline(online: boolean): Promise<void> {
+  const {managers} = await bootTelegram();
+  try {
+    await managers.appUsersManager.updateMyOnlineStatus(!online);
+  } catch(err) {
+    // Presence is best-effort.
+  }
+}
+
+/** Fires when a peer's own status changes, so headers can re-render. */
+export async function onUserUpdate(callback: (userId: number) => void): Promise<() => void> {
+  const {default: rootScope} = await import('@lib/rootScope');
+  const handler = (userId: any) => {
+    rawPeers.delete(Number(userId));
+    callback(Number(userId));
+  };
+  rootScope.addEventListener('user_update', handler);
+  return () => rootScope.removeEventListener('user_update', handler);
 }
 
 export type PresenceInfo = {online: boolean; text: string};
