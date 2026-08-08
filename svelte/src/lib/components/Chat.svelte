@@ -2303,6 +2303,18 @@
     color: rgba(255, 255, 255, 0.9);
   }
 
+  /* Accent-coloured children (mentions, links) sit on the accent gradient in an
+     outgoing bubble, which makes them the same colour as their background.
+     They inherit the bubble's own foreground instead. */
+  .bubble.out :global(.mention),
+  .bubble.out :global(a) {
+    color: #fff;
+  }
+
+  .bubble.out :global(a) {
+    text-decoration-color: rgba(255, 255, 255, 0.65);
+  }
+
   .reply-quote {
     display: grid;
     gap: 1px;
