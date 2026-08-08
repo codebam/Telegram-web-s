@@ -305,16 +305,19 @@
         if (!folders.some((f) => f.id === activeFolder)) activeFolder = 0;
       });
 
-      // A sent message first appears under a temporary id; swap it for the
-      // confirmed one instead of leaving both.
+      // A sent message first appears under a temporary id, then the server
+      // confirms it under a real one. Drop the temporary copy first and
+      // unconditionally — bailing out when the confirmed message is not
+      // readable yet leaves the optimistic copy on screen, stuck on "Sending".
       const offSent = await onMessageSent(async (peerId, tempId, mid) => {
         if (peerId !== activePeerId) return;
-        const confirmed = await getMessage(peerId, mid);
-        if (!confirmed) return;
 
-        messages = messages.some((m) => m.mid === tempId) ?
-          messages.map((m) => (m.mid === tempId ? confirmed : m)) :
-          messages.some((m) => m.mid === mid) ? messages : [...messages, confirmed];
+        messages = messages.filter((m) => m.mid !== tempId);
+
+        const confirmed = await getMessage(peerId, mid);
+        if (confirmed && !messages.some((m) => m.mid === mid)) {
+          messages = [...messages, confirmed];
+        }
       });
 
       const offDeleted = await onMessagesDeleted((peerId, mids) => {
