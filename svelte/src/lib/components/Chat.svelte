@@ -37,6 +37,8 @@
     markDialogUnread,
     onDialogsUpdate,
     onFoldersUpdate,
+    onMessageSent,
+    onMessagesDeleted,
     onNewMessage,
     onReadStateChange,
     readParticipants,
@@ -303,6 +305,25 @@
         if (!folders.some((f) => f.id === activeFolder)) activeFolder = 0;
       });
 
+      // A sent message first appears under a temporary id; swap it for the
+      // confirmed one instead of leaving both.
+      const offSent = await onMessageSent(async (peerId, tempId, mid) => {
+        if (peerId !== activePeerId) return;
+        const confirmed = await getMessage(peerId, mid);
+        if (!confirmed) return;
+
+        messages = messages.some((m) => m.mid === tempId) ?
+          messages.map((m) => (m.mid === tempId ? confirmed : m)) :
+          messages.some((m) => m.mid === mid) ? messages : [...messages, confirmed];
+      });
+
+      const offDeleted = await onMessagesDeleted((peerId, mids) => {
+        if (peerId === activePeerId) {
+          messages = messages.filter((m) => !mids.includes(m.mid));
+        }
+        loadDialogs(40, activeFolder).then((list) => (dialogs = list)).catch(() => {});
+      });
+
       const offRead = await onReadStateChange(async () => {
         if (activePeerId !== null) readOutboxMaxId = await getReadOutboxMaxId(activePeerId);
       });
@@ -326,6 +347,8 @@
         offFolders();
         offUsers();
         offRead();
+        offSent();
+        offDeleted();
       };
 
       if (disposed) all();

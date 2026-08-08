@@ -60,6 +60,13 @@ async function doBoot(): Promise<TelegramClient> {
   const {default: appDownloadManager} = await import('@lib/appDownloadManager');
   appDownloadManager.construct(managers as any);
 
+  // Subscribe to server updates. Without this the worker never opens the
+  // updates loop, so nothing arrives after load: no incoming messages, no
+  // deletions, no edits — only the local echo of what we send ourselves.
+  // tweb does this from uiNotificationsManager, which the IM bootstrap starts
+  // and we never run.
+  await managers.apiUpdatesManager.attach();
+
   return {
     managers,
     authState: allStates[getCurrentAccount()].state.authState
