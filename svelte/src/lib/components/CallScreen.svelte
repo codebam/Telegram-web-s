@@ -13,6 +13,9 @@
 
   let call = $state<CallState | null>(null);
   let minimised = $state(false);
+  /** Shown briefly after a call ends, so it does not just vanish. */
+  let farewell = $state('');
+  let farewellTimer: ReturnType<typeof setTimeout> | undefined;
   let remoteSlot: HTMLDivElement | undefined = $state();
   let localSlot: HTMLDivElement | undefined = $state();
 
@@ -21,6 +24,22 @@
     let disposed = false;
 
     onCallState((state) => {
+      const previous = call;
+
+      if(state?.phase === 'ended' || (!state && previous)) {
+        const reason = state?.endReason || previous?.endReason || '';
+        farewell =
+          reason === 'busy' ? `${previous?.title ?? 'They'} is on another call` :
+          reason === 'missed' ? 'No answer' :
+          reason === 'disconnected' ? 'Call disconnected' :
+          previous && previous.phase !== 'connected' ? 'Call ended' : '';
+
+        if(farewell) {
+          clearTimeout(farewellTimer);
+          farewellTimer = setTimeout(() => (farewell = ''), 4000);
+        }
+      }
+
       call = state;
       if(!state) minimised = false;
     }).then((unsubscribe) => {
@@ -78,6 +97,10 @@
 
   const hasVideo = $derived(!!call?.sharingVideo || !!call?.sharingScreen);
 </script>
+
+{#if farewell && !call}
+  <button class="farewell" onclick={() => (farewell = '')}>{farewell}</button>
+{/if}
 
 {#if call}
   {#if minimised}
@@ -293,6 +316,22 @@
 
   .decline:hover {
     background: #ef5b60;
+  }
+
+  .farewell {
+    position: fixed;
+    top: 14px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 121;
+    padding: 8px 16px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--bg-solid);
+    color: var(--text);
+    font-size: 13px;
+    cursor: pointer;
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.3);
   }
 
   .mini {
