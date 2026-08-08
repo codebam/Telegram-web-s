@@ -83,6 +83,8 @@ export type MessageItem = {
   groupedId: string;
   /** Sticker document id, when the media is a sticker. */
   stickerDocId: string;
+  /** '' when not a sticker; 'animated' means .tgs and needs the Lottie worker. */
+  stickerKind: '' | 'static' | 'video' | 'animated';
 };
 
 /* ------------------------------------------------------------------ */
@@ -354,7 +356,8 @@ async function toItem(message: any, peerId: number, selfId: number): Promise<Mes
     repliesCount: message.replies?.replies ?? 0,
     reactions: reactionsOf(message),
     groupedId: message.grouped_id ? '' + message.grouped_id : '',
-    stickerDocId: isStickerMessage(message) ? '' + message.media.document.id : ''
+    stickerDocId: isStickerMessage(message) ? '' + message.media.document.id : '',
+    stickerKind: isStickerMessage(message) ? stickerKind(message.media.document) : ''
   };
 }
 
@@ -690,8 +693,12 @@ const rawDocs = new Map<string, any>();
 const docUrls = new Map<string, string | null>();
 
 function stickerKind(doc: any): StickerItem['kind'] {
-  if(doc.mime_type === 'application/x-tgsticker') return 'animated';
-  if(doc.mime_type === 'video/webm') return 'video';
+  // appDocsManager tags every sticker doc with StickerType
+  // (1 = static WebP, 2 = Lottie/.tgs, 3 = WebM). Check WebM before Lottie:
+  // doc.animated is set for video stickers too, so testing it first would send
+  // WebM into the Lottie decoder ("tlottie rejected the animation").
+  if(doc.sticker === 3 || doc.mime_type === 'video/webm') return 'video';
+  if(doc.sticker === 2 || doc.mime_type === 'application/x-tgsticker') return 'animated';
   return 'static';
 }
 
@@ -733,16 +740,16 @@ export async function loadStickerSets(): Promise<StickerSetItem[]> {
   });
 }
 
+/** `setId` is either an installed set's id or a public set short name. */
 export async function loadSetStickers(setId: string): Promise<StickerItem[]> {
   const {managers} = await bootTelegram();
   const raw = rawStickerSets.get(setId);
-  if(!raw) return [];
 
-  const set: any = await managers.appStickersManager.getStickerSet({
-    _: 'inputStickerSetID',
-    id: raw.id,
-    access_hash: raw.access_hash
-  } as any);
+  const input: any = raw ?
+    {_: 'inputStickerSetID', id: raw.id, access_hash: raw.access_hash} :
+    setId;
+
+  const set: any = await managers.appStickersManager.getStickerSet(input);
   return (set?.documents ?? []).map(toSticker);
 }
 
@@ -790,6 +797,25 @@ export async function loadDocUrl(docId: string, thumbOnly = false): Promise<stri
     return url ?? null;
   } catch(err) {
     docUrls.set(cacheKey, null);
+    return null;
+  }
+}
+
+/**
+ * Raw .tgs blob for an animated sticker. The file is gzipped Lottie JSON that
+ * only tweb's rlottie/tlottie worker can decode, so it is handed to
+ * lottieLoader as-is rather than turned into an object URL.
+ */
+export async function loadStickerBlob(docId: string): Promise<Blob | null> {
+  const doc = rawDocs.get(docId);
+  if(!doc) return null;
+
+  await bootTelegram();
+  const {default: appDownloadManager} = await import('@lib/appDownloadManager');
+
+  try {
+    return await appDownloadManager.downloadMedia({media: doc});
+  } catch(err) {
     return null;
   }
 }

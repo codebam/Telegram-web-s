@@ -282,6 +282,13 @@
     }
   }
 
+  /** True when the previous rendered group came from the same sender. */
+  function sameSenderAsPrevious(group: {items: MessageItem[]}): boolean {
+    const index = rendered.indexOf(group);
+    const previous = rendered[index - 1]?.items[0];
+    return !!previous && !previous.service && previous.fromId === group.items[0].fromId;
+  }
+
   function openLightbox(message: MessageItem) {
     const index = mediaMessages.findIndex((m) => m.mid === message.mid);
     if (index >= 0) lightboxIndex = index;
@@ -727,7 +734,7 @@
                 <Sticker
                   sticker={{
                     docId: message.stickerDocId,
-                    kind: message.media?.kind === 'video' ? 'video' : 'static',
+                    kind: message.stickerKind || 'static',
                     emoji: '',
                     width: message.media?.width ?? 128,
                     height: message.media?.height ?? 128
@@ -740,6 +747,14 @@
                 </span>
               </div>
             {:else}
+              <div class="line" class:out={message.out}>
+                {#if !message.out}
+                  <!-- Sender photo, like the official clients. Hidden on
+                       consecutive messages from the same person. -->
+                  <span class="line-avatar" class:hidden={sameSenderAsPrevious(group)}>
+                    <Avatar peerId={message.fromId} title={message.fromTitle} size={32} />
+                  </span>
+                {/if}
               <div
                 class="bubble"
                 class:out={message.out}
@@ -813,6 +828,7 @@
                   {#if message.edited}<span class="edited">edited</span>{/if}
                   <span class="time">{timeOf(message.date)}</span>
                 </span>
+              </div>
               </div>
             {/if}
           {/each}
@@ -1243,6 +1259,27 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
+  }
+
+  .line {
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .line.out {
+    justify-content: flex-end;
+  }
+
+  .line-avatar {
+    flex: none;
+    align-self: flex-end;
+  }
+
+  .line-avatar.hidden {
+    visibility: hidden;
   }
 
   .bubble {
