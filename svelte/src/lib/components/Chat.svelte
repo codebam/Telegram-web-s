@@ -39,6 +39,7 @@
     onFoldersUpdate,
     onNewMessage,
     onReadStateChange,
+    readParticipants,
     onTyping,
     onUserUpdate,
     openDiscussion,
@@ -80,10 +81,14 @@
   let activeIsUser = $state(false);
   let activeIsSelf = $state(false);
   /**
-   * Highest outgoing message the other side has read. Ticks are only shown in
-   * one-to-one chats — in groups "read" has no single meaning.
+   * Highest outgoing message the other side has read. In a group this is the
+   * position up to which *everyone* has read, which is what the second tick
+   * means there too.
    */
   let readOutboxMaxId = $state(0);
+  let activeIsChannel = $state(false);
+  /** Names of the people who have read a message, fetched on demand. */
+  let readByFor = $state<{mid: number; names: string[]} | null>(null);
 
   let loadingChats = $state(true);
   let loadingHistory = $state(false);
@@ -623,6 +628,19 @@
     return !!previous && !!current && dayOf(previous.date) !== dayOf(current.date);
   }
 
+  /** Small groups can list who has read a message; larger ones cannot. */
+  async function showReadBy(message: MessageItem) {
+    if (activePeerId === null || activeIsUser) return;
+
+    if (readByFor?.mid === message.mid) {
+      readByFor = null;
+      return;
+    }
+
+    const names = await readParticipants(activePeerId, message.mid);
+    readByFor = {mid: message.mid, names};
+  }
+
   function openLightbox(message: MessageItem) {
     const index = mediaMessages.findIndex((m) => m.mid === message.mid);
     if (index >= 0) lightboxIndex = index;
@@ -847,6 +865,10 @@
     activeIsUser = dialog.isUser;
     activeIsSelf = dialog.isSelf;
     readOutboxMaxId = dialog.readOutboxMaxId;
+    // Only real broadcast channels swap ticks for view counts; megagroups are
+    // negative-id peers too, so the id sign cannot be used to tell them apart.
+    activeIsChannel = dialog.isBroadcast;
+    readByFor = null;
     activeThreadId = undefined;
     topics = [];
     messages = [];
@@ -1377,6 +1399,14 @@
                   </span>
                 {/if}
 
+                {#if readByFor?.mid === message.mid}
+                  <span class="read-by">
+                    {readByFor.names.length
+                      ? `Read by ${readByFor.names.slice(0, 8).join(', ')}${readByFor.names.length > 8 ? ` +${readByFor.names.length - 8}` : ''}`
+                      : 'Read receipts are not available for this chat'}
+                  </span>
+                {/if}
+
                 <span class="stamp">
                   {#if message.repliesCount}
                     <button class="reply-btn" onclick={() => openComments(message)}>
@@ -1398,16 +1428,19 @@
                   {/if}
                   {#if message.edited}<span class="edited">edited</span>{/if}
                   <span class="time">{timeOf(message.date)}</span>
-                  {#if message.out && activeIsUser && !activeIsSelf}
-                    <span
+                  {#if message.out && activeIsChannel && message.views}
+                    <span class="views" title="Views">👁 {message.views.toLocaleString()}</span>
+                  {:else if message.out && !activeIsSelf && !activeIsChannel}
+                    <button
                       class="ticks"
                       class:read={message.mid <= readOutboxMaxId}
+                      onclick={() => showReadBy(message)}
                       title={message.pending
                         ? 'Sending'
                         : message.mid <= readOutboxMaxId
                           ? 'Read'
                           : 'Delivered'}
-                    >{message.pending ? '🕗' : message.mid <= readOutboxMaxId ? '✓✓' : '✓'}</span>
+                    >{message.pending ? '🕗' : message.mid <= readOutboxMaxId ? '✓✓' : '✓'}</button>
                   {/if}
                 </span>
               </div>
@@ -1857,6 +1890,23 @@
   .ticks {
     letter-spacing: -2px;
     opacity: 0.75;
+    background: none;
+    border: none;
+    padding: 0;
+    color: inherit;
+    cursor: pointer;
+    font-size: inherit;
+  }
+
+  .views {
+    opacity: 0.75;
+  }
+
+  .read-by {
+    font-size: 11px;
+    opacity: 0.8;
+    border-top: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+    padding-top: 4px;
   }
 
   .ticks.read {
