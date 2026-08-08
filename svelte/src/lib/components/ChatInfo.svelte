@@ -69,7 +69,10 @@
   .info {
     width: 320px;
     flex: none;
-    border-left: 1px solid var(--border);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--pane-radius);
+    backdrop-filter: blur(var(--blur));
     display: flex;
     flex-direction: column;
     min-height: 0;

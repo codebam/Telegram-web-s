@@ -62,7 +62,7 @@
     setActiveNotificationPeer
   } from '$lib/telegram/notifications';
   import {queryInlineBot, sendInlineResult, type InlineResultItem} from '$lib/telegram/settings';
-  import {applyAccent, applyTheme} from '$lib/telegram/theme';
+  import {applyAccent, applyDensity, applyTheme} from '$lib/telegram/theme';
   import {startCall} from '$lib/telegram/extras';
 
   let dialogs = $state<DialogItem[]>([]);
@@ -225,6 +225,7 @@
     const stopPresence = trackOwnPresence();
     applyTheme();
     applyAccent();
+    applyDensity();
 
     (async () => {
       try {
@@ -1501,12 +1502,20 @@
      screen, and min-height: 0 on every flex/grid child so the message list is
      what scrolls — without it the list forces the shell taller than the
      viewport and the whole page scrolls while history loads. */
+  /* Panes float over the gradient field rather than tiling the viewport. */
   .shell {
     display: grid;
     grid-template-columns: minmax(240px, 340px) 1fr auto;
     height: 100dvh;
     max-height: 100dvh;
     overflow: hidden;
+    gap: 10px;
+    padding: 10px;
+  }
+
+  :global(:root[data-density='console']) .shell {
+    gap: 0;
+    padding: 0;
   }
 
   aside,
@@ -1746,8 +1755,8 @@
   }
 
   .chip.chosen {
-    background: var(--accent);
-    color: #fff;
+    background: var(--action);
+    color: var(--action-ink);
   }
 
   .palette {
@@ -1793,7 +1802,9 @@
   }
 
   .row-button.active {
-    background: var(--accent);
+    background: linear-gradient(100deg,
+      color-mix(in srgb, var(--accent) 70%, transparent),
+      color-mix(in srgb, var(--action) 40%, transparent));
     color: #fff;
   }
 
@@ -1848,8 +1859,9 @@
 
   .badge {
     flex: none;
-    background: var(--accent);
-    color: #fff;
+    background: var(--action);
+    color: var(--action-ink);
+    font-weight: 600;
     border-radius: 999px;
     padding: 1px 7px;
     font-size: 12px;
@@ -1858,6 +1870,11 @@
   .row-button.active .badge {
     background: #fff;
     color: var(--accent);
+  }
+
+  .folder-badge {
+    background: var(--action);
+    color: var(--action-ink);
   }
 
   .empty {
@@ -1901,12 +1918,13 @@
     visibility: hidden;
   }
 
+  /* Asymmetric corners point back at the speaker. */
   .bubble {
     max-width: min(620px, 72%);
     min-width: 0;
     padding: 8px 12px;
-    border-radius: 14px;
-    background: var(--bg-elevated);
+    border-radius: var(--bubble-radius) var(--bubble-radius) var(--bubble-radius) 5px;
+    background: color-mix(in srgb, var(--text) 7%, transparent);
     border: 1px solid var(--border);
     align-self: flex-start;
     display: grid;
@@ -1915,7 +1933,8 @@
 
   .bubble.out {
     align-self: flex-end;
-    background: var(--accent);
+    border-radius: var(--bubble-radius) var(--bubble-radius) 5px var(--bubble-radius);
+    background: linear-gradient(120deg, var(--accent), var(--accent-hover));
     border-color: transparent;
     color: #fff;
   }
@@ -2337,32 +2356,39 @@
 
   form {
     display: flex;
-    gap: 10px;
-    padding: 14px 18px;
-    border-top: 1px solid var(--border);
+    align-items: center;
+    gap: 8px;
+    margin: 10px;
+    padding: 6px 6px 6px 12px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--text) 6%, transparent);
     flex: none;
+  }
+
+  :global(:root[data-density='console']) form {
+    margin: 0;
+    border-radius: 0;
+    border: none;
+    border-top: 1px solid var(--border);
+    padding: 8px 12px;
   }
 
   form input {
     flex: 1;
     min-width: 0;
-    padding: 12px 14px;
-    border: 1px solid var(--border);
-    border-radius: 10px;
+    padding: 8px 4px;
+    border: none;
     background: transparent;
     outline: none;
   }
 
-  form input:focus {
-    border-color: var(--accent);
-  }
-
-  form button {
-    padding: 12px 20px;
+  form button[type='submit'] {
+    padding: 9px 18px;
     border: none;
-    border-radius: 10px;
-    background: var(--accent);
-    color: #fff;
+    border-radius: 999px;
+    background: var(--action);
+    color: var(--action-ink);
     font-weight: 600;
     cursor: pointer;
   }
@@ -2381,6 +2407,14 @@
   @media (max-width: 720px) {
     .shell {
       grid-template-columns: 1fr;
+      gap: 0;
+      padding: 0;
+    }
+
+    aside,
+    section {
+      border-radius: 0;
+      border: none;
     }
 
     .shell.show-sidebar section,

@@ -10,9 +10,11 @@
 export type ThemeMode = 'system' | 'light' | 'dark';
 
 const THEME_KEY = 'tweb-svelte:theme';
+const DENSITY_KEY = 'tweb-svelte:density';
 const ACCENT_KEY = 'tweb-svelte:accent';
 
 export const ACCENTS = [
+  {name: 'Iris', value: '#6e63ff'},
   {name: 'Indigo', value: '#4f46e5'},
   {name: 'Blue', value: '#3390ec'},
   {name: 'Teal', value: '#0f9d8f'},
@@ -43,6 +45,29 @@ export function applyTheme(mode: ThemeMode = getThemeMode()) {
     (mode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
   document.querySelector('meta[name="theme-color"]')
     ?.setAttribute('content', dark ? '#0f1216' : '#ffffff');
+}
+
+/**
+ * Density is an appearance option layered on top of the theme: `comfortable`
+ * is the floating-pane default, `console` collapses the same markup into an
+ * aligned monospace grid for people watching many busy chats.
+ */
+export type Density = 'comfortable' | 'console';
+
+export function getDensity(): Density {
+  if(typeof localStorage === 'undefined') return 'comfortable';
+  return localStorage.getItem(DENSITY_KEY) === 'console' ? 'console' : 'comfortable';
+}
+
+export function setDensity(density: Density) {
+  localStorage.setItem(DENSITY_KEY, density);
+  applyDensity(density);
+}
+
+export function applyDensity(density: Density = getDensity()) {
+  const root = document.documentElement;
+  if(density === 'console') root.setAttribute('data-density', 'console');
+  else root.removeAttribute('data-density');
 }
 
 export function getAccent(): string {

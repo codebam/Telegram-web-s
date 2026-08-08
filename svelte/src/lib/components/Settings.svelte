@@ -28,9 +28,12 @@
   import {
     ACCENTS,
     getAccent,
+    getDensity,
     getThemeMode,
     setAccent,
+    setDensity,
     setThemeMode,
+    type Density,
     type ThemeMode
   } from '$lib/telegram/theme';
   import {loadPremium, loadStars, type PremiumInfo, type StarsInfo} from '$lib/telegram/extras';
@@ -59,6 +62,7 @@
 
   let theme = $state<ThemeMode>(getThemeMode());
   let accent = $state(getAccent());
+  let density = $state<Density>(getDensity());
 
   let scopes = $state<Record<NotifyScope, boolean> | null>(null);
   let desktopOn = $state(notificationsEnabled());
@@ -239,6 +243,22 @@
         {/each}
       </div>
 
+      <p class="label">Density</p>
+      <div class="chips">
+        <button
+          class:on={density === 'comfortable'}
+          onclick={() => { density = 'comfortable'; setDensity(density); }}
+        >comfortable</button>
+        <button
+          class:on={density === 'console'}
+          onclick={() => { density = 'console'; setDensity(density); }}
+        >console</button>
+      </div>
+      <p class="muted small">
+        Console swaps bubbles for an aligned monospace grid — about twice as many
+        messages per screen.
+      </p>
+
       <p class="label">Accent</p>
       <div class="swatches">
         {#each ACCENTS as option}
@@ -384,7 +404,10 @@
   .settings {
     width: 340px;
     flex: none;
-    border-left: 1px solid var(--border);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--pane-radius);
+    backdrop-filter: blur(var(--blur));
     display: flex;
     flex-direction: column;
     min-height: 0;
