@@ -50,7 +50,14 @@ const solidAliases = (isDev: boolean) => ({
   'solid-js': resolve(SOLID_PATH, 'dist', isDev ? 'dev.js' : 'solid.js')
 });
 
+// Stamped into the bundle so the client can tell a new deployment from the
+// build its browser has cached.
+const BUILD_ID = new Date().toISOString();
+
 export default defineConfig(({command}) => ({
+  define: {
+    __BUILD_ID__: JSON.stringify(BUILD_ID)
+  },
   // .env with VITE_API_ID / VITE_API_HASH / VITE_MTPROTO_* lives at the repo root.
   envDir: rootDir,
   plugins: [
