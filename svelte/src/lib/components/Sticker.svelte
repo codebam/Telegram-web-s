@@ -1,4 +1,5 @@
 <script lang="ts">
+  import AnimatedSticker from './AnimatedSticker.svelte';
   import {loadDocUrl, type StickerItem} from '$lib/telegram/chats';
 
   let {
@@ -11,6 +12,7 @@
 
   $effect(() => {
     const id = sticker.docId;
+    if(sticker.kind === 'animated') return; // rendered by the Lottie worker
     url = null;
     loadDocUrl(id).then((resolved) => {
       if(id === sticker.docId) url = resolved;
@@ -19,7 +21,9 @@
 </script>
 
 <span class="sticker" style="width: {size}px; height: {size}px">
-  {#if !url}
+  {#if sticker.kind === 'animated'}
+    <AnimatedSticker docId={sticker.docId} {size} />
+  {:else if !url}
     <span class="placeholder">{sticker.emoji || '⬜'}</span>
   {:else if sticker.kind === 'video'}
     <!-- svelte-ignore a11y_media_has_caption -->
