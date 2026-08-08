@@ -177,6 +177,21 @@
     return groups;
   });
 
+  /**
+   * Insert or replace a message by id.
+   *
+   * Both the append event and the send confirmation can deliver the same
+   * message, and each re-checks membership only before its own await — so the
+   * loser of that race used to append a second copy. Duplicate ids then break
+   * the keyed each block, which stops rendering entirely rather than showing
+   * two bubbles. Every write goes through here so that cannot happen.
+   */
+  function upsertMessage(item: MessageItem) {
+    const index = messages.findIndex((m) => m.mid === item.mid);
+    if (index === -1) messages = [...messages, item];
+    else messages = messages.map((m, i) => (i === index ? item : m));
+  }
+
   /* ---------- read tracking ---------- */
 
   let readObserver: IntersectionObserver | undefined;
@@ -268,7 +283,7 @@
           const item = await getMessage(peerId, mid);
           if (item) {
             const wasAtBottom = isScrolledToBottom();
-            messages = [...messages, item];
+            upsertMessage(item);
             if (wasAtBottom) await scrollToBottom();
           }
         }
@@ -315,9 +330,7 @@
         messages = messages.filter((m) => m.mid !== tempId);
 
         const confirmed = await getMessage(peerId, mid);
-        if (confirmed && !messages.some((m) => m.mid === mid)) {
-          messages = [...messages, confirmed];
-        }
+        if (confirmed) upsertMessage(confirmed);
       });
 
       const offDeleted = await onMessagesDeleted((peerId, mids) => {
