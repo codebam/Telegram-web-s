@@ -1,13 +1,33 @@
+/*
+ * Soft Depth
+ *
+ * Panes float as translucent cards over a gradient field rather than sitting in
+ * flat columns. Two accents do different jobs: --accent is identity (selection,
+ * outgoing messages, links), --action is reserved for things you can act on —
+ * unread counts, the send button, active reactions. Keeping them separate is
+ * what stops the interface reading as uniformly "branded".
+ */
 :root {
-  --bg: #0f1216;
-  --bg-elevated: #171b21;
-  --border: #262c35;
-  --text: #e9edf2;
-  --text-dim: #8b95a3;
-  --accent: #4f46e5;
-  --accent-hover: #6d64ea;
+  --bg: #0e0f1a;
+  --bg-elevated: rgba(255, 255, 255, 0.055);
+  --bg-solid: #14161f;
+  --border: rgba(255, 255, 255, 0.09);
+  --text: #f0f1f8;
+  --text-dim: #9ba0bb;
+  --accent: #6e63ff;
+  --accent-hover: #8f6bff;
+  --action: #ff7a5c;
+  --action-ink: #21100b;
   --danger: #e5484d;
   --radius: 14px;
+  --pane-radius: 16px;
+  --bubble-radius: 16px;
+  --blur: 14px;
+
+  /* The field the panes float over. */
+  --field:
+    radial-gradient(120% 90% at 8% 0%, rgba(110, 99, 255, 0.42), transparent 55%),
+    radial-gradient(90% 80% at 95% 110%, rgba(255, 122, 92, 0.34), transparent 55%);
 
   color-scheme: dark;
 }
@@ -15,31 +35,43 @@
 /* System preference (theme mode "system" leaves data-theme unset). */
 @media (prefers-color-scheme: light) {
   :root:not([data-theme]) {
-    --bg: #ffffff;
-    --bg-elevated: #ffffff;
-    --border: #e4e8ee;
-    --text: #101418;
-    --text-dim: #707a89;
+    --bg: #eef0f8;
+    --bg-elevated: rgba(255, 255, 255, 0.72);
+    --bg-solid: #ffffff;
+    --border: rgba(19, 22, 40, 0.09);
+    --text: #131628;
+    --text-dim: #646b86;
+    --field:
+      radial-gradient(120% 90% at 8% 0%, rgba(110, 99, 255, 0.2), transparent 55%),
+      radial-gradient(90% 80% at 95% 110%, rgba(255, 122, 92, 0.18), transparent 55%);
     color-scheme: light;
   }
 }
 
 /* Explicit choices from Settings → Appearance win over the media query. */
 :root[data-theme='light'] {
-  --bg: #ffffff;
-  --bg-elevated: #ffffff;
-  --border: #e4e8ee;
-  --text: #101418;
-  --text-dim: #707a89;
+  --bg: #eef0f8;
+  --bg-elevated: rgba(255, 255, 255, 0.72);
+  --bg-solid: #ffffff;
+  --border: rgba(19, 22, 40, 0.09);
+  --text: #131628;
+  --text-dim: #646b86;
+  --field:
+    radial-gradient(120% 90% at 8% 0%, rgba(110, 99, 255, 0.2), transparent 55%),
+    radial-gradient(90% 80% at 95% 110%, rgba(255, 122, 92, 0.18), transparent 55%);
   color-scheme: light;
 }
 
 :root[data-theme='dark'] {
-  --bg: #0f1216;
-  --bg-elevated: #171b21;
-  --border: #262c35;
-  --text: #e9edf2;
-  --text-dim: #8b95a3;
+  --bg: #0e0f1a;
+  --bg-elevated: rgba(255, 255, 255, 0.055);
+  --bg-solid: #14161f;
+  --border: rgba(255, 255, 255, 0.09);
+  --text: #f0f1f8;
+  --text-dim: #9ba0bb;
+  --field:
+    radial-gradient(120% 90% at 8% 0%, rgba(110, 99, 255, 0.42), transparent 55%),
+    radial-gradient(90% 80% at 95% 110%, rgba(255, 122, 92, 0.34), transparent 55%);
   color-scheme: dark;
 }
 
@@ -54,7 +86,8 @@ body {
 }
 
 body {
-  background: var(--bg);
+  background: var(--field), var(--bg);
+  background-attachment: fixed;
   color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -64,4 +97,162 @@ input,
 button {
   font: inherit;
   color: inherit;
+}
+
+/* ------------------------------------------------------------------ */
+/* Console density                                                     */
+/*                                                                     */
+/* An appearance option, not a separate theme: the same markup drops    */
+/* its bubbles and becomes an aligned monospace grid — timestamp,       */
+/* sender, text — so a busy chat can be scanned in one eye movement.    */
+/* These selectors carry a :root attribute so they outrank Svelte's     */
+/* scoped component styles.                                            */
+/* ------------------------------------------------------------------ */
+:root[data-density='console'] {
+  --pane-radius: 6px;
+  --bubble-radius: 4px;
+  --blur: 0px;
+  --field: none;
+  --bg-elevated: var(--bg-solid);
+  font-size: 13px;
+}
+
+:root[data-density='console'] body {
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
+}
+
+:root[data-density='console'] .messages {
+  gap: 1px;
+  padding: 10px 12px;
+}
+
+/* Rows, not bubbles: the sender column lines up down the whole thread. */
+:root[data-density='console'] .line {
+  align-items: baseline;
+  gap: 8px;
+}
+
+:root[data-density='console'] .line-avatar {
+  display: none;
+}
+
+:root[data-density='console'] .bubble {
+  max-width: 100%;
+  width: 100%;
+  padding: 1px 0;
+  background: none;
+  border: none;
+  border-radius: 0;
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 2px 10px;
+  align-items: baseline;
+}
+
+:root[data-density='console'] .bubble.out {
+  align-self: stretch;
+  background: none;
+  color: inherit;
+}
+
+:root[data-density='console'] .bubble .author {
+  grid-column: 1;
+  grid-row: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--accent);
+  font-weight: 400;
+}
+
+:root[data-density='console'] .bubble.out::before {
+  content: 'you';
+  grid-column: 1;
+  grid-row: 1;
+  color: var(--action);
+}
+
+:root[data-density='console'] .bubble .text,
+:root[data-density='console'] .bubble .reply-quote,
+:root[data-density='console'] .bubble .webpage,
+:root[data-density='console'] .bubble .poll,
+:root[data-density='console'] .bubble .reactions,
+:root[data-density='console'] .bubble .frame,
+:root[data-density='console'] .bubble .file {
+  grid-column: 2;
+}
+
+:root[data-density='console'] .bubble .stamp {
+  grid-column: 2;
+  justify-content: flex-start;
+  opacity: 0.55;
+}
+
+:root[data-density='console'] .bubble .frame {
+  max-width: 220px;
+}
+
+/* One line per chat in the list. */
+:root[data-density='console'] .row-button {
+  padding: 4px 10px;
+  gap: 8px;
+}
+
+:root[data-density='console'] .row-button .avatar {
+  width: 16px !important;
+  height: 16px !important;
+  border-radius: 3px;
+  font-size: 9px !important;
+}
+
+:root[data-density='console'] .row-button .meta {
+  grid-auto-flow: column;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: baseline;
+  gap: 8px;
+}
+
+:root[data-density='console'] .row-button .preview {
+  display: none;
+}
+
+:root[data-density='console'] .badge,
+:root[data-density='console'] .folder-badge {
+  font-variant-numeric: tabular-nums;
+  background: transparent;
+  color: var(--action);
+  padding: 0;
+}
+
+:root[data-density='console'] .day-divider,
+:root[data-density='console'] .unread-divider {
+  border-radius: 0;
+  background: none;
+  border-top: 1px solid var(--border);
+  align-self: stretch;
+  text-align: left;
+  padding-left: 0;
+}
+
+/* At console density the per-message action row is noise on every line —
+   reveal it on hover instead, the way a dense client would. */
+:root[data-density='console'] .bubble .stamp .reply-btn,
+:root[data-density='console'] .bubble .stamp .edited {
+  visibility: hidden;
+}
+
+:root[data-density='console'] .bubble:hover .stamp .reply-btn,
+:root[data-density='console'] .bubble:hover .stamp .edited {
+  visibility: visible;
+}
+
+:root[data-density='console'] form button[type='submit'] {
+  border-radius: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }
