@@ -62,18 +62,30 @@
       <span class="fallback">Loading…</span>
     {/if}
   </div>
-{:else}
+{:else if media.kind === 'voice' || media.kind === 'audio'}
   <div class="file">
-    <span class="glyph">
-      {media.kind === 'voice' ? '🎤' : media.kind === 'audio' ? '🎵' : '📎'}
-    </span>
+    <span class="glyph">{media.kind === 'voice' ? '🎤' : '🎵'}</span>
     <span class="info">
-      <span class="name">{media.name || (media.kind === 'voice' ? 'Voice message' : 'File')}</span>
-      <span class="sub">
-        {[duration(media.duration), humanSize(media.size)].filter(Boolean).join(' · ')}
-      </span>
+      <span class="name">{media.name || 'Voice message'}</span>
+      {#if url}
+        <audio src={url} controls preload="none"></audio>
+      {:else if failed}
+        <span class="sub">Unavailable</span>
+      {:else}
+        <span class="sub">Loading… {duration(media.duration)}</span>
+      {/if}
     </span>
   </div>
+{:else}
+  <a class="file" href={url ?? undefined} download={media.name || 'file'}>
+    <span class="glyph">📎</span>
+    <span class="info">
+      <span class="name">{media.name || 'File'}</span>
+      <span class="sub">
+        {[duration(media.duration), humanSize(media.size), url ? 'Download' : ''].filter(Boolean).join(' · ')}
+      </span>
+    </span>
+  </a>
 {/if}
 
 <style>
@@ -126,6 +138,13 @@
     display: flex;
     gap: 10px;
     align-items: center;
+    color: inherit;
+    text-decoration: none;
+  }
+
+  audio {
+    height: 34px;
+    max-width: 260px;
   }
 
   .glyph {
