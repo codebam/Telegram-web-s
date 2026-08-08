@@ -7,9 +7,11 @@
   import FormattedText from './FormattedText.svelte';
   import Lightbox from './Lightbox.svelte';
   import Media from './Media.svelte';
+  import CallBar from './CallBar.svelte';
   import MiniApp from './MiniApp.svelte';
   import PeerPicker from './PeerPicker.svelte';
   import Settings from './Settings.svelte';
+  import Stories from './Stories.svelte';
   import Picker from './Picker.svelte';
   import Sticker from './Sticker.svelte';
   import {
@@ -61,6 +63,7 @@
   } from '$lib/telegram/notifications';
   import {queryInlineBot, sendInlineResult, type InlineResultItem} from '$lib/telegram/settings';
   import {applyAccent, applyTheme} from '$lib/telegram/theme';
+  import {startCall} from '$lib/telegram/extras';
 
   let dialogs = $state<DialogItem[]>([]);
   let topics = $state<TopicItem[]>([]);
@@ -70,6 +73,9 @@
   let activeThreadId = $state<number | undefined>(undefined);
   let activeTitle = $state('');
   let activeIsForum = $state(false);
+  /** Calls are one-to-one only, and never to Saved Messages. */
+  let activeIsUser = $state(false);
+  let activeIsSelf = $state(false);
 
   let loadingChats = $state(true);
   let loadingHistory = $state(false);
@@ -792,6 +798,8 @@
     activePeerId = dialog.peerId;
     activeTitle = dialog.title;
     activeIsForum = dialog.isForum;
+    activeIsUser = dialog.isUser;
+    activeIsSelf = dialog.isSelf;
     activeThreadId = undefined;
     topics = [];
     messages = [];
@@ -961,6 +969,8 @@
   }
 </script>
 
+<CallBar />
+
 <div class="shell" class:show-sidebar={showSidebarOnMobile} class:show-chat={!showSidebarOnMobile}>
   <aside>
     <header>
@@ -977,6 +987,7 @@
       <div class="search">
         <input placeholder="Search chats" bind:value={query} oninput={onQueryInput} />
       </div>
+      <Stories />
       {#if folders.length > 1}
         <div class="folders">
           {#each folders as folder (folder.id)}
@@ -1103,6 +1114,9 @@
             ? `${typingNames.join(', ')} ${typingNames.length > 1 ? 'are' : 'is'} typing…`
             : presence}
         </span>
+        {#if activeIsUser && !activeIsSelf}
+          <button class="icon-button" onclick={() => startCall(activePeerId!)} aria-label="Call">📞</button>
+        {/if}
         <button class="icon-button" onclick={() => (chatSearchOpen = !chatSearchOpen)} aria-label="Search messages">🔍</button>
       </header>
 

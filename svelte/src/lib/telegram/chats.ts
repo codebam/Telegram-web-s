@@ -17,6 +17,7 @@ export type DialogItem = {
   date: number;
   unread: number;
   isSelf: boolean;
+  isUser: boolean;
   isForum: boolean;
   pinned: boolean;
   muted: boolean;
@@ -311,6 +312,7 @@ export async function loadDialogs(limit = 40, filterId = 0): Promise<DialogItem[
         date: topMessage?.date ?? 0,
         unread: dialog.unread_count ?? 0,
         isSelf: peerId === selfId,
+        isUser: peer?._ === 'user',
         isForum: !!peer?.pFlags?.forum,
         pinned: !!dialog.pFlags?.pinned,
         muted: (dialog.notify_settings?.mute_until ?? 0) > Date.now() / 1000,
@@ -796,6 +798,7 @@ export async function searchDialogs(query: string, limit = 40): Promise<DialogIt
         date: topMessage?.date ?? 0,
         unread: dialog.unread_count ?? 0,
         isSelf: peerId === selfId,
+        isUser: peer?._ === 'user',
         isForum: !!peer?.pFlags?.forum,
         pinned: !!dialog.pFlags?.pinned,
         muted: (dialog.notify_settings?.mute_until ?? 0) > Date.now() / 1000,
