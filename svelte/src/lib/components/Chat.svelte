@@ -1623,6 +1623,8 @@
     padding: 0;
   }
 
+  /* Floating panes: each is its own translucent card over the gradient field,
+     separated by the shell's gap rather than by dividing borders. */
   aside,
   section {
     position: relative;
@@ -1631,10 +1633,20 @@
     min-width: 0;
     min-height: 0;
     overflow: hidden;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--pane-radius);
+    backdrop-filter: blur(var(--blur));
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
   }
 
-  aside {
+  :global(:root[data-density='console']) aside,
+  :global(:root[data-density='console']) section {
+    border-radius: 0;
+    border: none;
     border-right: 1px solid var(--border);
+    backdrop-filter: none;
+    box-shadow: none;
   }
 
   header {
