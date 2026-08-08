@@ -131,7 +131,7 @@
   }
 </script>
 
-<svelte:head><title>Telegram</title></svelte:head>
+<svelte:head><title>Web S</title></svelte:head>
 
 {#if step === 'signedIn'}
   <Chat />
@@ -144,7 +144,7 @@
       <p class="sub">Starting the MTProto worker.</p>
     {:else if step === 'phone'}
       <div class="logo"></div>
-      <h1>Sign in to Telegram</h1>
+      <h1>Sign in to Web S</h1>
       <p class="sub">Enter your phone number in international format.</p>
       <form onsubmit={submitPhone}>
         <!-- svelte-ignore a11y_autofocus -->
@@ -165,7 +165,7 @@
       <div class="logo"></div>
       <h1>{sentCode?.phone_number}</h1>
       <p class="sub">
-        We sent a {sentCode ? codeLength(sentCode) : 5}-digit code to your Telegram app.
+        We sent a {sentCode ? codeLength(sentCode) : 5}-digit code to your other devices.
       </p>
       <form onsubmit={submitCode}>
         <!-- svelte-ignore a11y_autofocus -->

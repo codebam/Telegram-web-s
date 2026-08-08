@@ -7,7 +7,9 @@
   import FormattedText from './FormattedText.svelte';
   import Lightbox from './Lightbox.svelte';
   import Media from './Media.svelte';
+  import MiniApp from './MiniApp.svelte';
   import PeerPicker from './PeerPicker.svelte';
+  import Settings from './Settings.svelte';
   import Picker from './Picker.svelte';
   import Sticker from './Sticker.svelte';
   import {
@@ -53,6 +55,12 @@
     type MessageItem,
     type TopicItem
   } from '$lib/telegram/chats';
+  import {
+    notifyMessage,
+    setActiveNotificationPeer
+  } from '$lib/telegram/notifications';
+  import {queryInlineBot, sendInlineResult, type InlineResultItem} from '$lib/telegram/settings';
+  import {applyAccent, applyTheme} from '$lib/telegram/theme';
 
   let dialogs = $state<DialogItem[]>([]);
   let topics = $state<TopicItem[]>([]);
@@ -111,6 +119,11 @@
   let messageMenu = $state<{mid: number; x: number; y: number} | null>(null);
   let lastTypingSent = 0;
   let showSidebarOnMobile = $state(true);
+  let showSettings = $state(false);
+  let miniAppBotId = $state<number | null>(null);
+  let inlineResults = $state<InlineResultItem[]>([]);
+  let inlineBot = $state('');
+  let inlineTimer: ReturnType<typeof setTimeout> | undefined;
 
   /** Media messages in order — the lightbox pages through these. */
   const mediaMessages = $derived(
@@ -204,6 +217,8 @@
     let unsubscribe: (() => void) | undefined;
     let disposed = false;
     const stopPresence = trackOwnPresence();
+    applyTheme();
+    applyAccent();
 
     (async () => {
       try {
@@ -231,6 +246,23 @@
             const wasAtBottom = isScrolledToBottom();
             messages = [...messages, item];
             if (wasAtBottom) await scrollToBottom();
+          }
+        }
+
+        // Desktop notification for anything not already on screen.
+        if (!isActive) {
+          const item = await getMessage(peerId, mid);
+          const dialog = dialogs.find((d) => d.peerId === peerId);
+          if (item && !item.out && !dialog?.muted) {
+            notifyMessage({
+              title: dialog?.title ?? item.fromTitle,
+              body: item.text || 'Media',
+              peerId,
+              onclick: () => {
+                const target = dialogs.find((d) => d.peerId === peerId);
+                if (target) openChat(target);
+              }
+            });
           }
         }
 
@@ -669,7 +701,67 @@
     }
   }
 
+  /**
+   * Inline bots: "@botname query" in the composer queries that bot and shows
+   * its results above the input.
+   */
+  function onInlineInput() {
+    const match = /^@(\w{3,32})\s+(.*)$/.exec(draft);
+    clearTimeout(inlineTimer);
+
+    if (!match || activePeerId === null) {
+      inlineResults = [];
+      inlineBot = '';
+      return;
+    }
+
+    const [, bot, query] = match;
+    inlineBot = bot;
+    inlineTimer = setTimeout(async () => {
+      inlineResults = await queryInlineBot(activePeerId!, bot, query);
+    }, 400);
+  }
+
+  async function pickInline(result: InlineResultItem) {
+    if (activePeerId === null) return;
+    const bot = inlineBot;
+    inlineResults = [];
+    draft = '';
+
+    try {
+      await sendInlineResult(activePeerId, bot, result.queryAndResultId);
+    } catch (err: any) {
+      error = errorOf(err, 'Failed to send inline result');
+    }
+  }
+
+  /**
+   * Ctrl+Up / Ctrl+Down walks the reply target through recent messages, like
+   * the desktop client. Ctrl+Up from nothing selects the newest message.
+   */
+  function onComposerKey(e: KeyboardEvent) {
+    if (!e.ctrlKey || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
+    if (!messages.length) return;
+    e.preventDefault();
+
+    const order = messages.filter((m) => !m.service);
+    if (!order.length) return;
+
+    const current = replyTo ? order.findIndex((m) => m.mid === replyTo!.mid) : order.length;
+    const next = e.key === 'ArrowUp' ? current - 1 : current + 1;
+
+    if (next < 0) return;
+    if (next >= order.length) {
+      replyTo = null;
+      return;
+    }
+
+    replyTo = order[next];
+    jumpTo(order[next].mid);
+  }
+
   function onDraftInput() {
+    onInlineInput();
     if (activePeerId === null || editing) return;
 
     // The server expires a typing status after ~6s, so keep re-sending while
@@ -734,6 +826,7 @@
     editing = null;
     getPresence(peerId).then((info) => (presence = info.text)).catch(() => (presence = ''));
     loadPinned(peerId, threadId).then((message) => (pinnedMessage = message)).catch(() => (pinnedMessage = null));
+    setActiveNotificationPeer(peerId);
     getDraftText(peerId, threadId).then((text) => {
       if (activePeerId === peerId && activeThreadId === threadId) draft = text;
     }).catch(() => {});
@@ -871,6 +964,7 @@
 <div class="shell" class:show-sidebar={showSidebarOnMobile} class:show-chat={!showSidebarOnMobile}>
   <aside>
     <header>
+      <button class="icon-button settings-open" onclick={() => (showSettings = true)} aria-label="Settings">⚙</button>
       {#if activeIsForum && activePeerId !== null}
         <button class="back" onclick={backToChats} aria-label="Back">←</button>
         <span>{dialogs.find((d) => d.peerId === activePeerId)?.title ?? 'Topics'}</span>
@@ -1252,6 +1346,19 @@
         </button>
       {/if}
 
+      {#if inlineResults.length}
+        <div class="inline-results">
+          {#each inlineResults as result (result.queryAndResultId)}
+            <button onclick={() => pickInline(result)}>
+              <span class="inline-title">{result.title}</span>
+              {#if result.description}
+                <span class="inline-desc">{result.description}</span>
+              {/if}
+            </button>
+          {/each}
+        </div>
+      {/if}
+
       {#if replyTo || editing}
         <div class="reply-bar">
           <span class="reply-quote">
@@ -1296,11 +1403,23 @@
           bind:this={fileInput}
           onchange={(e) => attach((e.currentTarget as HTMLInputElement).files)}
         />
-        <input placeholder="Message" bind:value={draft} oninput={onDraftInput} />
+        <input
+          placeholder="Message"
+          bind:value={draft}
+          oninput={onDraftInput}
+          onkeydown={onComposerKey}
+        />
         <button type="submit" disabled={!draft.trim()}>{editing ? 'Save' : 'Send'}</button>
       </form>
     {/if}
   </section>
+
+  {#if showSettings}
+    <Settings
+      onclose={() => (showSettings = false)}
+      onminiapp={(botId) => { miniAppBotId = botId; showSettings = false; }}
+    />
+  {/if}
 
   {#if showInfo && activePeerId !== null}
     <ChatInfo peerId={activePeerId} onclose={() => (showInfo = false)} />
@@ -1313,6 +1432,14 @@
     items={mediaMessages}
     bind:index={lightboxIndex}
     onclose={() => (lightboxIndex = null)}
+  />
+{/if}
+
+{#if miniAppBotId !== null}
+  <MiniApp
+    botId={miniAppBotId}
+    peerId={activePeerId ?? miniAppBotId}
+    onclose={() => (miniAppBotId = null)}
   />
 {/if}
 
@@ -1832,6 +1959,42 @@
     align-self: center;
     color: var(--text-dim);
     font-size: 13px;
+  }
+
+  .settings-open {
+    font-size: 16px;
+  }
+
+  .inline-results {
+    max-height: 200px;
+    overflow-y: auto;
+    border-top: 1px solid var(--border);
+    flex: none;
+  }
+
+  .inline-results button {
+    display: grid;
+    gap: 2px;
+    width: 100%;
+    padding: 8px 18px;
+    background: none;
+    border: none;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .inline-results button:hover {
+    background: color-mix(in srgb, var(--text) 6%, transparent);
+  }
+
+  .inline-title {
+    font-size: 14px;
+  }
+
+  .inline-desc {
+    font-size: 12px;
+    color: var(--text-dim);
   }
 
   .chat-search {
