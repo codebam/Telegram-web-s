@@ -33,7 +33,7 @@ export type TopicItem = {
 };
 
 export type MediaItem = {
-  kind: 'photo' | 'video' | 'sticker' | 'voice' | 'audio' | 'file';
+  kind: 'photo' | 'video' | 'gif' | 'sticker' | 'voice' | 'audio' | 'file';
   /** Renderable thumbnail/full URL, resolved lazily via `loadMediaUrl`. */
   width: number;
   height: number;
@@ -156,7 +156,12 @@ function mediaOf(message: any): MediaItem | null {
     const filename = attributes.find((a) => a._ === 'documentAttributeFilename');
     const size = attributes.find((a) => a._ === 'documentAttributeImageSize') ?? video;
 
+    // GIFs arrive as silent looping mp4s tagged with documentAttributeAnimated;
+    // they autoplay rather than showing a poster with a play badge.
+    const animated = attributes.find((a) => a._ === 'documentAttributeAnimated');
+
     const kind: MediaItem['kind'] = sticker ? 'sticker' :
+      animated || document.type === 'gif' ? 'gif' :
       video ? 'video' :
       audio ? (audio.pFlags?.voice ? 'voice' : 'audio') :
       document.mime_type?.startsWith('image/') ? 'photo' :
@@ -248,6 +253,7 @@ function messagePreview(message: any): string {
   switch(media.kind) {
     case 'photo': return '📷 Photo';
     case 'video': return '🎬 Video';
+    case 'gif': return '🎞 GIF';
     case 'sticker': return '🖼 Sticker';
     case 'voice': return '🎤 Voice message';
     case 'audio': return '🎵 Audio';
@@ -645,21 +651,26 @@ export async function loadMediaUrl(peerId: number, mid: number, boxWidth = 480):
   const target = media._ === 'messageMediaPhoto' ? media.photo : media.document;
   if(!target) return null;
 
-  const isVideo = target.attributes?.some((a: any) => a._ === 'documentAttributeVideo');
+  const attributes: any[] = target.attributes ?? [];
+  const isVideo = attributes.some((a: any) => a._ === 'documentAttributeVideo');
+  // A GIF needs the actual mp4, not a poster frame — it plays inline.
+  const isGif = attributes.some((a: any) => a._ === 'documentAttributeAnimated') || target.type === 'gif';
   const isImage = media._ === 'messageMediaPhoto' ||
     target.mime_type?.startsWith('image/') ||
-    isVideo;
+    isVideo ||
+    isGif;
   if(!isImage) {
     mediaUrls.set(key, null);
     return null;
   }
 
   try {
-    // For a video we want its poster frame, so always download a thumb.
+    // For a video we want its poster frame, so download a thumb; GIFs and
+    // photos-as-documents download in full.
     const thumb = choosePhotoSize(target, boxWidth, boxWidth, true);
     const url = await appDownloadManager.downloadMediaURL({
       media: target,
-      thumb: isVideo || media._ === 'messageMediaPhoto' ? thumb : undefined
+      thumb: !isGif && (isVideo || media._ === 'messageMediaPhoto') ? thumb : undefined
     });
     mediaUrls.set(key, url ?? null);
     return url ?? null;
@@ -885,25 +896,146 @@ export async function toggleReaction(peerId: number, mid: number, emoticon: stri
 /* Folders, and chat-level actions                                     */
 /* ------------------------------------------------------------------ */
 
-export type FolderItem = {id: number; title: string};
+export type FolderItem = {
+  id: number;
+  title: string;
+  /** Folder icon emoji chosen by the user, '' for the built-in folders. */
+  emoticon: string;
+  unread: number;
+  /** Built-in All/Archive cannot be edited or deleted. */
+  editable: boolean;
+  includePeerIds: number[];
+};
 
+function filterTitle(filter: any): string {
+  // Newer layers wrap the title in a TextWithEntities.
+  return typeof filter?.title === 'string' ? filter.title : (filter?.title?.text ?? 'Folder');
+}
+
+/**
+ * Chat folders (a.k.a. dialog filters).
+ *
+ * `getFilters()` only returns what is already cached, which on a cold start is
+ * just the two built-ins — `getDialogFilters()` is what actually fetches them
+ * from the server.
+ */
 export async function loadFolders(): Promise<FolderItem[]> {
   const {managers} = await bootTelegram();
 
-  const base: FolderItem[] = [{id: 0, title: 'All'}, {id: 1, title: 'Archive'}];
+  const base: FolderItem[] = [
+    {id: 0, title: 'All', emoticon: '', unread: 0, editable: false, includePeerIds: []},
+    {id: 1, title: 'Archive', emoticon: '📁', unread: 0, editable: false, includePeerIds: []}
+  ];
+
+  let folders = base;
   try {
-    const filters: any = await managers.filtersStorage.getFilters();
-    const custom = Object.values(filters ?? {})
-      .filter((filter: any) => filter?.id > 1)
-      .map((filter: any) => ({
+    const filters: any[] = await managers.filtersStorage.getDialogFilters();
+    const custom = (filters ?? [])
+      .filter((filter) => filter?.id > 1)
+      .map((filter) => ({
         id: filter.id,
-        // Newer layers wrap the title in a TextWithEntities.
-        title: typeof filter.title === 'string' ? filter.title : (filter.title?.text ?? 'Folder')
+        title: filterTitle(filter),
+        emoticon: filter.emoticon ?? '',
+        unread: 0,
+        editable: true,
+        includePeerIds: (filter.includePeerIds ?? []).map(Number)
       }));
-    return [...base, ...custom];
+    folders = [...base, ...custom];
   } catch(err) {
-    return base;
+    // Keep the built-ins; a failed fetch must not empty the tab bar.
   }
+
+  return Promise.all(
+    folders.map(async(folder) => ({
+      ...folder,
+      unread: await folderUnread(folder.id)
+    }))
+  );
+}
+
+async function folderUnread(filterId: number): Promise<number> {
+  const {managers} = await bootTelegram();
+
+  try {
+    // getFolderUnreadCount only reports what the folder has already cached, so
+    // it reads 0 until the folder's dialogs are pulled at least once.
+    // The badge counts unmuted *chats* with something unread — not messages,
+    // which would show five-digit numbers for busy channels.
+    const {dialogs} = await managers.dialogsStorage.getDialogs({limit: 100, filterId});
+    const now = Date.now() / 1000;
+    return (dialogs ?? []).filter((dialog: any) => {
+      const muted = (dialog.notify_settings?.mute_until ?? 0) > now;
+      return !muted && ((dialog.unread_count ?? 0) > 0 || dialog.pFlags?.unread_mark);
+    }).length;
+  } catch(err) {
+    return 0;
+  }
+}
+
+/**
+ * getOutputDialogFilter sends the filter as-is, so the request payload uses
+ * `include_peers` (InputPeer objects) — the `includePeerIds` mirror is only for
+ * local matching. Sending it without the InputPeers is rejected server-side
+ * with FILTER_INCLUDE_EMPTY.
+ */
+async function toInputPeers(peerIds: number[]) {
+  const {managers} = await bootTelegram();
+  return Promise.all(peerIds.map((peerId) => managers.appPeersManager.getInputPeerById(peerId)));
+}
+
+export async function createFolder(title: string, peerIds: number[]): Promise<void> {
+  const {managers} = await bootTelegram();
+  const includePeers = await toInputPeers(peerIds);
+
+  await managers.filtersStorage.createDialogFilter({
+    _: 'dialogFilter',
+    id: 0, // assigned by createDialogFilter
+    title: {_: 'textWithEntities', text: title, entities: []},
+    pFlags: {},
+    pinned_peers: [],
+    include_peers: includePeers,
+    exclude_peers: [],
+    includePeerIds: peerIds,
+    excludePeerIds: [],
+    pinnedPeerIds: []
+  } as any, true);
+}
+
+export async function updateFolder(
+  folderId: number,
+  title: string,
+  peerIds: number[]
+): Promise<void> {
+  const {managers} = await bootTelegram();
+  const existing: any = await managers.filtersStorage.getFilter(folderId);
+  if(!existing) throw new Error('Folder not found');
+
+  await managers.filtersStorage.updateDialogFilter({
+    ...existing,
+    title: {_: 'textWithEntities', text: title, entities: []},
+    include_peers: await toInputPeers(peerIds),
+    includePeerIds: peerIds
+  } as any);
+}
+
+export async function deleteFolder(folderId: number): Promise<void> {
+  const {managers} = await bootTelegram();
+  const existing: any = await managers.filtersStorage.getFilter(folderId);
+  if(!existing) return;
+  await managers.filtersStorage.updateDialogFilter(existing, true);
+}
+
+/** Fires when folders are created, edited, reordered or removed elsewhere. */
+export async function onFoldersUpdate(callback: () => void): Promise<() => void> {
+  const {default: rootScope} = await import('@lib/rootScope');
+  rootScope.addEventListener('filter_update', callback);
+  rootScope.addEventListener('filter_delete', callback);
+  rootScope.addEventListener('filter_new', callback);
+  return () => {
+    rootScope.removeEventListener('filter_update', callback);
+    rootScope.removeEventListener('filter_delete', callback);
+    rootScope.removeEventListener('filter_new', callback);
+  };
 }
 
 export async function togglePin(peerId: number, filterId = 0): Promise<void> {

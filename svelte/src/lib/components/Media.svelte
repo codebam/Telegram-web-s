@@ -41,13 +41,17 @@
   }
 </script>
 
-{#if media.kind === 'photo' || media.kind === 'video' || media.kind === 'sticker'}
+{#if media.kind === 'photo' || media.kind === 'video' || media.kind === 'gif' || media.kind === 'sticker'}
   <div
     class="frame"
     class:sticker={media.kind === 'sticker'}
     style="aspect-ratio: {ratio}"
   >
-    {#if url}
+    {#if url && media.kind === 'gif'}
+      <!-- svelte-ignore a11y_media_has_caption -->
+      <video src={url} autoplay loop muted playsinline></video>
+      <span class="play">GIF</span>
+    {:else if url}
       <img src={url} alt={media.kind} />
       {#if media.kind === 'video'}
         <span class="play">▶ {duration(media.duration)}</span>
@@ -90,7 +94,8 @@
     max-width: 160px;
   }
 
-  img {
+  img,
+  video {
     width: 100%;
     height: 100%;
     object-fit: cover;
