@@ -2,12 +2,20 @@ import {sveltekit} from '@sveltejs/kit/vite';
 import solidPlugin from 'vite-plugin-solid';
 import {defineConfig} from 'vite';
 import {fileURLToPath} from 'url';
+import {copyFileSync, existsSync} from 'fs';
 import {resolve} from 'path';
 
 // Repo root — the existing tweb sources (MTProto stack, managers, helpers) live
 // in ../src and are consumed as-is by the Svelte client.
 const rootDir = fileURLToPath(new URL('..', import.meta.url));
 const src = (p: string) => resolve(rootDir, 'src', p);
+
+// src/langPackLocalVersion.ts is gitignored and generated from its .example
+// counterpart by the root vite.config.ts. A clean checkout (CI) does not have
+// it, and @config/app.ts imports it — so generate it here too.
+if(!existsSync(src('langPackLocalVersion.ts'))) {
+  copyFileSync(src('langPackLocalVersion.example.ts'), src('langPackLocalVersion.ts'));
+}
 
 // Mirrors the alias table in ../vite.config.ts. tweb's modules import each other
 // through these, so they must resolve identically here.
