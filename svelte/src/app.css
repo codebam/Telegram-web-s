@@ -99,6 +99,48 @@ button {
   color: inherit;
 }
 
+/*
+ * Scrollbars: thin, transparent until the area is hovered. Firefox gets the
+ * standard properties; WebKit/Blink need the pseudo-elements for a track that
+ * does not paint its own background over the pane.
+ */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--text) 22%, transparent) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--text) 16%, transparent);
+  border-radius: 999px;
+  /* Border rather than width keeps the hit area full-size while the visible
+     thumb stays slim. */
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+:hover::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--text) 30%, transparent);
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--text) 45%, transparent);
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 /* ------------------------------------------------------------------ */
 /* Console density                                                     */
 /*                                                                     */
