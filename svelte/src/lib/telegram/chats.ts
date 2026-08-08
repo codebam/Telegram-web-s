@@ -18,6 +18,8 @@ export type DialogItem = {
   unread: number;
   isSelf: boolean;
   isUser: boolean;
+  /** Broadcast channel — posts carry view counts, not delivery ticks. */
+  isBroadcast: boolean;
   isForum: boolean;
   pinned: boolean;
   muted: boolean;
@@ -90,6 +92,8 @@ export type MessageItem = {
   stickerKind: '' | 'static' | 'video' | 'animated';
   /** True until the server has acknowledged the message. */
   pending: boolean;
+  /** Channel posts carry a view count instead of delivery ticks. */
+  views: number;
   /** Original author when the message was forwarded, '' otherwise. */
   forwardedFrom: string;
   webpage: WebPagePreview | null;
@@ -317,6 +321,7 @@ export async function loadDialogs(limit = 40, filterId = 0): Promise<DialogItem[
         unread: dialog.unread_count ?? 0,
         isSelf: peerId === selfId,
         isUser: peer?._ === 'user',
+        isBroadcast: peer?._ === 'channel' && !!peer?.pFlags?.broadcast,
         isForum: !!peer?.pFlags?.forum,
         pinned: !!dialog.pFlags?.pinned,
         muted: (dialog.notify_settings?.mute_until ?? 0) > Date.now() / 1000,
@@ -391,6 +396,7 @@ async function toItem(message: any, peerId: number, selfId: number): Promise<Mes
     stickerDocId: isStickerMessage(message) ? '' + message.media.document.id : '',
     stickerKind: isStickerMessage(message) ? stickerKind(message.media.document) : '',
     pending: !!message.pFlags?.is_outgoing,
+    views: message.views ?? 0,
     forwardedFrom: await forwardedTitle(message, selfId),
     webpage: webpageOf(message),
     poll: pollOf(message)
@@ -817,6 +823,7 @@ export async function searchDialogs(query: string, limit = 40): Promise<DialogIt
         unread: dialog.unread_count ?? 0,
         isSelf: peerId === selfId,
         isUser: peer?._ === 'user',
+        isBroadcast: peer?._ === 'channel' && !!peer?.pFlags?.broadcast,
         isForum: !!peer?.pFlags?.forum,
         pinned: !!dialog.pFlags?.pinned,
         muted: (dialog.notify_settings?.mute_until ?? 0) > Date.now() / 1000,
@@ -878,6 +885,28 @@ export async function getReadOutboxMaxId(peerId: number): Promise<number> {
     return dialog?.read_outbox_max_id ?? 0;
   } catch(err) {
     return 0;
+  }
+}
+
+/**
+ * Who has read a given message, for small groups. The server only answers for
+ * groups under a size limit and within a retention window, so an empty list
+ * means "unknown", not "nobody".
+ */
+export async function readParticipants(peerId: number, mid: number): Promise<string[]> {
+  const {managers} = await bootTelegram();
+  const selfId = await getSelfId();
+
+  try {
+    const participants: any[] = await managers.appMessagesManager.getMessageReadParticipants(peerId, mid);
+    return Promise.all(
+      (participants ?? []).map(async(participant: any) => {
+        const id = Number(participant.user_id ?? participant);
+        return peerTitle(await getPeer(id), selfId);
+      })
+    );
+  } catch(err) {
+    return [];
   }
 }
 
