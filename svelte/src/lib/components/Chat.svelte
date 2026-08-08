@@ -3,6 +3,7 @@
 
   import Avatar from './Avatar.svelte';
   import ChatInfo from './ChatInfo.svelte';
+  import FolderEditor from './FolderEditor.svelte';
   import FormattedText from './FormattedText.svelte';
   import Lightbox from './Lightbox.svelte';
   import Media from './Media.svelte';
@@ -23,6 +24,7 @@
     markDialogRead,
     markDialogUnread,
     onDialogsUpdate,
+    onFoldersUpdate,
     onNewMessage,
     onTyping,
     readUpTo,
@@ -75,6 +77,9 @@
 
   let folders = $state<FolderItem[]>([]);
   let activeFolder = $state(0);
+  let editingFolder = $state<FolderItem | null>(null);
+  let allDialogs = $state<DialogItem[]>([]);
+  let folderEditorOpen = $state(false);
   let menuFor = $state<DialogItem | null>(null);
   let showInfo = $state(false);
   let showPicker = $state(false);
@@ -84,7 +89,12 @@
 
   /** Media messages in order — the lightbox pages through these. */
   const mediaMessages = $derived(
-    messages.filter((m) => m.media && (m.media.kind === 'photo' || m.media.kind === 'video') && !m.stickerDocId)
+    messages.filter(
+      (m) =>
+        m.media &&
+        (m.media.kind === 'photo' || m.media.kind === 'video' || m.media.kind === 'gif') &&
+        !m.stickerDocId
+    )
   );
 
   /**
@@ -204,6 +214,13 @@
       // Unread counts change from other devices too — keep the list honest.
       const offDialogs = await onDialogsUpdate(async () => {
         dialogs = await loadDialogs(40, activeFolder);
+        folders = await loadFolders();
+      });
+
+      // Folders can be created or edited from another client.
+      const offFolders = await onFoldersUpdate(async () => {
+        folders = await loadFolders();
+        if (!folders.some((f) => f.id === activeFolder)) activeFolder = 0;
       });
 
       const offTyping = await onTyping((peerId, threadId, names) => {
@@ -216,6 +233,7 @@
         off();
         offTyping();
         offDialogs();
+        offFolders();
       };
 
       if (disposed) all();
@@ -242,6 +260,22 @@
       error = errorOf(err, 'Failed to load folder');
     } finally {
       loadingChats = false;
+    }
+  }
+
+  async function openFolderEditor(folder: FolderItem | null) {
+    editingFolder = folder;
+    // The editor picks from every chat, not just the folder currently shown.
+    allDialogs = await loadDialogs(100, 0);
+    folderEditorOpen = true;
+  }
+
+  async function onFolderSaved() {
+    folderEditorOpen = false;
+    editingFolder = null;
+    folders = await loadFolders();
+    if (!folders.some((f) => f.id === activeFolder)) {
+      await openFolder(folders[0]);
     }
   }
 
@@ -586,8 +620,15 @@
             <button
               class:active={folder.id === activeFolder}
               onclick={() => openFolder(folder)}
-            >{folder.title}</button>
+              ondblclick={() => folder.editable && openFolderEditor(folder)}
+              title={folder.editable ? 'Double-click to edit' : ''}
+            >
+              {#if folder.emoticon}<span class="folder-icon">{folder.emoticon}</span>{/if}
+              {folder.title}
+              {#if folder.unread}<span class="folder-badge">{folder.unread}</span>{/if}
+            </button>
           {/each}
+          <button class="add-folder" onclick={() => openFolderEditor(null)} title="New folder">＋</button>
         </div>
       {/if}
     {/if}
@@ -781,7 +822,7 @@
                     {/each}
                   </div>
                 {:else if message.media}
-                  {#if message.media.kind === 'photo' || message.media.kind === 'video'}
+                  {#if message.media.kind === 'photo' || message.media.kind === 'video' || message.media.kind === 'gif'}
                     <button class="media-button" onclick={() => openLightbox(message)}>
                       <Media peerId={activePeerId} mid={message.mid} media={message.media} />
                     </button>
@@ -896,6 +937,15 @@
     items={mediaMessages}
     bind:index={lightboxIndex}
     onclose={() => (lightboxIndex = null)}
+  />
+{/if}
+
+{#if folderEditorOpen}
+  <FolderEditor
+    folder={editingFolder}
+    dialogs={allDialogs}
+    onclose={() => (folderEditorOpen = false)}
+    onsaved={onFolderSaved}
   />
 {/if}
 
@@ -1041,6 +1091,29 @@
   .folders button.active {
     background: var(--accent);
     color: #fff;
+  }
+
+  .folder-icon {
+    margin-right: 2px;
+  }
+
+  .folder-badge {
+    margin-left: 5px;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 11px;
+  }
+
+  .folders button.active .folder-badge {
+    background: #fff;
+    color: var(--accent);
+  }
+
+  .add-folder {
+    font-size: 16px;
+    line-height: 1;
   }
 
   .menu {
