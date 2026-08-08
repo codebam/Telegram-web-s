@@ -38,6 +38,7 @@
     markDialogUnread,
     onDialogsUpdate,
     onFoldersUpdate,
+    onMessageEdited,
     onMessageSent,
     onMessagesDeleted,
     onNewMessage,
@@ -47,6 +48,7 @@
     onUserUpdate,
     openDiscussion,
     readUpTo,
+    resolveUsername,
     saveDraftText,
     searchMessages,
     setOwnOnline,
@@ -337,6 +339,14 @@
         if (confirmed) upsertMessage(confirmed);
       });
 
+      // Streaming bots edit their reply as it is generated.
+      const offEdited = await onMessageEdited(async (peerId, mid) => {
+        if (peerId !== activePeerId) return;
+        if (!messages.some((m) => m.mid === mid)) return;
+        const updated = await getMessage(peerId, mid);
+        if (updated) upsertMessage(updated);
+      });
+
       const offDeleted = await onMessagesDeleted((peerId, mids) => {
         if (peerId === activePeerId) {
           messages = messages.filter((m) => !mids.includes(m.mid));
@@ -369,6 +379,7 @@
         offRead();
         offSent();
         offDeleted();
+        offEdited();
       };
 
       if (disposed) all();
@@ -669,6 +680,24 @@
     const previous = rendered[index - 1]?.items[0];
     const current = rendered[index]?.items[0];
     return !!previous && !!current && dayOf(previous.date) !== dayOf(current.date);
+  }
+
+  /**
+   * Open the profile behind an @mention. A username has to be resolved through
+   * the server; a mentionName entity already carries the user id.
+   */
+  async function openMention(mention: string, kind: 'username' | 'userId') {
+    if (kind === 'userId') {
+      profilePeerId = Number(mention);
+      return;
+    }
+
+    const peerId = await resolveUsername(mention);
+    if (peerId === null) {
+      error = `No account found for @${mention}`;
+      return;
+    }
+    profilePeerId = peerId;
   }
 
   /** Place a call, explaining the failure rather than opening a dead screen. */
@@ -1002,10 +1031,14 @@
   }
 
   async function openTopic(topic: TopicItem) {
-    activeThreadId = topic.threadId;
-    activeTitle = topic.title;
+    // threadId 0 is the synthetic "all messages" row: the chat's own history,
+    // not a thread. A forum still has a main timeline and hiding it makes
+    // anything posted outside a topic unreachable.
+    const threadId = topic.threadId || undefined;
+    activeThreadId = threadId;
+    activeTitle = threadId === undefined ? (dialogs.find((d) => d.peerId === activePeerId)?.title ?? 'All messages') : topic.title;
     replyTo = null;
-    await openHistory(activePeerId!, topic.threadId, topic.unread, 0);
+    await openHistory(activePeerId!, threadId, topic.unread, 0);
   }
 
   async function openHistory(peerId: number, threadId?: number, unread = 0, readMaxId = 0) {
@@ -1199,16 +1232,13 @@
       {#if loadingChats || searching}
         <p class="muted">Loading chats…</p>
       {:else if activeIsForum && activePeerId !== null}
-        {#if !topics.length}
-          <p class="muted">No topics.</p>
-        {:else}
-          {#each topics as topic (topic.threadId)}
+        {#each [{threadId: 0, title: 'All messages', preview: 'Everything in this chat', date: 0, unread: 0}, ...topics] as topic (topic.threadId)}
             <button
               class="row-button"
-              class:active={topic.threadId === activeThreadId}
+              class:active={(topic.threadId || undefined) === activeThreadId}
               onclick={() => openTopic(topic)}
             >
-              <span class="topic-glyph">#</span>
+              <span class="topic-glyph">{topic.threadId ? '#' : '≡'}</span>
               <span class="meta">
                 <span class="row">
                   <span class="title">{topic.title}</span>
@@ -1220,8 +1250,7 @@
                 </span>
               </span>
             </button>
-          {/each}
-        {/if}
+        {/each}
       {:else if !dialogs.length}
         <p class="muted">No chats yet.</p>
       {:else}
@@ -1463,7 +1492,9 @@
                   {/if}
                 {/if}
 
-                {#if message.parts.length}<FormattedText parts={message.parts} />{/if}
+                {#if message.parts.length}
+                  <FormattedText parts={message.parts} onmention={openMention} />
+                {/if}
 
                 {#if message.webpage}
                   <a class="webpage" href={message.webpage.url} target="_blank" rel="noopener noreferrer">

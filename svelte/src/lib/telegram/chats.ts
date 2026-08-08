@@ -65,6 +65,12 @@ export type TextPart = {
   blockquote?: boolean;
   url?: string;
   mention?: string;
+  /**
+   * What the mention points at: a public @username, a specific user id (used
+   * when someone without a username is tagged), or a hashtag / bot command,
+   * which are searchable rather than clickable to a profile.
+   */
+  mentionKind?: 'username' | 'userId' | 'tag';
 };
 
 export type MessageItem = {
@@ -148,6 +154,16 @@ async function getPeer(peerId: number): Promise<any> {
 /* ------------------------------------------------------------------ */
 /* Formatting                                                          */
 /* ------------------------------------------------------------------ */
+
+/**
+ * Chats whose history is split into topics. Besides forum supergroups, a bot
+ * DM can be organised the same way (pFlags.bot_forum_view) — tweb's topic APIs
+ * treat both identically, and without this the bot's topics are invisible and
+ * its messages unreachable.
+ */
+function isTopicChat(peer: any): boolean {
+  return !!peer?.pFlags?.forum || !!peer?.pFlags?.bot_forum_view;
+}
 
 function peerTitle(peer: any, selfId: number): string {
   if(!peer) return 'Unknown';
@@ -250,11 +266,20 @@ function textParts(text: string, entities: any[] = []): TextPart[] {
         case 'messageEntityTextUrl': part.url = entity.url; break;
         case 'messageEntityUrl': part.url = part.text; break;
         case 'messageEntityEmail': part.url = `mailto:${part.text}`; break;
-        case 'messageEntityMention': part.mention = part.text; break;
-        case 'messageEntityMentionName': part.mention = String(entity.user_id); break;
+        case 'messageEntityMention':
+          part.mention = part.text.replace(/^@/, '');
+          part.mentionKind = 'username';
+          break;
+        case 'messageEntityMentionName':
+          part.mention = String(entity.user_id);
+          part.mentionKind = 'userId';
+          break;
         case 'messageEntityHashtag':
         case 'messageEntityCashtag':
-        case 'messageEntityBotCommand': part.mention = part.text; break;
+        case 'messageEntityBotCommand':
+          part.mention = part.text;
+          part.mentionKind = 'tag';
+          break;
       }
     }
 
@@ -322,7 +347,7 @@ export async function loadDialogs(limit = 40, filterId = 0): Promise<DialogItem[
         isSelf: peerId === selfId,
         isUser: peer?._ === 'user',
         isBroadcast: peer?._ === 'channel' && !!peer?.pFlags?.broadcast,
-        isForum: !!peer?.pFlags?.forum,
+        isForum: isTopicChat(peer),
         pinned: !!dialog.pFlags?.pinned,
         muted: (dialog.notify_settings?.mute_until ?? 0) > Date.now() / 1000,
         readMaxId: dialog.read_inbox_max_id ?? 0,
@@ -469,6 +494,33 @@ async function replyOf(message: any, peerId: number, selfId: number): Promise<Re
   };
 }
 
+/**
+ * Fetch messages by id, falling back to the server for any the local store does
+ * not have. getHistory can return ids whose message objects were never saved —
+ * common in threads that have not been opened before — and reading them
+ * straight from storage yields null, which silently drops them from the view.
+ */
+async function fetchMessages(peerId: number, mids: number[]): Promise<any[]> {
+  const {managers} = await bootTelegram();
+
+  const messages = await Promise.all(
+    mids.map((mid) => managers.appMessagesManager.getMessageByPeer(peerId, mid))
+  );
+
+  const missing = mids.filter((mid, index) => !messages[index]);
+  if(!missing.length) return messages;
+
+  try {
+    await managers.appMessagesManager.reloadMessages(peerId, missing);
+  } catch(err) {
+    // Fall through: whatever is still missing is skipped below.
+  }
+
+  return Promise.all(
+    mids.map((mid, index) => messages[index] ?? managers.appMessagesManager.getMessageByPeer(peerId, mid))
+  );
+}
+
 export async function loadHistory(
   peerId: number,
   options: {threadId?: number; limit?: number; offsetId?: number} = {}
@@ -485,9 +537,7 @@ export async function loadHistory(
     fetchIfWasNotFetched: true
   });
 
-  const messages = await Promise.all(
-    result.history.map((mid: number) => managers.appMessagesManager.getMessageByPeer(peerId, mid))
-  );
+  const messages = await fetchMessages(peerId, result.history);
 
   const items = await Promise.all(
     messages.filter(Boolean).map((message: any) => toItem(message, peerId, selfId))
@@ -552,9 +602,7 @@ export async function loadAround(
     fetchIfWasNotFetched: true
   });
 
-  const messages = await Promise.all(
-    result.history.map((id: number) => managers.appMessagesManager.getMessageByPeer(peerId, id))
-  );
+  const messages = await fetchMessages(peerId, result.history);
 
   const items = await Promise.all(
     messages.filter(Boolean).map((message: any) => toItem(message, peerId, selfId))
@@ -582,9 +630,7 @@ export async function searchMessages(
     limit: options.limit ?? 40
   });
 
-  const messages = await Promise.all(
-    result.history.map((mid: number) => managers.appMessagesManager.getMessageByPeer(peerId, mid))
-  );
+  const messages = await fetchMessages(peerId, result.history);
 
   return Promise.all(
     messages.filter(Boolean).map((message: any) => toItem(message, peerId, selfId))
@@ -824,7 +870,7 @@ export async function searchDialogs(query: string, limit = 40): Promise<DialogIt
         isSelf: peerId === selfId,
         isUser: peer?._ === 'user',
         isBroadcast: peer?._ === 'channel' && !!peer?.pFlags?.broadcast,
-        isForum: !!peer?.pFlags?.forum,
+        isForum: isTopicChat(peer),
         pinned: !!dialog.pFlags?.pinned,
         muted: (dialog.notify_settings?.mute_until ?? 0) > Date.now() / 1000,
         readMaxId: dialog.read_inbox_max_id ?? 0,
@@ -1420,8 +1466,22 @@ export async function getPeerBrief(peerId: number): Promise<{
     isUser: peer?._ === 'user',
     isSelf: peerId === selfId,
     isBroadcast: peer?._ === 'channel' && !!peer?.pFlags?.broadcast,
-    isForum: !!peer?.pFlags?.forum
+    isForum: isTopicChat(peer)
   };
+}
+
+/** Resolve a public @username to a peer id. */
+export async function resolveUsername(username: string): Promise<number | null> {
+  const {managers} = await bootTelegram();
+  try {
+    const peer: any = await managers.appUsersManager.resolveUsername(username.replace(/^@/, ''));
+    const id = Number(peer?.id ?? 0);
+    if(!id) return null;
+    // Channels and chats come back with their own id space; getPeer normalises.
+    return peer._ === 'user' ? id : -id;
+  } catch(err) {
+    return null;
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -1534,6 +1594,19 @@ export async function onNewMessage(callback: NewMessageHandler): Promise<() => v
     rootScope.removeEventListener('history_multiappend', onMultiAppend);
     rootScope.removeEventListener('history_append', onAppend);
   };
+}
+
+/**
+ * Message edits. Bots that stream a reply send an empty message and then edit
+ * it repeatedly, so without this their answers stay blank.
+ */
+export async function onMessageEdited(
+  callback: (peerId: number, mid: number) => void
+): Promise<() => void> {
+  const {default: rootScope} = await import('@lib/rootScope');
+  const handler = ({peerId, mid}: any) => callback(Number(peerId), mid);
+  rootScope.addEventListener('message_edit', handler);
+  return () => rootScope.removeEventListener('message_edit', handler);
 }
 
 /** Messages removed by anyone; the payload is a set of ids for one peer. */

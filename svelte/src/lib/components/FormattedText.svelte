@@ -1,16 +1,44 @@
 <script lang="ts">
+  import Markdown from './Markdown.svelte';
+  import {looksLikeMarkdown} from '$lib/telegram/markdown';
   import type {TextPart} from '$lib/telegram/chats';
 
-  let {parts}: {parts: TextPart[]} = $props();
+  let {
+    parts,
+    onmention
+  }: {
+    parts: TextPart[];
+    /** Called with a @username or a bare user id when a mention is clicked. */
+    onmention?: (mention: string, kind: 'username' | 'userId') => void;
+  } = $props();
 
   // Spoilers stay hidden until clicked, keyed by run index.
   let revealed = $state<Set<number>>(new Set());
+
+  /**
+   * Bots send Markdown as plain text. Render it as structure, but only when the
+   * message carries no formatting entities of its own — otherwise Telegram's
+   * own formatting is authoritative and re-parsing it would fight with it.
+   */
+  const plain = $derived(
+    parts.every((part) =>
+      !part.bold && !part.italic && !part.underline && !part.strike &&
+      !part.code && !part.pre && !part.spoiler && !part.blockquote &&
+      !part.url && !part.mention
+    )
+  );
+
+  const source = $derived(parts.map((part) => part.text).join(''));
+  const asMarkdown = $derived(plain && looksLikeMarkdown(source));
 
   function reveal(index: number) {
     revealed = new Set(revealed).add(index);
   }
 </script>
 
+{#if asMarkdown}
+  <Markdown text={source} {onmention} />
+{:else}
 <p class="text">
   {#each parts as part, i}
     {#if part.pre}
@@ -21,6 +49,11 @@
       </button>
     {:else if part.url}
       <a href={part.url} target="_blank" rel="noopener noreferrer">{part.text}</a>
+    {:else if part.mention && part.mentionKind !== 'tag' && onmention}
+      <button
+        class="mention"
+        onclick={() => onmention(part.mention!, part.mentionKind as 'username' | 'userId')}
+      >{part.text}</button>
     {:else if part.mention}
       <span class="mention">{part.text}</span>
     {:else}
@@ -35,6 +68,7 @@
     {/if}
   {/each}
 </p>
+{/if}
 
 <style>
   .text {
@@ -90,6 +124,18 @@
 
   .mention {
     color: var(--accent);
+  }
+
+  button.mention {
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  button.mention:hover {
+    text-decoration: underline;
   }
 
   .spoiler {
