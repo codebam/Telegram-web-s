@@ -232,12 +232,25 @@ export async function markStoriesRead(peerId: number, maxId: number): Promise<vo
 /* Calls                                                               */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Call state, flattened for the UI.
+ *
+ * `phase` collapses tweb's CALL_STATE enum into the four things a call screen
+ * actually renders differently: ringing in, ringing out, negotiating, talking.
+ */
+export type CallPhase = 'incoming' | 'outgoing' | 'connecting' | 'connected' | 'ended';
+
 export type CallState = {
-  active: boolean;
-  status: string;
+  phase: CallPhase;
   peerId: number;
-  isVideo: boolean;
+  title: string;
   muted: boolean;
+  sharingVideo: boolean;
+  sharingScreen: boolean;
+  /** Seconds since the call connected. */
+  duration: number;
+  /** Four emoji both sides can compare to verify the call is not intercepted. */
+  fingerprint: string[];
 };
 
 let callsControllerPromise: Promise<any> | null = null;
@@ -251,6 +264,19 @@ async function getCallsController() {
     callsController.construct(managers as any);
     return callsController;
   })());
+}
+
+async function phaseOf(call: any): Promise<CallPhase> {
+  const {default: CALL_STATE} = await import('@lib/calls/callState');
+
+  switch(call.connectionState) {
+    case CALL_STATE.CONNECTED: return 'connected';
+    case CALL_STATE.CONNECTING:
+    case CALL_STATE.EXCHANGING_KEYS: return 'connecting';
+    case CALL_STATE.CLOSING:
+    case CALL_STATE.CLOSED: return 'ended';
+    default: return call.isOutgoing ? 'outgoing' : 'incoming';
+  }
 }
 
 export async function startCall(userId: number, isVideo = false): Promise<boolean> {
@@ -273,42 +299,110 @@ export async function acceptCall(): Promise<void> {
   await controller.currentCall?.acceptCall();
 }
 
-export async function toggleCallMute(): Promise<boolean> {
+export async function toggleCallMute(): Promise<void> {
   const controller = await getCallsController();
-  const call = controller.currentCall;
-  if(!call) return false;
-  call.toggleMuted?.();
-  return !!call.muted;
+  await controller.currentCall?.toggleMuted();
 }
 
-/** Subscribe to call lifecycle changes; returns an unsubscribe callback. */
+export async function toggleCallVideo(): Promise<void> {
+  const controller = await getCallsController();
+  await controller.currentCall?.toggleVideoSharing();
+}
+
+export async function toggleCallScreen(): Promise<void> {
+  const controller = await getCallsController();
+  await controller.currentCall?.toggleScreenSharing();
+}
+
+/**
+ * The <video> element the engine renders into. Returned rather than a stream so
+ * the caller can mount whatever the P2P layer already set up.
+ */
+export async function getCallVideo(type: 'input' | 'output'): Promise<HTMLVideoElement | undefined> {
+  const controller = await getCallsController();
+  return controller.currentCall?.getVideoElement(type)?.video;
+}
+
+/**
+ * Subscribe to call state. Emits on every lifecycle change and once a second
+ * while connected so the duration ticks. Returns an unsubscribe callback.
+ */
 export async function onCallState(callback: (state: CallState | null) => void): Promise<() => void> {
   const controller = await getCallsController();
-  const {default: rootScope} = await import('@lib/rootScope');
+  const {managers} = await bootTelegram();
 
-  const emit = () => {
+  let attached: any = null;
+  let ticker: ReturnType<typeof setInterval> | undefined;
+
+  const emit = async() => {
     const call = controller.currentCall;
     if(!call) {
       callback(null);
       return;
     }
 
+    const peerId = Number(call.interlocutorUserId ?? 0);
+    const user: any = await managers.appUsersManager.getUser(call.interlocutorUserId).catch(() => null);
+
+    let fingerprint: string[] = [];
+    try {
+      // Only meaningful once keys are exchanged.
+      fingerprint = (await call.getEmojisFingerprint()) ?? [];
+    } catch(err) {
+      fingerprint = [];
+    }
+
     callback({
-      active: true,
-      status: call.connectionState ?? (call.isOutgoing ? 'calling' : 'incoming'),
-      peerId: Number(call.interlocutorUserId ?? 0),
-      isVideo: !!call.isVideo,
-      muted: !!call.muted
+      phase: await phaseOf(call),
+      peerId,
+      title: user ?
+        [user.first_name, user.last_name].filter(Boolean).join(' ') || user.username || 'Unknown' :
+        'Unknown',
+      muted: !!call.isMuted,
+      sharingVideo: !!call.isSharingVideo,
+      sharingScreen: !!call.isSharingScreen,
+      duration: call.duration ?? 0,
+      fingerprint
     });
   };
 
-  const handler = () => emit();
-  controller.addEventListener('instance', handler);
-  rootScope.addEventListener('call_incompatible', handler);
+  /** Re-bind per-call listeners whenever the controller swaps instances. */
+  const attach = () => {
+    const call = controller.currentCall;
+    if(attached === call) return;
+
+    if(attached) {
+      attached.removeEventListener('state', emit);
+      attached.removeEventListener('muted', emit);
+      attached.removeEventListener('mediaState', emit);
+    }
+
+    attached = call;
+
+    if(call) {
+      call.addEventListener('state', emit);
+      call.addEventListener('muted', emit);
+      call.addEventListener('mediaState', emit);
+    }
+  };
+
+  const onInstance = () => {
+    attach();
+    emit();
+  };
+
+  controller.addEventListener('instance', onInstance);
+  ticker = setInterval(emit, 1000);
+  attach();
   emit();
 
   return () => {
-    controller.removeEventListener('instance', handler);
-    rootScope.removeEventListener('call_incompatible', handler);
+    controller.removeEventListener('instance', onInstance);
+    clearInterval(ticker);
+    if(attached) {
+      attached.removeEventListener('state', emit);
+      attached.removeEventListener('muted', emit);
+      attached.removeEventListener('mediaState', emit);
+    }
   };
 }

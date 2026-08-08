@@ -682,15 +682,27 @@ export async function deleteMessage(peerId: number, mid: number, revoke = true):
 export async function sendFiles(
   peerId: number,
   files: File[],
-  options: {caption?: string; threadId?: number; replyToMsgId?: number} = {}
+  options: {
+    caption?: string;
+    threadId?: number;
+    replyToMsgId?: number;
+    /**
+     * Send images as compressed photos (inline) rather than documents. The
+     * caller decides — pasting a screenshot usually means photo, but sending a
+     * PNG you care about means file.
+     */
+    asPhoto?: boolean;
+  } = {}
 ): Promise<void> {
   const {managers} = await bootTelegram();
 
   for(const [index, file] of files.entries()) {
+    const isVisual = file.type.startsWith('image/') || file.type.startsWith('video/');
+
     await managers.appMessagesManager.sendFile({
       peerId,
       file,
-      isMedia: file.type.startsWith('image/') || file.type.startsWith('video/'),
+      isMedia: isVisual && options.asPhoto !== false,
       // Only the first file carries the caption, like the official clients.
       caption: index === 0 ? options.caption : undefined,
       threadId: options.threadId,

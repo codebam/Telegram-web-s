@@ -7,9 +7,10 @@
   import FormattedText from './FormattedText.svelte';
   import Lightbox from './Lightbox.svelte';
   import Media from './Media.svelte';
-  import CallBar from './CallBar.svelte';
+  import CallScreen from './CallScreen.svelte';
   import MiniApp from './MiniApp.svelte';
   import PeerPicker from './PeerPicker.svelte';
+  import SendFiles from './SendFiles.svelte';
   import Settings from './Settings.svelte';
   import Stories from './Stories.svelte';
   import Picker from './Picker.svelte';
@@ -130,6 +131,8 @@
   let inlineResults = $state<InlineResultItem[]>([]);
   let inlineBot = $state('');
   let inlineTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Files queued by paste, drop or the attach button, pending confirmation. */
+  let pendingFiles = $state<File[]>([]);
 
   /** Media messages in order — the lightbox pages through these. */
   const mediaMessages = $derived(
@@ -660,17 +663,25 @@
 
   /* ---------- attachments ---------- */
 
-  async function attach(files: FileList | null) {
-    if (!files?.length || activePeerId === null) return;
+  /** Queue files for confirmation rather than sending them blind. */
+  function attach(files: FileList | File[] | null) {
+    if (!files || activePeerId === null) return;
+    const list = Array.from(files);
+    if (list.length) pendingFiles = list;
+  }
 
-    const caption = draft.trim();
-    draft = '';
+  async function confirmSend(files: File[], asPhoto: boolean, caption: string) {
+    pendingFiles = [];
+    if (activePeerId === null) return;
+
     const replyToMsgId = replyTo?.mid;
     replyTo = null;
+    draft = '';
 
     try {
-      await sendFiles(activePeerId, Array.from(files), {
+      await sendFiles(activePeerId, files, {
         caption,
+        asPhoto,
         threadId: activeThreadId,
         replyToMsgId
       });
@@ -683,6 +694,28 @@
     e.preventDefault();
     dragging = false;
     attach(e.dataTransfer?.files ?? null);
+  }
+
+  /**
+   * Ctrl+V anywhere in the chat. Clipboard images arrive as items with no
+   * filename, so give them one — otherwise the upload has nothing to show.
+   */
+  function onPaste(e: ClipboardEvent) {
+    if (activePeerId === null || !e.clipboardData) return;
+
+    const files = Array.from(e.clipboardData.files);
+    const items = files.length ? files : Array.from(e.clipboardData.items)
+      .filter((item) => item.kind === 'file')
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => !!file);
+
+    if (!items.length) return;
+
+    e.preventDefault();
+    attach(items.map((file, index) => file.name ?
+      file :
+      new File([file], `pasted-${index + 1}.${(file.type.split('/')[1] || 'bin')}`, {type: file.type})
+    ));
   }
 
   /* ---------- message actions ---------- */
@@ -970,7 +1003,9 @@
   }
 </script>
 
-<CallBar />
+<svelte:window onpaste={onPaste} />
+
+<CallScreen />
 
 <div class="shell" class:show-sidebar={showSidebarOnMobile} class:show-chat={!showSidebarOnMobile}>
   <aside>
@@ -1447,6 +1482,14 @@
     items={mediaMessages}
     bind:index={lightboxIndex}
     onclose={() => (lightboxIndex = null)}
+  />
+{/if}
+
+{#if pendingFiles.length}
+  <SendFiles
+    files={pendingFiles}
+    onsend={confirmSend}
+    onclose={() => (pendingFiles = [])}
   />
 {/if}
 
