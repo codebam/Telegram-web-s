@@ -177,9 +177,11 @@ export function parseInline(text: string): InlineToken[] {
     [
       '`([^`]+)`', // code
       '\\[([^\\]]+)\\]\\(([^)\\s]+)\\)', // link
-      '(\\*\\*|__)([\\s\\S]+?)\\1', // bold
+      // Backreferences count groups across the whole pattern: group 4 is this
+      // delimiter, not group 1 (which belongs to the code span above).
+      '(\\*\\*|__)([\\s\\S]+?)\\4', // bold
       '(~~)([\\s\\S]+?)~~', // strike
-      '(\\*|_)(?!\\s)([\\s\\S]+?)(?<!\\s)\\1', // italic
+      '(\\*|_)(?!\\s)([\\s\\S]+?)(?<!\\s)\\8', // italic
       '(@[A-Za-z0-9_]{3,32})' // mention
     ].join('|'),
     'g'
