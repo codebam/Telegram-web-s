@@ -1,4 +1,6 @@
 <script lang="ts">
+  import {untrack} from 'svelte';
+
   import {
     createFolder,
     deleteFolder,
@@ -19,8 +21,11 @@
     onsaved: () => void;
   } = $props();
 
-  let title = $state(folder?.title ?? '');
-  let selected = $state<Set<number>>(new Set(folder?.includePeerIds ?? []));
+  // The editor is mounted fresh each time it opens, so seeding from the prop
+  // once is intended — untrack keeps that explicit instead of looking like a
+  // missed reactive dependency.
+  let title = $state(untrack(() => folder?.title ?? ''));
+  let selected = $state<Set<number>>(new Set(untrack(() => folder?.includePeerIds ?? [])));
   let busy = $state(false);
   let error = $state('');
 

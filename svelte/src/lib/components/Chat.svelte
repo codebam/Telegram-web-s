@@ -7,18 +7,22 @@
   import FormattedText from './FormattedText.svelte';
   import Lightbox from './Lightbox.svelte';
   import Media from './Media.svelte';
+  import PeerPicker from './PeerPicker.svelte';
   import Picker from './Picker.svelte';
   import Sticker from './Sticker.svelte';
   import {
     availableReactions,
     deleteMessage,
+    forwardMessage,
     editMessage,
     getMessage,
     getPresence,
     leaveOrDelete,
     loadDialogs,
+    loadAround,
     loadFolders,
     loadHistory,
+    loadPinned,
     loadOlder,
     loadTopics,
     markDialogRead,
@@ -86,6 +90,10 @@
   let reactionPalette = $state<string[]>([]);
   let reactingTo = $state<number | null>(null);
   let lightboxIndex = $state<number | null>(null);
+  let highlightedMid = $state<number | null>(null);
+  let pinnedMessage = $state<MessageItem | null>(null);
+  let forwarding = $state<MessageItem | null>(null);
+  let atBottom = $state(true);
 
   /** Media messages in order — the lightbox pages through these. */
   const mediaMessages = $derived(
@@ -202,9 +210,9 @@
         if (isActive && !messages.some((m) => m.mid === mid)) {
           const item = await getMessage(peerId, mid);
           if (item) {
-            const atBottom = isScrolledToBottom();
+            const wasAtBottom = isScrolledToBottom();
             messages = [...messages, item];
-            if (atBottom) await scrollToBottom();
+            if (wasAtBottom) await scrollToBottom();
           }
         }
 
@@ -321,6 +329,91 @@
     const index = rendered.indexOf(group);
     const previous = rendered[index - 1]?.items[0];
     return !!previous && !previous.service && previous.fromId === group.items[0].fromId;
+  }
+
+  /* ---------- jumping to a message ---------- */
+
+  /**
+   * Scroll to `mid`, loading the surrounding history first when it is not in
+   * the currently loaded window (a reply can point far above what is loaded).
+   */
+  async function jumpTo(mid: number) {
+    if (activePeerId === null) return;
+
+    if (!messages.some((m) => m.mid === mid)) {
+      loadingHistory = true;
+      try {
+        messages = await loadAround(activePeerId, mid, {threadId: activeThreadId});
+        reachedStart = false;
+      } catch (err: any) {
+        error = errorOf(err, 'Could not load that message');
+        return;
+      } finally {
+        loadingHistory = false;
+      }
+      await tick();
+    }
+
+    releasePin();
+    const node = scroller?.querySelector<HTMLElement>(`[data-mid="${mid}"]`);
+    if (!node) return;
+
+    node.scrollIntoView({block: 'center', behavior: 'smooth'});
+    highlightedMid = mid;
+    setTimeout(() => {
+      if (highlightedMid === mid) highlightedMid = null;
+    }, 1600);
+  }
+
+  /* ---------- forward and copy ---------- */
+
+  async function openForward(message: MessageItem) {
+    forwarding = message;
+    allDialogs = await loadDialogs(100, 0);
+  }
+
+  async function doForward(toPeerId: number) {
+    const message = forwarding;
+    forwarding = null;
+    if (!message || activePeerId === null) return;
+
+    try {
+      await forwardMessage(activePeerId, [message.mid], toPeerId);
+    } catch (err: any) {
+      error = errorOf(err, 'Forward failed');
+    }
+  }
+
+  async function copyText(message: MessageItem) {
+    try {
+      await navigator.clipboard.writeText(message.text);
+    } catch (err) {
+      error = 'Clipboard unavailable';
+    }
+  }
+
+  /* ---------- date separators ---------- */
+
+  function dayOf(unix: number) {
+    return new Date(unix * 1000).toDateString();
+  }
+
+  function dayLabel(unix: number) {
+    const date = new Date(unix * 1000);
+    const today = new Date();
+    const yesterday = new Date(today.getTime() - 86400000);
+
+    if (date.toDateString() === today.toDateString()) return 'Today';
+    if (date.toDateString() === yesterday.toDateString()) return 'Yesterday';
+    return date.toLocaleDateString([], {day: 'numeric', month: 'long', year: date.getFullYear() === today.getFullYear() ? undefined : 'numeric'});
+  }
+
+  /** True when this group starts a new calendar day. */
+  function startsNewDay(index: number): boolean {
+    if (index === 0) return true;
+    const previous = rendered[index - 1]?.items[0];
+    const current = rendered[index]?.items[0];
+    return !!previous && !!current && dayOf(previous.date) !== dayOf(current.date);
   }
 
   function openLightbox(message: MessageItem) {
@@ -472,6 +565,7 @@
     typingNames = [];
     editing = null;
     getPresence(peerId).then((info) => (presence = info.text)).catch(() => (presence = ''));
+    loadPinned(peerId, threadId).then((message) => (pinnedMessage = message)).catch(() => (pinnedMessage = null));
 
     try {
       messages = await loadHistory(peerId, {threadId});
@@ -554,7 +648,8 @@
   }
 
   function onScroll() {
-    if (!pinned && isScrolledToBottom()) {
+    atBottom = isScrolledToBottom();
+    if (!pinned && atBottom) {
       pinned = true;
       pinnedAnchor = null;
     }
@@ -741,6 +836,13 @@
         </span>
       </header>
 
+      {#if pinnedMessage}
+        <button class="pinned-bar" onclick={() => jumpTo(pinnedMessage!.mid)}>
+          <span class="pinned-label">Pinned message</span>
+          <span class="pinned-text">{pinnedMessage.text || 'Media'}</span>
+        </button>
+      {/if}
+
       <div
         class="messages"
         bind:this={scroller}
@@ -758,17 +860,25 @@
           {:else if reachedStart}
             <p class="muted centered">Beginning of the chat</p>
           {/if}
-          {#each rendered as group (group.key)}
+          {#each rendered as group, groupIndex (group.key)}
             {@const message = group.items[0]}
+            {#if startsNewDay(groupIndex)}
+              <p class="day-divider">{dayLabel(message.date)}</p>
+            {/if}
             {#if message.mid === firstUnreadMid}
               <p class="unread-divider" data-mid={message.mid}>Unread messages</p>
             {/if}
             {#if message.service}
-              <p class="service" data-mid={message.mid}>{message.text}</p>
+              <p
+                class="service"
+                class:highlighted={highlightedMid === message.mid}
+                data-mid={message.mid}
+              >{message.text}</p>
             {:else if message.stickerDocId}
               <div
                 class="sticker-bubble"
                 class:out={message.out}
+                class:highlighted={highlightedMid === message.mid}
                 data-mid={message.mid}
                 use:observeForRead={message.mid}
               >
@@ -799,6 +909,7 @@
               <div
                 class="bubble"
                 class:out={message.out}
+                class:highlighted={highlightedMid === message.mid}
                 data-mid={message.mid}
                 use:observeForRead={message.mid}
               >
@@ -806,11 +917,15 @@
                   <span class="author">{message.fromTitle}</span>
                 {/if}
 
+                {#if message.forwardedFrom}
+                  <span class="forwarded">Forwarded from {message.forwardedFrom}</span>
+                {/if}
+
                 {#if message.reply}
-                  <span class="reply-quote">
+                  <button class="reply-quote jump" onclick={() => jumpTo(message.reply!.mid)}>
                     <span class="reply-title">{message.reply.title}</span>
                     <span class="reply-text">{message.reply.text}</span>
-                  </span>
+                  </button>
                 {/if}
 
                 {#if group.items.length > 1}
@@ -832,6 +947,36 @@
                 {/if}
 
                 {#if message.parts.length}<FormattedText parts={message.parts} />{/if}
+
+                {#if message.webpage}
+                  <a class="webpage" href={message.webpage.url} target="_blank" rel="noopener noreferrer">
+                    {#if message.webpage.siteName}
+                      <span class="site">{message.webpage.siteName}</span>
+                    {/if}
+                    {#if message.webpage.title}
+                      <span class="wp-title">{message.webpage.title}</span>
+                    {/if}
+                    {#if message.webpage.description}
+                      <span class="wp-desc">{message.webpage.description}</span>
+                    {/if}
+                  </a>
+                {/if}
+
+                {#if message.poll}
+                  <div class="poll">
+                    <span class="poll-q">{message.poll.question}</span>
+                    {#each message.poll.answers as answer}
+                      <span class="poll-a" class:chosen={answer.chosen}>
+                        <span class="poll-bar" style="width: {answer.percent}%"></span>
+                        <span class="poll-text">{answer.text}</span>
+                        <span class="poll-pct">{answer.percent}%</span>
+                      </span>
+                    {/each}
+                    <span class="poll-total">
+                      {message.poll.totalVoters} voters{message.poll.closed ? ' · closed' : ''}
+                    </span>
+                  </div>
+                {/if}
 
                 {#if message.reactions.length}
                   <span class="reactions">
@@ -862,6 +1007,10 @@
                     onclick={() => (reactingTo = reactingTo === message.mid ? null : message.mid)}
                   >React</button>
                   <button class="reply-btn" onclick={() => (replyTo = message)}>Reply</button>
+                  <button class="reply-btn" onclick={() => openForward(message)}>Forward</button>
+                  {#if message.text}
+                    <button class="reply-btn" onclick={() => copyText(message)}>Copy</button>
+                  {/if}
                   {#if message.editable}
                     <button class="reply-btn" onclick={() => startEdit(message)}>Edit</button>
                     <button class="reply-btn" onclick={() => removeMessage(message)}>Delete</button>
@@ -875,6 +1024,12 @@
           {/each}
         {/if}
       </div>
+
+      {#if !atBottom}
+        <button class="to-bottom" onclick={() => { releasePin(); scrollToBottom(); }} aria-label="Scroll to latest">
+          ↓
+        </button>
+      {/if}
 
       {#if replyTo || editing}
         <div class="reply-bar">
@@ -940,6 +1095,15 @@
   />
 {/if}
 
+{#if forwarding}
+  <PeerPicker
+    title="Forward to"
+    dialogs={allDialogs}
+    onpick={doForward}
+    onclose={() => (forwarding = null)}
+  />
+{/if}
+
 {#if folderEditorOpen}
   <FolderEditor
     folder={editingFolder}
@@ -966,6 +1130,7 @@
 
   aside,
   section {
+    position: relative;
     display: flex;
     flex-direction: column;
     min-width: 0;
@@ -1427,6 +1592,157 @@
     align-self: center;
     color: var(--text-dim);
     font-size: 13px;
+  }
+
+  .day-divider {
+    align-self: center;
+    margin: 10px 0 4px;
+    padding: 2px 12px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--text) 10%, transparent);
+    color: var(--text-dim);
+    font-size: 12px;
+  }
+
+  .bubble.highlighted,
+  .sticker-bubble.highlighted,
+  .service.highlighted {
+    animation: flash 1.6s ease-out;
+    border-radius: 14px;
+  }
+
+  @keyframes flash {
+    0%,
+    40% {
+      box-shadow: 0 0 0 2px var(--accent);
+    }
+    100% {
+      box-shadow: 0 0 0 2px transparent;
+    }
+  }
+
+  .forwarded {
+    font-size: 12px;
+    font-style: italic;
+    opacity: 0.8;
+  }
+
+  button.reply-quote.jump {
+    background: none;
+    font: inherit;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+    border-top: none;
+    border-right: none;
+    border-bottom: none;
+  }
+
+  .webpage {
+    display: grid;
+    gap: 2px;
+    padding-left: 8px;
+    border-left: 2px solid var(--accent);
+    color: inherit;
+    text-decoration: none;
+    font-size: 13px;
+  }
+
+  .site {
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  .wp-title {
+    font-weight: 600;
+  }
+
+  .wp-desc {
+    opacity: 0.85;
+  }
+
+  .poll {
+    display: grid;
+    gap: 4px;
+    min-width: 220px;
+  }
+
+  .poll-q {
+    font-weight: 600;
+  }
+
+  .poll-a {
+    position: relative;
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 4px 8px;
+    border-radius: 8px;
+    overflow: hidden;
+    font-size: 13px;
+  }
+
+  .poll-bar {
+    position: absolute;
+    inset: 0 auto 0 0;
+    background: color-mix(in srgb, var(--accent) 30%, transparent);
+  }
+
+  .poll-a.chosen .poll-bar {
+    background: color-mix(in srgb, var(--accent) 60%, transparent);
+  }
+
+  .poll-text,
+  .poll-pct {
+    position: relative;
+  }
+
+  .poll-total {
+    font-size: 11px;
+    opacity: 0.7;
+  }
+
+  .pinned-bar {
+    display: grid;
+    gap: 1px;
+    text-align: left;
+    padding: 8px 18px;
+    border: none;
+    border-bottom: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    background: none;
+    color: inherit;
+    cursor: pointer;
+    flex: none;
+  }
+
+  .pinned-label {
+    font-size: 11px;
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  .pinned-text {
+    font-size: 13px;
+    color: var(--text-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .to-bottom {
+    position: absolute;
+    right: 24px;
+    bottom: 84px;
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: var(--bg-elevated);
+    color: var(--text);
+    font-size: 18px;
+    cursor: pointer;
+    z-index: 10;
   }
 
   .unread-divider {

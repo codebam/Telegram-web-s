@@ -85,6 +85,25 @@ export type MessageItem = {
   stickerDocId: string;
   /** '' when not a sticker; 'animated' means .tgs and needs the Lottie worker. */
   stickerKind: '' | 'static' | 'video' | 'animated';
+  /** Original author when the message was forwarded, '' otherwise. */
+  forwardedFrom: string;
+  webpage: WebPagePreview | null;
+  poll: PollPreview | null;
+};
+
+export type WebPagePreview = {
+  url: string;
+  siteName: string;
+  title: string;
+  description: string;
+};
+
+export type PollPreview = {
+  question: string;
+  closed: boolean;
+  quiz: boolean;
+  totalVoters: number;
+  answers: {text: string; voters: number; chosen: boolean; percent: number}[];
 };
 
 /* ------------------------------------------------------------------ */
@@ -363,7 +382,57 @@ async function toItem(message: any, peerId: number, selfId: number): Promise<Mes
     reactions: reactionsOf(message),
     groupedId: message.grouped_id ? '' + message.grouped_id : '',
     stickerDocId: isStickerMessage(message) ? '' + message.media.document.id : '',
-    stickerKind: isStickerMessage(message) ? stickerKind(message.media.document) : ''
+    stickerKind: isStickerMessage(message) ? stickerKind(message.media.document) : '',
+    forwardedFrom: await forwardedTitle(message, selfId),
+    webpage: webpageOf(message),
+    poll: pollOf(message)
+  };
+}
+
+async function forwardedTitle(message: any, selfId: number): Promise<string> {
+  const header = message?.fwd_from;
+  if(!header) return '';
+
+  if(header.from_name) return header.from_name;
+  const fromId = Number(message.fwdFromId ?? header.from_id?.user_id ?? header.from_id?.channel_id ?? 0);
+  if(!fromId) return 'Unknown';
+  return peerTitle(await getPeer(fromId), selfId);
+}
+
+function webpageOf(message: any): WebPagePreview | null {
+  const webpage = message?.media?.webpage;
+  if(!webpage || webpage._ !== 'webPage') return null;
+
+  return {
+    url: webpage.url ?? '',
+    siteName: webpage.site_name ?? '',
+    title: webpage.title ?? '',
+    description: webpage.description ?? ''
+  };
+}
+
+function pollOf(message: any): PollPreview | null {
+  const media = message?.media;
+  if(media?._ !== 'messageMediaPoll' || !media.poll) return null;
+
+  const results: any[] = media.results?.results ?? [];
+  const totalVoters = media.results?.total_voters ?? 0;
+
+  return {
+    question: media.poll.question?.text ?? media.poll.question ?? '',
+    closed: !!media.poll.pFlags?.closed,
+    quiz: !!media.poll.pFlags?.quiz,
+    totalVoters,
+    answers: (media.poll.answers ?? []).map((answer: any, index: number) => {
+      const result = results[index];
+      const voters = result?.voters ?? 0;
+      return {
+        text: answer.text?.text ?? answer.text ?? '',
+        voters,
+        chosen: !!result?.pFlags?.chosen,
+        percent: totalVoters ? Math.round((voters / totalVoters) * 100) : 0
+      };
+    })
   };
 }
 
@@ -444,6 +513,70 @@ export async function loadOlder(
   options: {threadId?: number; limit?: number} = {}
 ): Promise<MessageItem[]> {
   return loadHistory(peerId, {...options, offsetId});
+}
+
+/**
+ * History centred on `mid`, for jumping to a replied-to message that may be
+ * far above what is loaded. `addOffset` pulls messages newer than the offset
+ * too, so the target lands in the middle rather than at the edge.
+ */
+export async function loadAround(
+  peerId: number,
+  mid: number,
+  options: {threadId?: number; limit?: number} = {}
+): Promise<MessageItem[]> {
+  const {managers} = await bootTelegram();
+  const selfId = await getSelfId();
+  const limit = options.limit ?? 40;
+
+  const result = await managers.appMessagesManager.getHistory({
+    peerId,
+    threadId: options.threadId,
+    offsetId: mid,
+    addOffset: -Math.floor(limit / 2),
+    limit,
+    fetchIfWasNotFetched: true
+  });
+
+  const messages = await Promise.all(
+    result.history.map((id: number) => managers.appMessagesManager.getMessageByPeer(peerId, id))
+  );
+
+  const items = await Promise.all(
+    messages.filter(Boolean).map((message: any) => toItem(message, peerId, selfId))
+  );
+
+  return items.reverse();
+}
+
+export async function forwardMessage(
+  fromPeerId: number,
+  mids: number[],
+  toPeerId: number
+): Promise<void> {
+  const {managers} = await bootTelegram();
+  await managers.appMessagesManager.forwardMessages({
+    peerId: toPeerId,
+    fromPeerId,
+    mids
+  } as any);
+}
+
+/** The chat's currently pinned message, for the header bar. */
+export async function loadPinned(peerId: number, threadId?: number): Promise<MessageItem | null> {
+  const {managers} = await bootTelegram();
+  const selfId = await getSelfId();
+
+  try {
+    const pinned: any = await managers.appMessagesManager.getPinnedMessage(peerId, threadId);
+    const mid = pinned?.maxId ?? pinned?.mid;
+    if(!mid) return null;
+
+    const message = await managers.appMessagesManager.getMessageByPeer(peerId, mid);
+    return message ? toItem(message, peerId, selfId) : null;
+  } catch(err) {
+    return null;
+  }
 }
 
 export async function editMessage(peerId: number, mid: number, text: string): Promise<void> {
@@ -652,6 +785,19 @@ export async function loadMediaUrl(peerId: number, mid: number, boxWidth = 480):
   if(!target) return null;
 
   const attributes: any[] = target.attributes ?? [];
+  const isAudio = attributes.some((a: any) => a._ === 'documentAttributeAudio');
+  if(isAudio) {
+    // Voice notes and music play from the full file.
+    try {
+      const url = await appDownloadManager.downloadMediaURL({media: target});
+      mediaUrls.set(key, url ?? null);
+      return url ?? null;
+    } catch(err) {
+      mediaUrls.set(key, null);
+      return null;
+    }
+  }
+
   const isVideo = attributes.some((a: any) => a._ === 'documentAttributeVideo');
   // A GIF needs the actual mp4, not a poster frame — it plays inline.
   const isGif = attributes.some((a: any) => a._ === 'documentAttributeAnimated') || target.type === 'gif';
