@@ -23,6 +23,8 @@ export type DialogItem = {
   muted: boolean;
   /** Highest message id the user has read — the "jump here on open" anchor. */
   readMaxId: number;
+  /** Highest outgoing message the *other* side has read — drives read ticks. */
+  readOutboxMaxId: number;
 };
 
 export type TopicItem = {
@@ -86,6 +88,8 @@ export type MessageItem = {
   stickerDocId: string;
   /** '' when not a sticker; 'animated' means .tgs and needs the Lottie worker. */
   stickerKind: '' | 'static' | 'video' | 'animated';
+  /** True until the server has acknowledged the message. */
+  pending: boolean;
   /** Original author when the message was forwarded, '' otherwise. */
   forwardedFrom: string;
   webpage: WebPagePreview | null;
@@ -316,7 +320,8 @@ export async function loadDialogs(limit = 40, filterId = 0): Promise<DialogItem[
         isForum: !!peer?.pFlags?.forum,
         pinned: !!dialog.pFlags?.pinned,
         muted: (dialog.notify_settings?.mute_until ?? 0) > Date.now() / 1000,
-        readMaxId: dialog.read_inbox_max_id ?? 0
+        readMaxId: dialog.read_inbox_max_id ?? 0,
+        readOutboxMaxId: dialog.read_outbox_max_id ?? 0
       };
     })
   );
@@ -385,6 +390,7 @@ async function toItem(message: any, peerId: number, selfId: number): Promise<Mes
     groupedId: message.grouped_id ? '' + message.grouped_id : '',
     stickerDocId: isStickerMessage(message) ? '' + message.media.document.id : '',
     stickerKind: isStickerMessage(message) ? stickerKind(message.media.document) : '',
+    pending: !!message.pFlags?.is_outgoing,
     forwardedFrom: await forwardedTitle(message, selfId),
     webpage: webpageOf(message),
     poll: pollOf(message)
@@ -814,7 +820,8 @@ export async function searchDialogs(query: string, limit = 40): Promise<DialogIt
         isForum: !!peer?.pFlags?.forum,
         pinned: !!dialog.pFlags?.pinned,
         muted: (dialog.notify_settings?.mute_until ?? 0) > Date.now() / 1000,
-        readMaxId: dialog.read_inbox_max_id ?? 0
+        readMaxId: dialog.read_inbox_max_id ?? 0,
+        readOutboxMaxId: dialog.read_outbox_max_id ?? 0
       };
     })
   );
@@ -861,6 +868,24 @@ export async function markDialogRead(peerId: number, threadId?: number): Promise
 export async function markDialogUnread(peerId: number): Promise<void> {
   const {managers} = await bootTelegram();
   await managers.appMessagesManager.markDialogUnread({peerId, read: false});
+}
+
+/** Highest outgoing message the peer has read, for the tick state. */
+export async function getReadOutboxMaxId(peerId: number): Promise<number> {
+  const {managers} = await bootTelegram();
+  try {
+    const dialog: any = await managers.dialogsStorage.getDialogOnly(peerId);
+    return dialog?.read_outbox_max_id ?? 0;
+  } catch(err) {
+    return 0;
+  }
+}
+
+/** Fires when the peer reads our messages (or we read theirs). */
+export async function onReadStateChange(callback: () => void): Promise<() => void> {
+  const {default: rootScope} = await import('@lib/rootScope');
+  rootScope.addEventListener('messages_read', callback);
+  return () => rootScope.removeEventListener('messages_read', callback);
 }
 
 /** Fires whenever the server confirms a read or unread-count change. */

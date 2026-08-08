@@ -24,6 +24,7 @@
     editMessage,
     getMessage,
     getPresence,
+    getReadOutboxMaxId,
     leaveOrDelete,
     loadDialogs,
     loadAround,
@@ -37,6 +38,7 @@
     onDialogsUpdate,
     onFoldersUpdate,
     onNewMessage,
+    onReadStateChange,
     onTyping,
     onUserUpdate,
     openDiscussion,
@@ -77,6 +79,11 @@
   /** Calls are one-to-one only, and never to Saved Messages. */
   let activeIsUser = $state(false);
   let activeIsSelf = $state(false);
+  /**
+   * Highest outgoing message the other side has read. Ticks are only shown in
+   * one-to-one chats — in groups "read" has no single meaning.
+   */
+  let readOutboxMaxId = $state(0);
 
   let loadingChats = $state(true);
   let loadingHistory = $state(false);
@@ -291,6 +298,10 @@
         if (!folders.some((f) => f.id === activeFolder)) activeFolder = 0;
       });
 
+      const offRead = await onReadStateChange(async () => {
+        if (activePeerId !== null) readOutboxMaxId = await getReadOutboxMaxId(activePeerId);
+      });
+
       const offUsers = await onUserUpdate(async (userId) => {
         if (userId === activePeerId) {
           presence = (await getPresence(userId)).text;
@@ -309,6 +320,7 @@
         offDialogs();
         offFolders();
         offUsers();
+        offRead();
       };
 
       if (disposed) all();
@@ -834,6 +846,7 @@
     activeIsForum = dialog.isForum;
     activeIsUser = dialog.isUser;
     activeIsSelf = dialog.isSelf;
+    readOutboxMaxId = dialog.readOutboxMaxId;
     activeThreadId = undefined;
     topics = [];
     messages = [];
@@ -869,6 +882,9 @@
     getPresence(peerId).then((info) => (presence = info.text)).catch(() => (presence = ''));
     loadPinned(peerId, threadId).then((message) => (pinnedMessage = message)).catch(() => (pinnedMessage = null));
     setActiveNotificationPeer(peerId);
+    getReadOutboxMaxId(peerId).then((maxId) => {
+      if (activePeerId === peerId) readOutboxMaxId = maxId;
+    }).catch(() => {});
     getDraftText(peerId, threadId).then((text) => {
       if (activePeerId === peerId && activeThreadId === threadId) draft = text;
     }).catch(() => {});
@@ -1382,6 +1398,17 @@
                   {/if}
                   {#if message.edited}<span class="edited">edited</span>{/if}
                   <span class="time">{timeOf(message.date)}</span>
+                  {#if message.out && activeIsUser && !activeIsSelf}
+                    <span
+                      class="ticks"
+                      class:read={message.mid <= readOutboxMaxId}
+                      title={message.pending
+                        ? 'Sending'
+                        : message.mid <= readOutboxMaxId
+                          ? 'Read'
+                          : 'Delivered'}
+                    >{message.pending ? '🕗' : message.mid <= readOutboxMaxId ? '✓✓' : '✓'}</span>
+                  {/if}
                 </span>
               </div>
               </div>
@@ -1825,6 +1852,20 @@
 
   .edited {
     font-style: italic;
+  }
+
+  .ticks {
+    letter-spacing: -2px;
+    opacity: 0.75;
+  }
+
+  .ticks.read {
+    color: #7fe0c0;
+    opacity: 1;
+  }
+
+  .bubble.out .ticks.read {
+    color: #d6ffee;
   }
 
   .row-button {
