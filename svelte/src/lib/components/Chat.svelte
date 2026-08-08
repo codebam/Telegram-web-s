@@ -1519,7 +1519,9 @@
           oninput={onDraftInput}
           onkeydown={onComposerKey}
         />
-        <button type="submit" disabled={!draft.trim()}>{editing ? 'Save' : 'Send'}</button>
+        <button type="submit" disabled={!draft.trim()} aria-label={editing ? 'Save' : 'Send'}>
+          {editing ? '✓' : '↑'}
+        </button>
       </form>
     {/if}
   </section>
@@ -1848,7 +1850,7 @@
   }
 
   .chip {
-    background: color-mix(in srgb, currentColor 12%, transparent);
+    background: rgba(0, 0, 0, 0.28);
     border: none;
     border-radius: 999px;
     padding: 2px 8px;
@@ -1980,10 +1982,16 @@
     white-space: nowrap;
   }
 
-  .preview,
-  .time {
+  .preview {
     font-size: 13px;
     color: var(--text-dim);
+  }
+
+  .time {
+    font-size: 11px;
+    color: var(--text-dim);
+    opacity: 0.75;
+    flex: none;
   }
 
   .row-button.active .preview,
@@ -1993,12 +2001,16 @@
 
   .badge {
     flex: none;
+    min-width: 19px;
+    height: 19px;
+    display: grid;
+    place-items: center;
     background: var(--action);
     color: var(--action-ink);
-    font-weight: 600;
+    font-weight: 700;
     border-radius: 999px;
-    padding: 1px 7px;
-    font-size: 12px;
+    padding: 0 6px;
+    font-size: 11px;
   }
 
   .row-button.active .badge {
@@ -2058,7 +2070,7 @@
     min-width: 0;
     padding: 8px 12px;
     border-radius: var(--bubble-radius) var(--bubble-radius) var(--bubble-radius) 5px;
-    background: color-mix(in srgb, var(--text) 7%, transparent);
+    background: var(--bubble-in);
     border: 1px solid var(--border);
     align-self: flex-start;
     display: grid;
@@ -2074,9 +2086,9 @@
   }
 
   .author {
-    font-size: 13px;
+    font-size: 12px;
     font-weight: 600;
-    color: var(--accent);
+    color: var(--action);
   }
 
   .bubble.out .author {
@@ -2110,6 +2122,17 @@
     justify-content: flex-end;
     font-size: 11px;
     opacity: 0.75;
+  }
+
+  /* Actions are revealed on hover so a thread reads as content, not chrome. */
+  .stamp .reply-btn {
+    opacity: 0;
+    transition: opacity 0.12s;
+  }
+
+  .bubble:hover .stamp .reply-btn,
+  .stamp .reply-btn:focus-visible {
+    opacity: 1;
   }
 
   .reply-btn {
@@ -2518,13 +2541,29 @@
   }
 
   form button[type='submit'] {
-    padding: 9px 18px;
+    width: 36px;
+    height: 36px;
+    flex: none;
+    padding: 0;
     border: none;
-    border-radius: 999px;
+    border-radius: 50%;
     background: var(--action);
     color: var(--action-ink);
-    font-weight: 600;
+    font-weight: 700;
+    font-size: 15px;
     cursor: pointer;
+    display: grid;
+    place-items: center;
+  }
+
+  .attach {
+    opacity: 0.65;
+    font-size: 17px;
+    transition: opacity 0.12s;
+  }
+
+  .attach:hover {
+    opacity: 1;
   }
 
   form button:disabled {
