@@ -464,7 +464,6 @@
     }}
     ondragleave={() => (dragging = false)}
     ondrop={onDrop}
-    role="region"
     aria-label="Conversation"
   >
     {#if activePeerId === null || (activeIsForum && activeThreadId === undefined)}
@@ -488,7 +487,8 @@
         onscroll={onScroll}
         onwheel={releasePin}
         ontouchmove={releasePin}
-        onkeydown={releasePin}
+        role="log"
+        aria-label="Messages"
       >
         {#if loadingHistory}
           <p class="muted">Loading…</p>
@@ -823,12 +823,6 @@
     background: var(--accent);
     border-color: transparent;
     color: #fff;
-  }
-
-  .bubble p {
-    margin: 0;
-    white-space: pre-wrap;
-    word-break: break-word;
   }
 
   .author {
