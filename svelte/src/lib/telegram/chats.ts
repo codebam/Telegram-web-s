@@ -73,6 +73,15 @@ export type TextPart = {
   mentionKind?: 'username' | 'userId' | 'tag';
 };
 
+export type RichBlock =
+  | {type: 'paragraph'; parts: TextPart[]}
+  | {type: 'heading'; level: number; parts: TextPart[]}
+  | {type: 'code'; text: string}
+  | {type: 'quote'; parts: TextPart[]}
+  | {type: 'divider'}
+  | {type: 'list'; ordered: boolean; items: TextPart[][]}
+  | {type: 'table'; title: TextPart[]; rows: {header: boolean; cells: TextPart[][]}[]};
+
 export type MessageItem = {
   mid: number;
   text: string;
@@ -104,6 +113,12 @@ export type MessageItem = {
   forwardedFrom: string;
   webpage: WebPagePreview | null;
   poll: PollPreview | null;
+  /**
+   * Structured body for messages that carry one. Newer messages can arrive as
+   * `rich_message` blocks — headings, tables, lists — with `message` empty.
+   * Flattening those to text loses the structure, so they are kept as blocks.
+   */
+  rich: RichBlock[] | null;
 };
 
 export type WebPagePreview = {
@@ -294,6 +309,141 @@ function largestPhotoSize(photo: any): any {
   return sizes[sizes.length - 1];
 }
 
+
+/* ------------------------------------------------------------------ */
+/* Rich messages (structured page blocks)                              */
+/* ------------------------------------------------------------------ */
+
+/** RichText is a nested tree; flatten it into our formatted runs. */
+function richTextToParts(rich: any, inherited: TextPart = {text: ''}): TextPart[] {
+  if(!rich) return [];
+
+  const withFlag = (flag: keyof TextPart, value: any = true): TextPart =>
+    ({...inherited, [flag]: value} as TextPart);
+
+  switch(rich._) {
+    case 'textEmpty': return [];
+    case 'textPlain': return rich.text ? [{...inherited, text: rich.text}] : [];
+    case 'textConcat':
+      return (rich.texts ?? []).flatMap((child: any) => richTextToParts(child, inherited));
+    case 'textBold': return richTextToParts(rich.text, withFlag('bold'));
+    case 'textItalic': return richTextToParts(rich.text, withFlag('italic'));
+    case 'textUnderline': return richTextToParts(rich.text, withFlag('underline'));
+    case 'textStrike': return richTextToParts(rich.text, withFlag('strike'));
+    case 'textFixed': return richTextToParts(rich.text, withFlag('code'));
+    case 'textUrl': return richTextToParts(rich.text, withFlag('url', rich.url));
+    case 'textEmail': return richTextToParts(rich.text, withFlag('url', `mailto:${rich.email}`));
+    case 'textAnchor': return richTextToParts(rich.text, inherited);
+    case 'textSubscript':
+    case 'textSuperscript':
+    case 'textMarked':
+    case 'textPhone':
+    case 'textImage':
+      return richTextToParts(rich.text, inherited);
+    default:
+      return rich.text ? richTextToParts(rich.text, inherited) : [];
+  }
+}
+
+const HEADING_BLOCKS: Record<string, number> = {
+  pageBlockTitle: 1,
+  pageBlockHeader: 1,
+  pageBlockSubtitle: 2,
+  pageBlockSubheader: 2,
+  pageBlockHeading3: 3,
+  pageBlockHeading4: 4
+};
+
+function richBlocksOf(message: any): RichBlock[] | null {
+  const blocks: any[] = message?.rich_message?.blocks;
+  if(!blocks?.length) return null;
+
+  const out: RichBlock[] = [];
+
+  for(const block of blocks) {
+    const level = HEADING_BLOCKS[block._];
+    if(level) {
+      out.push({type: 'heading', level, parts: richTextToParts(block.text)});
+      continue;
+    }
+
+    switch(block._) {
+      case 'pageBlockParagraph':
+        out.push({type: 'paragraph', parts: richTextToParts(block.text)});
+        break;
+
+      case 'pageBlockPreformatted':
+        out.push({type: 'code', text: partsToText(richTextToParts(block.text))});
+        break;
+
+      case 'pageBlockBlockquote':
+      case 'pageBlockPullquote':
+        out.push({type: 'quote', parts: richTextToParts(block.text)});
+        break;
+
+      case 'pageBlockDivider':
+        out.push({type: 'divider'});
+        break;
+
+      case 'pageBlockList':
+      case 'pageBlockOrderedList': {
+        const items = (block.items ?? []).map((item: any) =>
+          richTextToParts(item.text ?? item.blocks?.[0]?.text ?? item)
+        );
+        out.push({type: 'list', ordered: block._ === 'pageBlockOrderedList', items});
+        break;
+      }
+
+      case 'pageBlockTable': {
+        const rows = (block.rows ?? []).map((row: any) => ({
+          header: (row.cells ?? []).some((cell: any) => !!cell.pFlags?.header),
+          cells: (row.cells ?? []).map((cell: any) => richTextToParts(cell.text))
+        }));
+        out.push({type: 'table', title: richTextToParts(block.title), rows});
+        break;
+      }
+
+      default:
+        if(block.text) out.push({type: 'paragraph', parts: richTextToParts(block.text)});
+        break;
+    }
+  }
+
+  return out.length ? out : null;
+}
+
+function partsToText(parts: TextPart[]): string {
+  return parts.map((part) => part.text).join('');
+}
+
+/**
+ * Newer messages can carry their body as a structured `rich_message` (blocks)
+ * with `message` left empty — which is why some bot replies looked blank here
+ * while every other client showed them. tweb can flatten those blocks back
+ * into text plus entities.
+ */
+async function richBody(message: any): Promise<{text: string; entities: any[]} | null> {
+  if(!message?.rich_message) return null;
+
+  try {
+    const {flattenRichMessageSummary} = await import('@lib/richMessage');
+    // maxLength 0 disables truncation — we want the whole message, not a summary.
+    const summary: any = flattenRichMessageSummary(message.rich_message, 0);
+    return {text: summary?.text ?? '', entities: summary?.entities ?? []};
+  } catch(err) {
+    return null;
+  }
+}
+
+/** Preview text for the chat list, including rich messages. */
+async function previewOf(message: any): Promise<string> {
+  const plain = messagePreview(message);
+  if(plain) return plain;
+
+  const rich = await richBody(message);
+  return rich?.text.slice(0, 120) ?? plain;
+}
+
 /** Short one-line description, used in the chat list and reply previews. */
 function messagePreview(message: any): string {
   if(!message) return '';
@@ -341,7 +491,7 @@ export async function loadDialogs(limit = 40, filterId = 0): Promise<DialogItem[
       return {
         peerId,
         title: peerTitle(peer, selfId),
-        preview: messagePreview(topMessage),
+        preview: await previewOf(topMessage),
         date: topMessage?.date ?? 0,
         unread: dialog.unread_count ?? 0,
         isSelf: peerId === selfId,
@@ -371,7 +521,7 @@ export async function loadTopics(peerId: number, limit = 30): Promise<TopicItem[
       return {
         threadId: Number(topic.id),
         title: topic.title || 'Topic',
-        preview: messagePreview(topMessage),
+        preview: await previewOf(topMessage),
         date: topMessage?.date ?? 0,
         unread: topic.unread_count ?? 0
       };
@@ -397,7 +547,16 @@ async function toItem(message: any, peerId: number, selfId: number): Promise<Mes
   const fromId = Number(message.fromId ?? message.from_id?.user_id ?? peerId);
   const fromPeer = fromId === selfId ? null : await getPeer(fromId);
 
-  const text = message._ === 'messageService' ? serviceText(message) : (message.message ?? '');
+  let text = message._ === 'messageService' ? serviceText(message) : (message.message ?? '');
+  let entities = message.entities ?? [];
+
+  if(!text && message._ !== 'messageService') {
+    const rich = await richBody(message);
+    if(rich?.text) {
+      text = rich.text;
+      entities = rich.entities;
+    }
+  }
   // pFlags.out is not set on every outgoing message (Saved Messages, some
   // channel posts), so fall back to comparing the sender with ourselves.
   const out = !!message.pFlags?.out || fromId === selfId;
@@ -405,7 +564,7 @@ async function toItem(message: any, peerId: number, selfId: number): Promise<Mes
   return {
     mid: message.mid,
     text,
-    parts: message._ === 'messageService' ? [{text}] : textParts(text, message.entities ?? []),
+    parts: message._ === 'messageService' ? [{text}] : textParts(text, entities),
     editable: out && message._ !== 'messageService',
     edited: !!message.edit_date,
     out,
@@ -424,7 +583,8 @@ async function toItem(message: any, peerId: number, selfId: number): Promise<Mes
     views: message.views ?? 0,
     forwardedFrom: await forwardedTitle(message, selfId),
     webpage: webpageOf(message),
-    poll: pollOf(message)
+    poll: pollOf(message),
+    rich: richBlocksOf(message)
   };
 }
 
@@ -864,7 +1024,7 @@ export async function searchDialogs(query: string, limit = 40): Promise<DialogIt
       return {
         peerId,
         title: peerTitle(peer, selfId),
-        preview: messagePreview(topMessage),
+        preview: await previewOf(topMessage),
         date: topMessage?.date ?? 0,
         unread: dialog.unread_count ?? 0,
         isSelf: peerId === selfId,

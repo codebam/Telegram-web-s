@@ -14,6 +14,7 @@
   import Settings from './Settings.svelte';
   import Stories from './Stories.svelte';
   import Picker from './Picker.svelte';
+  import RichMessage from './RichMessage.svelte';
   import Sticker from './Sticker.svelte';
   import {
     availableReactions,
@@ -1503,7 +1504,9 @@
                   {/if}
                 {/if}
 
-                {#if message.parts.length}
+                {#if message.rich}
+                  <RichMessage blocks={message.rich} onmention={openMention} />
+                {:else if message.parts.length}
                   <FormattedText parts={message.parts} onmention={openMention} />
                 {/if}
 

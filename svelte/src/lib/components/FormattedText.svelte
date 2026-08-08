@@ -5,9 +5,17 @@
 
   let {
     parts,
-    onmention
+    onmention,
+    markdown = false
   }: {
     parts: TextPart[];
+    /**
+     * Also treat inline markers (**bold**, `code`, links) as Markdown. Off by
+     * default: people type asterisks in ordinary messages and mangling those
+     * would be worse than showing them. Rich-message blocks opt in, because
+     * their authors are bots writing Markdown.
+     */
+    markdown?: boolean;
     /** Called with a @username or a bare user id when a mention is clicked. */
     onmention?: (mention: string, kind: 'username' | 'userId') => void;
   } = $props();
@@ -29,7 +37,9 @@
   );
 
   const source = $derived(parts.map((part) => part.text).join(''));
-  const asMarkdown = $derived(plain && looksLikeMarkdown(source));
+  const asMarkdown = $derived(
+    plain && (looksLikeMarkdown(source) || (markdown && /(\*\*|__|~~|`|\[[^\]]+\]\()/.test(source)))
+  );
 
   function reveal(index: number) {
     revealed = new Set(revealed).add(index);
