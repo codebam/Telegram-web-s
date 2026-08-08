@@ -112,6 +112,7 @@
   let typingNames = $state<string[]>([]);
   let editing = $state<MessageItem | null>(null);
   let fileInput: HTMLInputElement | undefined = $state();
+  let composer: HTMLTextAreaElement | undefined = $state();
   let dragging = $state(false);
   let typingTimer: ReturnType<typeof setTimeout> | undefined;
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
@@ -849,6 +850,15 @@
    * the desktop client. Ctrl+Up from nothing selects the newest message.
    */
   function onComposerKey(e: KeyboardEvent) {
+    // Enter sends; Shift+Enter (or Ctrl/Cmd+Enter) inserts a newline. isComposing
+    // guards IME candidate selection, which also arrives as Enter.
+    if (e.key === 'Enter' && !e.isComposing) {
+      if (e.shiftKey || e.ctrlKey || e.metaKey) return;
+      e.preventDefault();
+      submit(e);
+      return;
+    }
+
     if (!e.ctrlKey || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
     if (!messages.length) return;
     e.preventDefault();
@@ -869,7 +879,22 @@
     jumpTo(order[next].mid);
   }
 
+  /** Grow with the content instead of scrolling a single line. */
+  function resizeComposer() {
+    if (!composer) return;
+    composer.style.height = 'auto';
+    composer.style.height = `${Math.min(composer.scrollHeight, 160)}px`;
+  }
+
+  // Also runs when the draft is set from elsewhere: restoring a draft, editing
+  // a message, or picking an emoji.
+  $effect(() => {
+    void draft;
+    resizeComposer();
+  });
+
   function onDraftInput() {
+    resizeComposer();
     onInlineInput();
     if (activePeerId === null || editing) return;
 
@@ -1552,12 +1577,14 @@
           bind:this={fileInput}
           onchange={(e) => attach((e.currentTarget as HTMLInputElement).files)}
         />
-        <input
+        <textarea
           placeholder="Message"
+          rows="1"
+          bind:this={composer}
           bind:value={draft}
           oninput={onDraftInput}
           onkeydown={onComposerKey}
-        />
+        ></textarea>
         <button type="submit" disabled={!draft.trim()} aria-label={editing ? 'Save' : 'Send'}>
           {editing ? '✓' : '↑'}
         </button>
@@ -2582,13 +2609,18 @@
     padding: 8px 12px;
   }
 
-  form input {
+  form textarea {
     flex: 1;
     min-width: 0;
     padding: 8px 4px;
     border: none;
     background: transparent;
     outline: none;
+    resize: none;
+    font: inherit;
+    line-height: 1.4;
+    max-height: 160px;
+    overflow-y: auto;
   }
 
   form button[type='submit'] {
