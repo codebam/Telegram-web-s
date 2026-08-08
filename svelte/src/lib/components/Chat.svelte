@@ -2,25 +2,40 @@
   import {onMount, tick} from 'svelte';
 
   import Avatar from './Avatar.svelte';
+  import ChatInfo from './ChatInfo.svelte';
   import FormattedText from './FormattedText.svelte';
+  import Lightbox from './Lightbox.svelte';
   import Media from './Media.svelte';
+  import Picker from './Picker.svelte';
+  import Sticker from './Sticker.svelte';
   import {
+    availableReactions,
     deleteMessage,
     editMessage,
     getMessage,
     getPresence,
+    leaveOrDelete,
     loadDialogs,
+    loadFolders,
     loadHistory,
     loadOlder,
     loadTopics,
-    markRead,
+    markDialogRead,
+    markDialogUnread,
+    onDialogsUpdate,
     onNewMessage,
     onTyping,
+    readUpTo,
     searchDialogs,
+    sendDocument,
     sendFiles,
     sendMessage,
     sendTyping,
+    toggleMute,
+    togglePin,
+    toggleReaction,
     type DialogItem,
+    type FolderItem,
     type MessageItem,
     type TopicItem
   } from '$lib/telegram/chats';
@@ -58,6 +73,96 @@
   let typingTimer: ReturnType<typeof setTimeout> | undefined;
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
 
+  let folders = $state<FolderItem[]>([]);
+  let activeFolder = $state(0);
+  let menuFor = $state<DialogItem | null>(null);
+  let showInfo = $state(false);
+  let showPicker = $state(false);
+  let reactionPalette = $state<string[]>([]);
+  let reactingTo = $state<number | null>(null);
+  let lightboxIndex = $state<number | null>(null);
+
+  /** Media messages in order — the lightbox pages through these. */
+  const mediaMessages = $derived(
+    messages.filter((m) => m.media && (m.media.kind === 'photo' || m.media.kind === 'video') && !m.stickerDocId)
+  );
+
+  /**
+   * Albums: Telegram sends each item of a media group as its own message with a
+   * shared grouped_id. Collapse consecutive ones into a single render unit.
+   */
+  const rendered = $derived.by(() => {
+    const groups: {key: string; items: MessageItem[]}[] = [];
+
+    for (const message of messages) {
+      const previous = groups[groups.length - 1];
+      if (message.groupedId && previous?.items[0]?.groupedId === message.groupedId) {
+        previous.items.push(message);
+      } else {
+        groups.push({key: `${message.mid}`, items: [message]});
+      }
+    }
+
+    return groups;
+  });
+
+  /* ---------- read tracking ---------- */
+
+  let readObserver: IntersectionObserver | undefined;
+  let pendingReadMid = 0;
+  let readTimer: ReturnType<typeof setTimeout> | undefined;
+
+  /**
+   * Mark read from what is actually on screen. Opening a chat must not mark
+   * hundreds of unseen messages read, so the highest *visible* incoming mid is
+   * debounced into readHistory instead of calling readAllHistory on open.
+   */
+  function observeForRead(node: HTMLElement, mid: number) {
+    node.dataset.readMid = String(mid);
+    // Created lazily: message elements mount before the scroller's bind:this is
+    // assigned, so an observer built in openHistory would miss every node.
+    ensureReadObserver().observe(node);
+
+    return {
+      destroy() {
+        readObserver?.unobserve(node);
+      }
+    };
+  }
+
+  function ensureReadObserver(): IntersectionObserver {
+    // root: null (the viewport) rather than the scroller — the scroller fills
+    // the viewport, and it avoids depending on bind:this timing.
+    return (readObserver ??= new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const mid = Number((entry.target as HTMLElement).dataset.readMid ?? 0);
+          if (mid > pendingReadMid) pendingReadMid = mid;
+        }
+        flushRead();
+      },
+      {threshold: 0.5}
+    ));
+  }
+
+  function flushRead() {
+    clearTimeout(readTimer);
+    readTimer = setTimeout(async () => {
+      if (!pendingReadMid || activePeerId === null) return;
+      const mid = pendingReadMid;
+      pendingReadMid = 0;
+      try {
+        await readUpTo(activePeerId, mid, activeThreadId);
+        // dialogs_multiupdate does not always fire for our own read, so refresh
+        // the list explicitly to clear the badge.
+        dialogs = await loadDialogs(40, activeFolder);
+      } catch (err) {
+        // Read receipts are best-effort; a failure must not break the view.
+      }
+    }, 400);
+  }
+
   // An async onMount callback cannot return a cleanup function (Svelte only
   // honours a synchronous return), so hold the unsubscribe in a local.
   onMount(() => {
@@ -66,7 +171,11 @@
 
     (async () => {
       try {
-        dialogs = await loadDialogs();
+        [dialogs, folders, reactionPalette] = await Promise.all([
+          loadDialogs(),
+          loadFolders(),
+          availableReactions()
+        ]);
       } catch (err: any) {
         error = errorOf(err, 'Failed to load chats');
       } finally {
@@ -89,7 +198,12 @@
           }
         }
 
-        dialogs = await loadDialogs();
+        dialogs = await loadDialogs(40, activeFolder);
+      });
+
+      // Unread counts change from other devices too — keep the list honest.
+      const offDialogs = await onDialogsUpdate(async () => {
+        dialogs = await loadDialogs(40, activeFolder);
       });
 
       const offTyping = await onTyping((peerId, threadId, names) => {
@@ -98,21 +212,80 @@
         }
       });
 
-      const both = () => {
+      const all = () => {
         off();
         offTyping();
+        offDialogs();
       };
 
-      if (disposed) both();
-      else unsubscribe = both;
+      if (disposed) all();
+      else unsubscribe = all;
     })();
 
     return () => {
       disposed = true;
       unsubscribe?.();
       observer?.disconnect();
+      readObserver?.disconnect();
     };
   });
+
+  /* ---------- folders and chat-list actions ---------- */
+
+  async function openFolder(folder: FolderItem) {
+    activeFolder = folder.id;
+    query = '';
+    loadingChats = true;
+    try {
+      dialogs = await loadDialogs(40, folder.id);
+    } catch (err: any) {
+      error = errorOf(err, 'Failed to load folder');
+    } finally {
+      loadingChats = false;
+    }
+  }
+
+  async function runDialogAction(action: () => Promise<void>) {
+    menuFor = null;
+    try {
+      await action();
+      dialogs = await loadDialogs(40, activeFolder);
+    } catch (err: any) {
+      error = errorOf(err, 'Action failed');
+    }
+  }
+
+  /* ---------- stickers, GIFs, reactions ---------- */
+
+  async function pickDocument(docId: string) {
+    if (activePeerId === null) return;
+    showPicker = false;
+    const replyToMsgId = replyTo?.mid;
+    replyTo = null;
+
+    try {
+      await sendDocument(activePeerId, docId, {threadId: activeThreadId, replyToMsgId});
+    } catch (err: any) {
+      error = errorOf(err, 'Failed to send');
+    }
+  }
+
+  async function react(message: MessageItem, emoticon: string) {
+    if (activePeerId === null) return;
+    reactingTo = null;
+    try {
+      await toggleReaction(activePeerId, message.mid, emoticon);
+      const updated = await getMessage(activePeerId, message.mid);
+      if (updated) messages = messages.map((m) => (m.mid === message.mid ? updated : m));
+    } catch (err: any) {
+      error = errorOf(err, 'Reaction failed');
+    }
+  }
+
+  function openLightbox(message: MessageItem) {
+    const index = mediaMessages.findIndex((m) => m.mid === message.mid);
+    if (index >= 0) lightboxIndex = index;
+  }
 
   /* ---------- search ---------- */
 
@@ -270,7 +443,6 @@
 
       await tick();
       pinScroll(firstUnreadMid);
-      await markRead(peerId, threadId).catch(() => {});
     } catch (err: any) {
       error = errorOf(err, 'Failed to load messages');
     } finally {
@@ -401,6 +573,16 @@
       <div class="search">
         <input placeholder="Search chats" bind:value={query} oninput={onQueryInput} />
       </div>
+      {#if folders.length > 1}
+        <div class="folders">
+          {#each folders as folder (folder.id)}
+            <button
+              class:active={folder.id === activeFolder}
+              onclick={() => openFolder(folder)}
+            >{folder.title}</button>
+          {/each}
+        </div>
+      {/if}
     {/if}
 
     <div class="list">
@@ -438,11 +620,19 @@
             class="row-button"
             class:active={dialog.peerId === activePeerId}
             onclick={() => openChat(dialog)}
+            oncontextmenu={(e) => {
+              e.preventDefault();
+              menuFor = menuFor?.peerId === dialog.peerId ? null : dialog;
+            }}
           >
             <Avatar peerId={dialog.peerId} title={dialog.title} />
             <span class="meta">
               <span class="row">
-                <span class="title">{dialog.title}</span>
+                <span class="title">
+                  {#if dialog.pinned}<span class="flag">📌</span>{/if}
+                  {#if dialog.muted}<span class="flag">🔕</span>{/if}
+                  {dialog.title}
+                </span>
                 <span class="time">{timeOf(dialog.date)}</span>
               </span>
               <span class="row">
@@ -451,6 +641,28 @@
               </span>
             </span>
           </button>
+
+          {#if menuFor?.peerId === dialog.peerId}
+            <div class="menu">
+              <button onclick={() => runDialogAction(() => togglePin(dialog.peerId, activeFolder))}>
+                {dialog.pinned ? 'Unpin' : 'Pin'}
+              </button>
+              <button onclick={() => runDialogAction(() => toggleMute(dialog.peerId, !dialog.muted))}>
+                {dialog.muted ? 'Unmute' : 'Mute'}
+              </button>
+              <button
+                onclick={() =>
+                  runDialogAction(() =>
+                    dialog.unread ? markDialogRead(dialog.peerId) : markDialogUnread(dialog.peerId)
+                  )}
+              >
+                {dialog.unread ? 'Mark as read' : 'Mark as unread'}
+              </button>
+              <button class="danger" onclick={() => runDialogAction(() => leaveOrDelete(dialog.peerId))}>
+                Delete / Leave
+              </button>
+            </div>
+          {/if}
         {/each}
       {/if}
     </div>
@@ -472,7 +684,7 @@
       </div>
     {:else}
       <header>
-        <span>{activeTitle}</span>
+        <button class="title-button" onclick={() => (showInfo = !showInfo)}>{activeTitle}</button>
         {#if activeThreadId !== undefined}<span class="thread-tag">topic</span>{/if}
         <span class="presence">
           {typingNames.length
@@ -498,14 +710,42 @@
           {:else if reachedStart}
             <p class="muted centered">Beginning of the chat</p>
           {/if}
-          {#each messages as message (message.mid)}
+          {#each rendered as group (group.key)}
+            {@const message = group.items[0]}
             {#if message.mid === firstUnreadMid}
               <p class="unread-divider" data-mid={message.mid}>Unread messages</p>
             {/if}
             {#if message.service}
               <p class="service" data-mid={message.mid}>{message.text}</p>
+            {:else if message.stickerDocId}
+              <div
+                class="sticker-bubble"
+                class:out={message.out}
+                data-mid={message.mid}
+                use:observeForRead={message.mid}
+              >
+                <Sticker
+                  sticker={{
+                    docId: message.stickerDocId,
+                    kind: message.media?.kind === 'video' ? 'video' : 'static',
+                    emoji: '',
+                    width: message.media?.width ?? 128,
+                    height: message.media?.height ?? 128
+                  }}
+                  size={140}
+                />
+                <span class="stamp">
+                  <button class="reply-btn" onclick={() => (replyTo = message)}>Reply</button>
+                  <span class="time">{timeOf(message.date)}</span>
+                </span>
+              </div>
             {:else}
-              <div class="bubble" class:out={message.out} data-mid={message.mid}>
+              <div
+                class="bubble"
+                class:out={message.out}
+                data-mid={message.mid}
+                use:observeForRead={message.mid}
+              >
                 {#if !message.out && message.fromTitle}
                   <span class="author">{message.fromTitle}</span>
                 {/if}
@@ -517,16 +757,54 @@
                   </span>
                 {/if}
 
-                {#if message.media}
-                  <Media peerId={activePeerId} mid={message.mid} media={message.media} />
+                {#if group.items.length > 1}
+                  <div class="album" style="--cols: {group.items.length > 2 ? 2 : group.items.length}">
+                    {#each group.items as item (item.mid)}
+                      <button class="album-item" onclick={() => openLightbox(item)}>
+                        <Media peerId={activePeerId} mid={item.mid} media={item.media!} />
+                      </button>
+                    {/each}
+                  </div>
+                {:else if message.media}
+                  {#if message.media.kind === 'photo' || message.media.kind === 'video'}
+                    <button class="media-button" onclick={() => openLightbox(message)}>
+                      <Media peerId={activePeerId} mid={message.mid} media={message.media} />
+                    </button>
+                  {:else}
+                    <Media peerId={activePeerId} mid={message.mid} media={message.media} />
+                  {/if}
                 {/if}
 
                 {#if message.parts.length}<FormattedText parts={message.parts} />{/if}
+
+                {#if message.reactions.length}
+                  <span class="reactions">
+                    {#each message.reactions as reaction (reaction.emoticon)}
+                      <button
+                        class="chip"
+                        class:chosen={reaction.chosen}
+                        onclick={() => react(message, reaction.emoticon)}
+                      >{reaction.emoticon} {reaction.count}</button>
+                    {/each}
+                  </span>
+                {/if}
+
+                {#if reactingTo === message.mid}
+                  <span class="palette">
+                    {#each reactionPalette as emoticon}
+                      <button onclick={() => react(message, emoticon)}>{emoticon}</button>
+                    {/each}
+                  </span>
+                {/if}
 
                 <span class="stamp">
                   {#if message.repliesCount}
                     <span class="replies">{message.repliesCount} 💬</span>
                   {/if}
+                  <button
+                    class="reply-btn"
+                    onclick={() => (reactingTo = reactingTo === message.mid ? null : message.mid)}
+                  >React</button>
                   <button class="reply-btn" onclick={() => (replyTo = message)}>Reply</button>
                   {#if message.editable}
                     <button class="reply-btn" onclick={() => startEdit(message)}>Edit</button>
@@ -558,6 +836,19 @@
       {/if}
 
       <form onsubmit={submit}>
+        {#if showPicker}
+          <Picker
+            onemoji={(emoji) => (draft += emoji)}
+            ondocument={pickDocument}
+          />
+        {/if}
+        <button
+          type="button"
+          class="attach"
+          onclick={() => (showPicker = !showPicker)}
+          aria-label="Emoji, stickers and GIFs"
+          disabled={!!editing}
+        >😊</button>
         <button
           type="button"
           class="attach"
@@ -577,7 +868,20 @@
       </form>
     {/if}
   </section>
+
+  {#if showInfo && activePeerId !== null}
+    <ChatInfo peerId={activePeerId} onclose={() => (showInfo = false)} />
+  {/if}
 </div>
+
+{#if lightboxIndex !== null && activePeerId !== null}
+  <Lightbox
+    peerId={activePeerId}
+    items={mediaMessages}
+    bind:index={lightboxIndex}
+    onclose={() => (lightboxIndex = null)}
+  />
+{/if}
 
 {#if error}<p class="error">{error}</p>{/if}
 
@@ -588,7 +892,7 @@
      viewport and the whole page scrolls while history loads. */
   .shell {
     display: grid;
-    grid-template-columns: minmax(240px, 340px) 1fr;
+    grid-template-columns: minmax(240px, 340px) 1fr auto;
     height: 100dvh;
     max-height: 100dvh;
     overflow: hidden;
@@ -695,6 +999,141 @@
     align-self: center;
     padding: 6px;
     font-size: 12px;
+  }
+
+  .folders {
+    display: flex;
+    gap: 4px;
+    padding: 0 10px 8px;
+    overflow-x: auto;
+    flex: none;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .folders button {
+    flex: none;
+    padding: 6px 12px;
+    background: none;
+    border: none;
+    border-radius: 999px;
+    color: var(--text-dim);
+    cursor: pointer;
+    font-size: 13px;
+    white-space: nowrap;
+  }
+
+  .folders button.active {
+    background: var(--accent);
+    color: #fff;
+  }
+
+  .menu {
+    display: grid;
+    margin: 0 14px 8px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    background: var(--bg-elevated);
+  }
+
+  .menu button {
+    padding: 9px 12px;
+    background: none;
+    border: none;
+    text-align: left;
+    cursor: pointer;
+    color: inherit;
+    font-size: 13px;
+  }
+
+  .menu button:hover {
+    background: color-mix(in srgb, var(--text) 8%, transparent);
+  }
+
+  .menu .danger {
+    color: var(--danger);
+  }
+
+  .flag {
+    font-size: 11px;
+  }
+
+  .title-button {
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+  }
+
+  .sticker-bubble {
+    align-self: flex-start;
+    display: grid;
+    gap: 2px;
+  }
+
+  .sticker-bubble.out {
+    align-self: flex-end;
+    justify-items: end;
+  }
+
+  .album {
+    display: grid;
+    grid-template-columns: repeat(var(--cols), 1fr);
+    gap: 3px;
+  }
+
+  .album-item,
+  .media-button {
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: zoom-in;
+    display: block;
+    min-width: 0;
+  }
+
+  .reactions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .chip {
+    background: color-mix(in srgb, currentColor 12%, transparent);
+    border: none;
+    border-radius: 999px;
+    padding: 2px 8px;
+    font-size: 12px;
+    color: inherit;
+    cursor: pointer;
+  }
+
+  .chip.chosen {
+    background: var(--accent);
+    color: #fff;
+  }
+
+  .palette {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+    padding: 4px;
+    border-radius: 999px;
+    background: color-mix(in srgb, currentColor 10%, transparent);
+  }
+
+  .palette button {
+    background: none;
+    border: none;
+    font-size: 18px;
+    cursor: pointer;
+    padding: 2px;
+  }
+
+  form {
+    position: relative;
   }
 
   .edited {
