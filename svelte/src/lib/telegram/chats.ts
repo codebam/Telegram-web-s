@@ -18,6 +18,8 @@ export type DialogItem = {
   unread: number;
   isSelf: boolean;
   isForum: boolean;
+  pinned: boolean;
+  muted: boolean;
   /** Highest message id the user has read — the "jump here on open" anchor. */
   readMaxId: number;
 };
@@ -76,6 +78,11 @@ export type MessageItem = {
   reply: ReplyPreview | null;
   /** Comment thread (discussion) attached to this message, if any. */
   repliesCount: number;
+  reactions: ReactionItem[];
+  /** Album id — consecutive messages sharing one render as a single bubble. */
+  groupedId: string;
+  /** Sticker document id, when the media is a sticker. */
+  stickerDocId: string;
 };
 
 /* ------------------------------------------------------------------ */
@@ -257,10 +264,10 @@ function serviceText(message: any): string {
 /* Dialogs & topics                                                    */
 /* ------------------------------------------------------------------ */
 
-export async function loadDialogs(limit = 40): Promise<DialogItem[]> {
+export async function loadDialogs(limit = 40, filterId = 0): Promise<DialogItem[]> {
   const {managers} = await bootTelegram();
   const selfId = await getSelfId();
-  const {dialogs} = await managers.dialogsStorage.getDialogs({limit, filterId: 0});
+  const {dialogs} = await managers.dialogsStorage.getDialogs({limit, filterId});
 
   return Promise.all(
     dialogs.map(async(dialog: any) => {
@@ -278,6 +285,8 @@ export async function loadDialogs(limit = 40): Promise<DialogItem[]> {
         unread: dialog.unread_count ?? 0,
         isSelf: peerId === selfId,
         isForum: !!peer?.pFlags?.forum,
+        pinned: !!dialog.pFlags?.pinned,
+        muted: (dialog.notify_settings?.mute_until ?? 0) > Date.now() / 1000,
         readMaxId: dialog.read_inbox_max_id ?? 0
       };
     })
@@ -310,6 +319,14 @@ export async function loadTopics(peerId: number, limit = 30): Promise<TopicItem[
 /* History                                                             */
 /* ------------------------------------------------------------------ */
 
+function isStickerMessage(message: any): boolean {
+  const doc = message?.media?.document;
+  if(!doc) return false;
+  const isSticker = (doc.attributes ?? []).some((a: any) => a._ === 'documentAttributeSticker');
+  if(isSticker) rawDocs.set('' + doc.id, doc);
+  return isSticker;
+}
+
 async function toItem(message: any, peerId: number, selfId: number): Promise<MessageItem> {
   rawMessages.set(messageKey(peerId, message.mid), message);
 
@@ -334,7 +351,10 @@ async function toItem(message: any, peerId: number, selfId: number): Promise<Mes
     service: message._ === 'messageService',
     media: mediaOf(message),
     reply: await replyOf(message, peerId, selfId),
-    repliesCount: message.replies?.replies ?? 0
+    repliesCount: message.replies?.replies ?? 0,
+    reactions: reactionsOf(message),
+    groupedId: message.grouped_id ? '' + message.grouped_id : '',
+    stickerDocId: isStickerMessage(message) ? '' + message.media.document.id : ''
   };
 }
 
@@ -511,6 +531,8 @@ export async function searchDialogs(query: string, limit = 40): Promise<DialogIt
         unread: dialog.unread_count ?? 0,
         isSelf: peerId === selfId,
         isForum: !!peer?.pFlags?.forum,
+        pinned: !!dialog.pFlags?.pinned,
+        muted: (dialog.notify_settings?.mute_until ?? 0) > Date.now() / 1000,
         readMaxId: dialog.read_inbox_max_id ?? 0
       };
     })
@@ -535,9 +557,36 @@ export async function onTyping(
   return () => rootScope.removeEventListener('peer_typings', handler);
 }
 
-export async function markRead(peerId: number, threadId?: number): Promise<void> {
+/**
+ * Mark history read up to `maxId`.
+ *
+ * Deliberately not `readAllHistory`: that marks the whole chat read the moment
+ * it is opened, even for messages the user never scrolled to. The UI feeds the
+ * highest *actually visible* incoming message id in here instead, matching what
+ * the official clients do.
+ */
+export async function readUpTo(peerId: number, maxId: number, threadId?: number): Promise<void> {
+  if(!maxId) return;
+  const {managers} = await bootTelegram();
+  await managers.appMessagesManager.readHistory({peerId, maxId, threadId});
+}
+
+/** Explicit "mark as read" action from the chat list. */
+export async function markDialogRead(peerId: number, threadId?: number): Promise<void> {
   const {managers} = await bootTelegram();
   await managers.appMessagesManager.readAllHistory(peerId, threadId);
+}
+
+export async function markDialogUnread(peerId: number): Promise<void> {
+  const {managers} = await bootTelegram();
+  await managers.appMessagesManager.markDialogUnread({peerId, read: false});
+}
+
+/** Fires whenever the server confirms a read or unread-count change. */
+export async function onDialogsUpdate(callback: () => void): Promise<() => void> {
+  const {default: rootScope} = await import('@lib/rootScope');
+  rootScope.addEventListener('dialogs_multiupdate', callback);
+  return () => rootScope.removeEventListener('dialogs_multiupdate', callback);
 }
 
 /* ------------------------------------------------------------------ */
@@ -616,6 +665,319 @@ export async function loadMediaUrl(peerId: number, mid: number, boxWidth = 480):
     mediaUrls.set(key, null);
     return null;
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* Stickers, GIFs and emoji                                            */
+/* ------------------------------------------------------------------ */
+
+export type StickerItem = {
+  docId: string;
+  kind: 'static' | 'video' | 'animated';
+  emoji: string;
+  width: number;
+  height: number;
+};
+
+export type StickerSetItem = {
+  id: string;
+  title: string;
+  count: number;
+  thumbDocId: string;
+};
+
+const rawDocs = new Map<string, any>();
+const docUrls = new Map<string, string | null>();
+
+function stickerKind(doc: any): StickerItem['kind'] {
+  if(doc.mime_type === 'application/x-tgsticker') return 'animated';
+  if(doc.mime_type === 'video/webm') return 'video';
+  return 'static';
+}
+
+function toSticker(doc: any): StickerItem {
+  rawDocs.set('' + doc.id, doc);
+  const size = (doc.attributes ?? []).find((a: any) => a._ === 'documentAttributeImageSize' || a._ === 'documentAttributeVideo');
+  const sticker = (doc.attributes ?? []).find((a: any) => a._ === 'documentAttributeSticker');
+
+  return {
+    docId: '' + doc.id,
+    kind: stickerKind(doc),
+    emoji: sticker?.alt ?? '',
+    width: size?.w ?? 128,
+    height: size?.h ?? 128
+  };
+}
+
+export async function loadRecentStickers(): Promise<StickerItem[]> {
+  const {managers} = await bootTelegram();
+  const docs = await managers.appStickersManager.getRecentStickersStickers();
+  return (docs ?? []).map(toSticker);
+}
+
+// getStickerSet needs the full {id, access_hash} input, so keep the raw sets.
+const rawStickerSets = new Map<string, any>();
+
+export async function loadStickerSets(): Promise<StickerSetItem[]> {
+  const {managers} = await bootTelegram();
+  const all: any = await managers.appStickersManager.getAllStickers();
+
+  return (all?.sets ?? []).map((set: any) => {
+    rawStickerSets.set('' + set.id, set);
+    return {
+      id: '' + set.id,
+      title: set.title ?? '',
+      count: set.count ?? 0,
+      thumbDocId: ''
+    };
+  });
+}
+
+export async function loadSetStickers(setId: string): Promise<StickerItem[]> {
+  const {managers} = await bootTelegram();
+  const raw = rawStickerSets.get(setId);
+  if(!raw) return [];
+
+  const set: any = await managers.appStickersManager.getStickerSet({
+    _: 'inputStickerSetID',
+    id: raw.id,
+    access_hash: raw.access_hash
+  } as any);
+  return (set?.documents ?? []).map(toSticker);
+}
+
+export async function loadGifs(): Promise<StickerItem[]> {
+  const {managers} = await bootTelegram();
+  const docs = await managers.appGifsManager.getGifs();
+  return (docs ?? []).map((doc: any) => {
+    rawDocs.set('' + doc.id, doc);
+    const video = (doc.attributes ?? []).find((a: any) => a._ === 'documentAttributeVideo');
+    return {
+      docId: '' + doc.id,
+      kind: 'video' as const,
+      emoji: '',
+      width: video?.w ?? 200,
+      height: video?.h ?? 200
+    };
+  });
+}
+
+/**
+ * Renderable URL for a sticker/GIF document. Animated (.tgs/Lottie) stickers
+ * have no still frame in the file itself, so they fall back to the server
+ * thumbnail — playback would need tweb's rlottie worker pipeline.
+ */
+export async function loadDocUrl(docId: string, thumbOnly = false): Promise<string | null> {
+  const cacheKey = `${docId}_${thumbOnly ? 'thumb' : 'full'}`;
+  if(docUrls.has(cacheKey)) return docUrls.get(cacheKey)!;
+
+  const doc = rawDocs.get(docId);
+  if(!doc) return null;
+
+  await bootTelegram();
+  const [{default: appDownloadManager}, {default: choosePhotoSize}] = await Promise.all([
+    import('@lib/appDownloadManager'),
+    import('@appManagers/utils/photos/choosePhotoSize')
+  ]);
+
+  try {
+    const useThumb = thumbOnly || stickerKind(doc) === 'animated';
+    const url = await appDownloadManager.downloadMediaURL({
+      media: doc,
+      thumb: useThumb ? choosePhotoSize(doc, 160, 160, true) : undefined
+    });
+    docUrls.set(cacheKey, url ?? null);
+    return url ?? null;
+  } catch(err) {
+    docUrls.set(cacheKey, null);
+    return null;
+  }
+}
+
+export async function sendDocument(
+  peerId: number,
+  docId: string,
+  options: {threadId?: number; replyToMsgId?: number} = {}
+): Promise<void> {
+  const {managers} = await bootTelegram();
+  const doc = rawDocs.get(docId);
+  if(!doc) throw new Error('Document not found');
+
+  const {default: getDocumentMediaInput} = await import('@appManagers/utils/docs/getDocumentMediaInput');
+  await managers.appMessagesManager.sendOther({
+    peerId,
+    inputMedia: getDocumentMediaInput(doc),
+    threadId: options.threadId,
+    replyToMsgId: options.replyToMsgId ?? options.threadId,
+    clearDraft: true
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* Reactions                                                           */
+/* ------------------------------------------------------------------ */
+
+export type ReactionItem = {emoticon: string; count: number; chosen: boolean};
+
+function reactionsOf(message: any): ReactionItem[] {
+  const results = message?.reactions?.results ?? [];
+  return results
+    .filter((result: any) => result.reaction?._ === 'reactionEmoji')
+    .map((result: any) => ({
+      emoticon: result.reaction.emoticon,
+      count: result.count ?? 0,
+      chosen: !!result.chosen_order || !!result.pFlags?.chosen
+    }));
+}
+
+export async function availableReactions(limit = 12): Promise<string[]> {
+  const {managers} = await bootTelegram();
+  try {
+    const list: any = await managers.appReactionsManager.getAvailableReactions();
+    return (list ?? [])
+      .filter((r: any) => !r.pFlags?.inactive && r.reaction)
+      .slice(0, limit)
+      .map((r: any) => r.reaction);
+  } catch(err) {
+    return ['👍', '👎', '❤', '🔥', '🎉', '😁'];
+  }
+}
+
+export async function toggleReaction(peerId: number, mid: number, emoticon: string): Promise<void> {
+  const {managers} = await bootTelegram();
+  const message = rawMessages.get(messageKey(peerId, mid)) ??
+    await managers.appMessagesManager.getMessageByPeer(peerId, mid);
+  if(!message) throw new Error('Message not found');
+
+  await managers.appReactionsManager.sendReaction({
+    message,
+    reaction: {_: 'reactionEmoji', emoticon}
+  } as any);
+}
+
+/* ------------------------------------------------------------------ */
+/* Folders, and chat-level actions                                     */
+/* ------------------------------------------------------------------ */
+
+export type FolderItem = {id: number; title: string};
+
+export async function loadFolders(): Promise<FolderItem[]> {
+  const {managers} = await bootTelegram();
+
+  const base: FolderItem[] = [{id: 0, title: 'All'}, {id: 1, title: 'Archive'}];
+  try {
+    const filters: any = await managers.filtersStorage.getFilters();
+    const custom = Object.values(filters ?? {})
+      .filter((filter: any) => filter?.id > 1)
+      .map((filter: any) => ({
+        id: filter.id,
+        // Newer layers wrap the title in a TextWithEntities.
+        title: typeof filter.title === 'string' ? filter.title : (filter.title?.text ?? 'Folder')
+      }));
+    return [...base, ...custom];
+  } catch(err) {
+    return base;
+  }
+}
+
+export async function togglePin(peerId: number, filterId = 0): Promise<void> {
+  const {managers} = await bootTelegram();
+  await managers.appMessagesManager.toggleDialogPin({peerId, filterId});
+}
+
+export async function toggleMute(peerId: number, mute: boolean, threadId?: number): Promise<void> {
+  const {managers} = await bootTelegram();
+  await managers.appMessagesManager.togglePeerMute({peerId, mute, threadId});
+}
+
+export async function leaveOrDelete(peerId: number): Promise<void> {
+  const {managers} = await bootTelegram();
+  const peer = await getPeer(peerId);
+
+  if(peer?._ === 'channel') {
+    await managers.appChatsManager.leaveChannel(peer.id);
+  } else {
+    await managers.appMessagesManager.flushHistory({peerId, revoke: false});
+  }
+  rawPeers.delete(peerId);
+}
+
+/* ------------------------------------------------------------------ */
+/* Chat / group / channel info                                         */
+/* ------------------------------------------------------------------ */
+
+export type MemberItem = {peerId: number; title: string};
+
+export type ChatInfo = {
+  peerId: number;
+  title: string;
+  about: string;
+  username: string;
+  membersCount: number;
+  isChannel: boolean;
+  isGroup: boolean;
+  members: MemberItem[];
+};
+
+export async function loadChatInfo(peerId: number): Promise<ChatInfo> {
+  const {managers} = await bootTelegram();
+  const selfId = await getSelfId();
+  const peer = await getPeer(peerId);
+
+  const isUser = peer?._ === 'user';
+  const isChannel = peer?._ === 'channel' && !!peer.pFlags?.broadcast;
+  const isGroup = !isUser && !isChannel;
+
+  const info: ChatInfo = {
+    peerId,
+    title: peerTitle(peer, selfId),
+    about: '',
+    username: peer?.username ?? '',
+    membersCount: peer?.participants_count ?? 0,
+    isChannel,
+    isGroup,
+    members: []
+  };
+
+  try {
+    if(isUser) {
+      const full: any = await managers.appProfileManager.getProfile(peer.id);
+      info.about = full?.about ?? '';
+      return info;
+    }
+
+    const full: any = await managers.appProfileManager.getChatFull(peer.id);
+    info.about = full?.about ?? '';
+    info.membersCount = full?.participants_count ?? full?.participants?.participants?.length ?? info.membersCount;
+
+    const participants: any[] = full?.participants?.participants ?? [];
+    if(participants.length) {
+      info.members = await membersFrom(participants.slice(0, 50), selfId);
+      return info;
+    }
+
+    // Channels/supergroups keep their member list behind a separate call.
+    const result: any = await managers.appProfileManager.getParticipants({
+      id: peer.id,
+      filter: {_: 'channelParticipantsRecent'},
+      limit: 50,
+      offset: 0
+    });
+    info.members = await membersFrom(result?.participants ?? [], selfId);
+  } catch(err) {
+    // Member lists are permission-gated; the rest of the info still renders.
+  }
+
+  return info;
+}
+
+async function membersFrom(participants: any[], selfId: number): Promise<MemberItem[]> {
+  return Promise.all(
+    participants.map(async(participant: any) => {
+      const id = Number(participant.user_id ?? participant.peer?.user_id ?? participant.peer?.channel_id ?? 0);
+      return {peerId: id, title: peerTitle(await getPeer(id), selfId)};
+    })
+  );
 }
 
 /* ------------------------------------------------------------------ */
