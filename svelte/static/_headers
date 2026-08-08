@@ -1,0 +1,5 @@
+# tweb's service worker is emitted under /_app/immutable/workers/, so its default
+# scope would be limited to that path. It must control the whole origin to serve
+# streamed media and offline assets.
+/*
+  Service-Worker-Allowed: /

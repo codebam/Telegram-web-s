@@ -29,4 +29,9 @@ ignore
 /blob-report/
 
 .claude/bugs-cache
+
+# SvelteKit client
+svelte/.svelte-kit
+svelte/build
+
 .pnpm-store/
