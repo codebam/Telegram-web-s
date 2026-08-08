@@ -14,6 +14,16 @@
   let stories = $state<StoryItem[]>([]);
   let index = $state(0);
   let url = $state<string | null>(null);
+  /** 0–1 fill of the current segment; drives both the bar and auto-advance. */
+  let progress = $state(0);
+  let paused = $state(false);
+
+  /** Photos get a fixed run; videos play for their own duration. */
+  const PHOTO_SECONDS = 5;
+
+  let frame: number | undefined;
+  let startedAt = 0;
+  let elapsedBeforePause = 0;
 
   $effect(() => {
     loadStoriesFeed().then((loaded) => (feed = loaded));
@@ -31,6 +41,71 @@
     });
   });
 
+  /**
+   * Runs the current story to completion, then advances. Uses rAF rather than a
+   * timeout so the bar animates and a pause can resume mid-story.
+   */
+  function play() {
+    stop();
+    const story = stories[index];
+    if(!story || !url) return;
+
+    const seconds = story.isVideo && story.duration ? story.duration : PHOTO_SECONDS;
+    startedAt = performance.now() - elapsedBeforePause;
+
+    const tick = () => {
+      if(paused) return;
+      const elapsed = performance.now() - startedAt;
+      progress = Math.min(1, elapsed / (seconds * 1000));
+
+      if(progress >= 1) {
+        elapsedBeforePause = 0;
+        step(1);
+        return;
+      }
+
+      frame = requestAnimationFrame(tick);
+    };
+
+    frame = requestAnimationFrame(tick);
+  }
+
+  function stop() {
+    if(frame !== undefined) cancelAnimationFrame(frame);
+    frame = undefined;
+  }
+
+  function pause() {
+    if(!openPeer || paused) return;
+    paused = true;
+    elapsedBeforePause = performance.now() - startedAt;
+    stop();
+  }
+
+  function resume() {
+    if(!openPeer || !paused) return;
+    paused = false;
+    play();
+  }
+
+  // Restart the timer whenever the story or its media changes.
+  $effect(() => {
+    if(!openPeer || !url) return;
+    void index;
+    progress = 0;
+    elapsedBeforePause = 0;
+    paused = false;
+    play();
+    return stop;
+  });
+
+  // A backgrounded tab should not burn through someone's stories.
+  $effect(() => {
+    const onVisibility = () => (document.hidden ? pause() : resume());
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  });
+
   async function open(peer: StoryPeer) {
     openPeer = peer;
     index = 0;
@@ -42,15 +117,20 @@
   }
 
   function close() {
+    stop();
     openPeer = null;
     stories = [];
     url = null;
+    progress = 0;
   }
 
   function step(delta: number) {
     const next = index + delta;
     if(next < 0 || next >= stories.length) close();
-    else index = next;
+    else {
+      elapsedBeforePause = 0;
+      index = next;
+    }
   }
 
   function onKey(e: KeyboardEvent) {
@@ -78,10 +158,22 @@
 
 {#if openPeer}
   <div class="viewer" onclick={close} role="presentation">
-    <div class="stage" onclick={(e) => e.stopPropagation()} role="presentation">
+    <div
+      class="stage"
+      onclick={(e) => e.stopPropagation()}
+      onpointerdown={pause}
+      onpointerup={resume}
+      onpointercancel={resume}
+      role="presentation"
+    >
       <div class="progress">
         {#each stories as _, i}
-          <span class="segment" class:done={i <= index}></span>
+          <span class="segment">
+            <span
+              class="fill"
+              style="transform: scaleX({i < index ? 1 : i === index ? progress : 0})"
+            ></span>
+          </span>
         {/each}
       </div>
 
@@ -95,7 +187,7 @@
         <p class="muted">Loading…</p>
       {:else if stories[index]?.isVideo}
         <!-- svelte-ignore a11y_media_has_caption -->
-        <video src={url} autoplay controls></video>
+        <video src={url} autoplay muted playsinline onended={() => step(1)}></video>
       {:else}
         <img src={url} alt="" />
       {/if}
@@ -181,10 +273,15 @@
     height: 3px;
     border-radius: 2px;
     background: rgba(255, 255, 255, 0.25);
+    overflow: hidden;
   }
 
-  .segment.done {
+  .fill {
+    display: block;
+    height: 100%;
     background: #fff;
+    transform-origin: left;
+    will-change: transform;
   }
 
   header {
