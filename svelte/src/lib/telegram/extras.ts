@@ -118,6 +118,8 @@ export type StoryItem = {
   date: number;
   caption: string;
   isVideo: boolean;
+  /** Seconds of video; 0 for photos, which get a fixed display time. */
+  duration: number;
 };
 
 const rawStories = new Map<string, any>();
@@ -165,11 +167,15 @@ export async function loadStories(peerId: number, ids: number[]): Promise<StoryI
     const stories: any[] = await managers.appStoriesManager.getStoriesById(peerId, plainIds);
     return (stories ?? []).map((story: any) => {
       rawStories.set(storyKey(peerId, story.id), story);
+      const document = story.media?.document;
+      const video = (document?.attributes ?? []).find((a: any) => a._ === 'documentAttributeVideo');
+
       return {
         id: story.id,
         date: story.date ?? 0,
         caption: story.caption ?? '',
-        isVideo: story.media?._ === 'messageMediaDocument'
+        isVideo: story.media?._ === 'messageMediaDocument',
+        duration: video?.duration ?? 0
       };
     });
   } catch(err) {
