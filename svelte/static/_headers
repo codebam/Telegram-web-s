@@ -3,3 +3,14 @@
 # streamed media and offline assets.
 /*
   Service-Worker-Allowed: /
+
+# The shell must always be revalidated, or a stale index.html keeps pointing at
+# hashed assets that no longer exist.
+/
+  Cache-Control: no-cache
+/index.html
+  Cache-Control: no-cache
+
+# Hashed filenames change on every build, so these are safe to keep forever.
+/_app/immutable/*
+  Cache-Control: public, max-age=31536000, immutable

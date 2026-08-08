@@ -1,2 +1,8 @@
+# Real 404s for build assets. Without this the SPA catch-all below answers a
+# missing hashed chunk with index.html and a 200, so the browser is handed HTML
+# where it expects JavaScript — which is what breaks the app after a deploy
+# until the user clears storage.
+/_app/*  /404.html  404
+
 # SPA fallback: every route is rendered client-side.
 /*  /index.html  200
