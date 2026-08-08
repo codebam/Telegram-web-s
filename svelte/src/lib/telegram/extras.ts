@@ -253,10 +253,20 @@ export type CallState = {
   fingerprint: string[];
 };
 
-let callsControllerPromise: Promise<any> | null = null;
+/**
+ * One controller for the whole tab.
+ *
+ * Kept on globalThis rather than in a module variable: the controller holds the
+ * live call instances, and if this module is ever evaluated twice — separate
+ * chunks, a stale HMR copy — each copy gets its own controller, and the call
+ * screen ends up subscribed to a controller that never sees the call that the
+ * button created.
+ */
+const CONTROLLER_KEY = '__websCallsController';
 
 async function getCallsController() {
-  return (callsControllerPromise ??= (async() => {
+  const store = globalThis as any;
+  return (store[CONTROLLER_KEY] ??= (async() => {
     const {managers} = await bootTelegram();
     const {default: callsController} = await import('@lib/calls/callsController');
     // The controller needs the manager proxy before it can place a call —
@@ -285,6 +295,7 @@ export async function startCall(userId: number, isVideo = false): Promise<boolea
     await controller.startCallInternal(userId, isVideo);
     return true;
   } catch(err) {
+    console.error('[call] could not start', err);
     return false;
   }
 }
