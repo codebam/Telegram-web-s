@@ -3,6 +3,7 @@
 
   import Chat from '$lib/components/Chat.svelte';
   import {bootTelegram} from '$lib/telegram/client';
+  import {GIT_COMMIT, GIT_COMMIT_SHORT, GIT_COMMIT_URL} from '$lib/buildInfo';
   import {
     AlreadySignedIn,
     checkPassword,
@@ -209,15 +210,50 @@
       <p class="error">{error}</p>
     {/if}
   </div>
+
+  {#if GIT_COMMIT_URL}
+    <a
+      class="build-commit"
+      href={GIT_COMMIT_URL}
+      target="_blank"
+      rel="noopener noreferrer"
+      title="Built from {GIT_COMMIT}"
+    >
+      {GIT_COMMIT_SHORT}
+    </a>
+  {/if}
 </main>
 {/if}
 
 <style>
   main {
+    position: relative;
     min-height: 100%;
     display: grid;
     place-items: center;
     padding: 24px;
+  }
+
+  /* The commit this build came from — same marker the empty chat pane shows
+     once you're signed in, so a stale bundle is visible before logging in. */
+  .build-commit {
+    position: absolute;
+    left: 50%;
+    bottom: 12px;
+    transform: translateX(-50%);
+    padding: 2px 6px;
+    border-radius: 8px;
+    background: var(--bg-elevated);
+    color: var(--text-dim);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    text-decoration: none;
+    opacity: 0.7;
+    transition: opacity 0.15s;
+  }
+
+  .build-commit:hover {
+    opacity: 1;
   }
 
   .card {
