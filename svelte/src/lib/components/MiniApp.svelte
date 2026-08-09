@@ -1,4 +1,5 @@
 <script lang="ts">
+  import {onMount} from 'svelte';
   import {
     requestWebView,
     prolongWebView,
@@ -332,6 +333,7 @@
       case 'web_app_set_background_color':
       case 'web_app_set_bottom_bar_color':
       case 'web_app_setup_swipe_behavior':
+      case 'web_app_toggle_orientation_lock':
       case 'web_app_stop_accelerometer':
       case 'web_app_stop_gyroscope':
       case 'web_app_stop_device_orientation':
@@ -355,6 +357,10 @@
     }
 
     if(!payload?.eventType) return;
+
+    // Every inbound event is logged: when an app stalls, the last line before
+    // it stopped is the answer it is waiting for.
+    console.debug('[mini app] ←', payload.eventType, payload.eventData);
     handle(payload.eventType, payload.eventData === '' ? undefined : payload.eventData);
   }
 
@@ -402,20 +408,104 @@
   });
 
   function onKey(event: KeyboardEvent) {
-    if(event.key !== 'Escape') return;
-    if(popup) answerPopup('');
-    else close();
+    // Escape only dismisses the app's own popup — the window is not modal, so
+    // it must not swallow Escape from the chat behind it.
+    if(event.key === 'Escape' && popup) answerPopup('');
+  }
+
+  /* ---------- floating window ---------- */
+
+  const MIN_WIDTH = 300;
+  const MIN_HEIGHT = 320;
+
+  let left = $state(0);
+  let top = $state(0);
+  let width = $state(420);
+  let height = $state(720);
+  /** True while dragging or resizing: the iframe must not eat the pointer. */
+  let moving = $state(false);
+
+  function clampIntoView() {
+    width = Math.max(MIN_WIDTH, Math.min(width, window.innerWidth - 16));
+    height = Math.max(MIN_HEIGHT, Math.min(height, window.innerHeight - 16));
+    left = Math.max(8, Math.min(left, window.innerWidth - width - 8));
+    top = Math.max(8, Math.min(top, window.innerHeight - height - 8));
+  }
+
+  // Placed once, on open. This must not be an $effect: clampIntoView reads the
+  // very state it writes, so the window would snap back to centre on every drag.
+  onMount(() => {
+    width = Math.min(420, window.innerWidth - 16);
+    height = Math.min(720, window.innerHeight - 16);
+    left = Math.round((window.innerWidth - width) / 2);
+    top = Math.round((window.innerHeight - height) / 2);
+    clampIntoView();
+  });
+
+  /**
+   * Pointer capture on the grabbed element, so a fast drag that leaves the
+   * window (or crosses the iframe) keeps delivering moves.
+   */
+  function drag(event: PointerEvent, onMove: (dx: number, dy: number) => void) {
+    if(event.button !== 0) return;
+    event.preventDefault();
+
+    const target = event.currentTarget as HTMLElement;
+    const startX = event.clientX;
+    const startY = event.clientY;
+    moving = true;
+    target.setPointerCapture(event.pointerId);
+
+    const move = (e: PointerEvent) => onMove(e.clientX - startX, e.clientY - startY);
+    const up = () => {
+      moving = false;
+      target.releasePointerCapture(event.pointerId);
+      target.removeEventListener('pointermove', move);
+      target.removeEventListener('pointerup', up);
+      target.removeEventListener('pointercancel', up);
+      send('viewport_changed', viewport());
+    };
+
+    target.addEventListener('pointermove', move);
+    target.addEventListener('pointerup', up);
+    target.addEventListener('pointercancel', up);
+  }
+
+  function startMove(event: PointerEvent) {
+    const originLeft = left;
+    const originTop = top;
+    drag(event, (dx, dy) => {
+      left = originLeft + dx;
+      top = originTop + dy;
+      clampIntoView();
+    });
+  }
+
+  // Apps lay themselves out against the viewport they were told about.
+  $effect(() => {
+    const size = width + height;
+    if(ready && size) send('viewport_changed', viewport());
+  });
+
+  function startResize(event: PointerEvent) {
+    const originWidth = width;
+    const originHeight = height;
+    drag(event, (dx, dy) => {
+      width = originWidth + dx;
+      height = originHeight + dy;
+      clampIntoView();
+    });
   }
 </script>
 
-<svelte:window onkeydown={onKey} />
+<svelte:window onkeydown={onKey} onresize={clampIntoView} />
 
-<div class="backdrop" onclick={close} role="presentation">
-  <div class="frame" onclick={(e) => e.stopPropagation()} role="presentation">
-    <header>
+<div class="window" style="left: {left}px; top: {top}px; width: {width}px; height: {height}px">
+    <header onpointerdown={startMove}>
       {#if backVisible}
         <button
           class="icon"
+          onpointerdown={(e) => e.stopPropagation()}
           onclick={() => send('back_button_pressed', undefined)}
           aria-label="Back"
         >‹</button>
@@ -424,16 +514,23 @@
       {#if settingsVisible}
         <button
           class="icon"
+          onpointerdown={(e) => e.stopPropagation()}
           onclick={() => send('settings_button_pressed', undefined)}
           aria-label="Settings"
         >⚙</button>
       {/if}
       <button
         class="icon"
+        onpointerdown={(e) => e.stopPropagation()}
         onclick={() => { ready = false; send('reload_iframe', undefined); }}
         aria-label="Reload"
       >⟳</button>
-      <button class="icon" onclick={close} aria-label="Close">✕</button>
+      <button
+        class="icon"
+        onpointerdown={(e) => e.stopPropagation()}
+        onclick={close}
+        aria-label="Close"
+      >✕</button>
     </header>
 
     {#if error}
@@ -449,6 +546,7 @@
         sandbox="allow-scripts allow-same-origin allow-popups allow-forms allow-modals allow-popups-to-escape-sandbox allow-storage-access-by-user-activation"
         allow="camera; microphone; geolocation; clipboard-write; autoplay; fullscreen; payment"
         allowfullscreen
+        class:inert={moving}
       ></iframe>
     {/if}
 
@@ -506,29 +604,55 @@
         </div>
       </div>
     {/if}
-  </div>
+
+  <div
+    class="grip"
+    onpointerdown={startResize}
+    role="separator"
+    aria-label="Resize"
+  ></div>
 </div>
 
 <style>
-  .backdrop {
+  .window {
     position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.55);
-    display: grid;
-    place-items: center;
     z-index: 96;
-  }
-
-  .frame {
-    position: relative;
-    width: min(460px, calc(100vw - 24px));
-    height: min(760px, calc(100vh - 48px));
     display: flex;
     flex-direction: column;
     background: var(--bg-solid);
     border: 1px solid var(--border);
     border-radius: 14px;
     overflow: hidden;
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+  }
+
+  header {
+    cursor: move;
+    touch-action: none;
+    user-select: none;
+  }
+
+  .grip {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    width: 18px;
+    height: 18px;
+    cursor: nwse-resize;
+    touch-action: none;
+    background: linear-gradient(
+      135deg,
+      transparent 50%,
+      var(--border) 50%,
+      var(--border) 65%,
+      transparent 65%,
+      transparent 80%,
+      var(--border) 80%
+    );
+  }
+
+  .inert {
+    pointer-events: none;
   }
 
   header {
