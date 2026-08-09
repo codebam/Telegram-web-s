@@ -1,6 +1,6 @@
 <script lang="ts">
   import Avatar from './Avatar.svelte';
-  import {createChannel, createGroup, type DialogItem} from '$lib/telegram/chats';
+  import {createChannel, createGroup, setChatUsername, type DialogItem} from '$lib/telegram/chats';
 
   let {
     dialogs,
@@ -15,6 +15,12 @@
   let kind = $state<'group' | 'channel'>('group');
   let title = $state('');
   let about = $state('');
+  let link = $state('');
+  /**
+   * Set once the chat exists. A failed @link must not create a second chat on
+   * retry, so creation is skipped when this is filled in.
+   */
+  let createdPeerId = $state<number | null>(null);
   let query = $state('');
   let selected = $state<Set<number>>(new Set());
   let busy = $state(false);
@@ -49,10 +55,16 @@
 
     try {
       const members = [...selected];
-      const peerId =
-        kind === 'channel'
-          ? await createChannel(title.trim(), about.trim(), members)
-          : await createGroup(title.trim(), members);
+      if (createdPeerId === null) {
+        createdPeerId =
+          kind === 'channel'
+            ? await createChannel(title.trim(), about.trim(), members)
+            : await createGroup(title.trim(), members);
+      }
+
+      let peerId = createdPeerId;
+      if (link.trim()) peerId = await setChatUsername(peerId, link);
+
       oncreated(peerId);
     } catch (err: any) {
       error = err?.type || err?.message || 'Failed to create chat';
@@ -83,6 +95,23 @@
       </label>
     {/if}
 
+    <label class="field">
+      <span>Public link</span>
+      <span class="link-edit">
+        <span class="at">@</span>
+        <input
+          bind:value={link}
+          placeholder="Optional — leave empty for a private {kind}"
+          maxlength="32"
+          spellcheck="false"
+          autocapitalize="none"
+        />
+      </span>
+      {#if kind === 'group' && link.trim()}
+        <span class="hint">A public group becomes a supergroup.</span>
+      {/if}
+    </label>
+
     <p class="label">
       Members ({selected.size})
       {#if kind === 'channel'}<span class="muted">— optional</span>{/if}
@@ -101,12 +130,19 @@
     </div>
 
     {#if error}<p class="error">{error}</p>{/if}
+    {#if createdPeerId !== null && error}
+      <p class="hint">The {kind} was created — only the link failed.</p>
+    {/if}
 
     <footer>
       <span class="spacer"></span>
-      <button onclick={onclose} disabled={busy}>Cancel</button>
+      {#if createdPeerId !== null}
+        <button onclick={() => oncreated(createdPeerId!)} disabled={busy}>Open without link</button>
+      {:else}
+        <button onclick={onclose} disabled={busy}>Cancel</button>
+      {/if}
       <button class="primary" onclick={create} disabled={busy || !canCreate}>
-        {busy ? 'Creating…' : 'Create'}
+        {busy ? 'Creating…' : createdPeerId !== null ? 'Retry link' : 'Create'}
       </button>
     </footer>
   </div>
@@ -187,6 +223,37 @@
   .label {
     margin: 0;
     font-size: 13px;
+    color: var(--text-dim);
+  }
+
+  .link-edit {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0 10px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    color: var(--text);
+  }
+
+  .link-edit:focus-within {
+    border-color: var(--accent);
+  }
+
+  .at {
+    color: var(--text-dim);
+  }
+
+  .link-edit input {
+    flex: 1;
+    min-width: 0;
+    padding: 9px 0;
+    border: none;
+    border-radius: 0;
+  }
+
+  .hint {
+    font-size: 12px;
     color: var(--text-dim);
   }
 

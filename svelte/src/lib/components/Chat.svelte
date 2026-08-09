@@ -1750,6 +1750,7 @@
       peerId={activePeerId}
       onclose={() => (showInfo = false)}
       onpeer={(id) => (profilePeerId = id)}
+      onmigrated={openPeerChat}
     />
   {/if}
 </div>
