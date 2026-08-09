@@ -1,12 +1,18 @@
 <script lang="ts">
   import Avatar from './Avatar.svelte';
-  import {loadChatInfo, type ChatInfo} from '$lib/telegram/chats';
+  import {
+    checkChatUsername,
+    loadChatInfo,
+    setChatUsername,
+    type ChatInfo
+  } from '$lib/telegram/chats';
 
   let {
     peerId,
     onclose,
     onmessage,
-    onpeer
+    onpeer,
+    onmigrated
   }: {
     peerId: number;
     onclose: () => void;
@@ -14,21 +20,88 @@
     onmessage?: (peerId: number) => void;
     /** Drill into another profile, e.g. a member of this group. */
     onpeer?: (peerId: number) => void;
+    /** This chat became a supergroup and lives under a new peer id. */
+    onmigrated?: (peerId: number) => void;
   } = $props();
 
   let info = $state<ChatInfo | null>(null);
   let error = $state('');
 
+  let editingLink = $state(false);
+  let link = $state('');
+  let linkBusy = $state(false);
+  let linkError = $state('');
+  let linkFree = $state<boolean | null>(null);
+  let linkTimer: ReturnType<typeof setTimeout> | undefined;
+
   $effect(() => {
     const id = peerId;
     info = null;
     error = '';
+    editingLink = false;
+    linkError = '';
+    linkFree = null;
     loadChatInfo(id)
       .then((loaded) => {
         if(id === peerId) info = loaded;
       })
       .catch((err) => (error = err?.type || err?.message || 'Failed to load info'));
   });
+
+  function startEditingLink() {
+    link = info?.username ?? '';
+    linkError = '';
+    linkFree = null;
+    editingLink = true;
+  }
+
+  function onLinkInput() {
+    clearTimeout(linkTimer);
+    linkError = '';
+    linkFree = null;
+    const wanted = link.trim().replace(/^@/, '');
+    if(wanted.length < 5 || wanted === info?.username) return;
+
+    linkTimer = setTimeout(async () => {
+      try {
+        const free = await checkChatUsername(peerId, wanted);
+        // The field may have moved on while the check was in flight.
+        if(link.trim().replace(/^@/, '') === wanted) linkFree = free;
+      } catch (err: any) {
+        if(link.trim().replace(/^@/, '') === wanted) {
+          linkFree = false;
+          linkError = err?.type || err?.message || 'That link cannot be used';
+        }
+      }
+    }, 400);
+  }
+
+  async function saveLink() {
+    if(linkBusy) return;
+    linkBusy = true;
+    linkError = '';
+
+    try {
+      const newPeerId = await setChatUsername(peerId, link);
+      editingLink = false;
+
+      // Setting a link on a basic group migrates it to a supergroup, which is
+      // a different peer — reopen on the new one rather than showing a stale
+      // profile for a chat that no longer receives messages.
+      const onMoved = onmigrated ?? onpeer;
+      if(newPeerId !== peerId && onMoved) onMoved(newPeerId);
+      else info = await loadChatInfo(peerId);
+    } catch (err: any) {
+      linkError = err?.type || err?.message || 'Failed to save the link';
+    } finally {
+      linkBusy = false;
+    }
+  }
+
+  async function removeLink() {
+    link = '';
+    await saveLink();
+  }
 </script>
 
 <aside class="info">
@@ -60,6 +133,48 @@
           </button>
         {/if}
       </div>
+
+      {#if info.canSetUsername}
+        <section>
+          <p class="label">Public link</p>
+          {#if editingLink}
+            <div class="link-edit">
+              <span class="at">@</span>
+              <input
+                bind:value={link}
+                oninput={onLinkInput}
+                placeholder="link"
+                maxlength="32"
+                spellcheck="false"
+                autocapitalize="none"
+              />
+            </div>
+            {#if linkFree === true}<p class="ok">@{link.trim().replace(/^@/, '')} is available</p>{/if}
+            {#if linkError}<p class="err">{linkError}</p>{/if}
+            {#if info.isGroup && !info.username}
+              <p class="hint">A public group becomes a supergroup.</p>
+            {/if}
+            <div class="link-actions">
+              {#if info.username}
+                <button class="link-btn danger" onclick={removeLink} disabled={linkBusy}>Remove</button>
+              {/if}
+              <button class="link-btn" onclick={() => (editingLink = false)} disabled={linkBusy}>Cancel</button>
+              <button
+                class="link-btn primary"
+                onclick={saveLink}
+                disabled={linkBusy || linkFree === false || link.trim().replace(/^@/, '').length < 5}
+              >
+                {linkBusy ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+          {:else}
+            <div class="link-row">
+              <span class="link-value">{info.username ? `@${info.username}` : 'Private — invite only'}</span>
+              <button class="link-btn" onclick={startEditingLink}>{info.username ? 'Edit' : 'Set link'}</button>
+            </div>
+          {/if}
+        </section>
+      {/if}
 
       {#if info.about}
         <section>
@@ -156,6 +271,99 @@
     margin: 0;
     font-size: 14px;
     white-space: pre-wrap;
+  }
+
+  .link-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .link-value {
+    flex: 1;
+    min-width: 0;
+    font-size: 14px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .link-edit {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+  }
+
+  .link-edit:focus-within {
+    border-color: var(--accent);
+  }
+
+  .at {
+    color: var(--text-dim);
+  }
+
+  .link-edit input {
+    flex: 1;
+    min-width: 0;
+    background: none;
+    border: none;
+    color: inherit;
+    font: inherit;
+    outline: none;
+  }
+
+  .link-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 8px;
+  }
+
+  .link-btn {
+    padding: 6px 12px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    font-size: 13px;
+  }
+
+  .link-btn.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+
+  .link-btn.danger {
+    color: var(--danger);
+  }
+
+  .link-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  .ok,
+  .err,
+  .hint {
+    margin: 6px 0 0;
+    font-size: 12px;
+  }
+
+  .ok {
+    color: var(--accent);
+  }
+
+  .err {
+    color: var(--danger);
+  }
+
+  .hint {
+    color: var(--text-dim);
   }
 
   .member {

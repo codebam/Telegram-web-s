@@ -1635,6 +1635,51 @@ export async function createChannel(
   return -Number(chatId);
 }
 
+/* ---------- public @links ---------- */
+
+/**
+ * Is this @link free for that chat? Only channels and supergroups can be
+ * asked — a basic group has no channel to check against and is upgraded on
+ * save, so it reports free and lets the save surface USERNAME_OCCUPIED.
+ */
+export async function checkChatUsername(peerId: number, username: string): Promise<boolean> {
+  const {managers} = await bootTelegram();
+  const peer = await getPeer(peerId);
+  if(peer?._ !== 'channel') return true;
+  return managers.appChatsManager.checkUsername(peer.id, normalizeUsername(username));
+}
+
+/**
+ * Give a chat a public @link. A basic group has no link of its own, so it is
+ * migrated to a supergroup first — exactly what the official clients do, and
+ * the reason this returns the peer id to use afterwards: migration changes it.
+ */
+export async function setChatUsername(peerId: number, username: string): Promise<number> {
+  const {managers} = await bootTelegram();
+  const peer = await getPeer(peerId);
+  if(!peer) throw new Error('Chat not found');
+
+  let chatId = peer.id;
+  let newPeerId = peerId;
+
+  if(peer._ !== 'channel') {
+    chatId = await managers.appChatsManager.migrateChat(peer.id);
+    newPeerId = -Number(chatId);
+  }
+
+  await managers.appChatsManager.updateUsername(chatId, normalizeUsername(username));
+
+  // The cached peers still carry the old username (and, after a migration, the
+  // old chat entirely); drop them so the next read is the updated chat.
+  rawPeers.delete(peerId);
+  rawPeers.delete(newPeerId);
+  return newPeerId;
+}
+
+function normalizeUsername(username: string) {
+  return username.trim().replace(/^@/, '');
+}
+
 export async function togglePin(peerId: number, filterId = 0): Promise<void> {
   const {managers} = await bootTelegram();
   await managers.appMessagesManager.toggleDialogPin({peerId, filterId});
@@ -1710,6 +1755,8 @@ export type ChatInfo = {
   membersCount: number;
   isChannel: boolean;
   isGroup: boolean;
+  /** Creator or an admin with change_info — may set the public @link. */
+  canSetUsername: boolean;
   members: MemberItem[];
 };
 
@@ -1730,6 +1777,9 @@ export async function loadChatInfo(peerId: number): Promise<ChatInfo> {
     membersCount: peer?.participants_count ?? 0,
     isChannel,
     isGroup,
+    canSetUsername: !isUser && (
+      !!peer?.pFlags?.creator || !!(peer as any)?.admin_rights?.pFlags?.change_info
+    ),
     members: []
   };
 
