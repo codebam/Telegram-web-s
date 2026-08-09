@@ -55,6 +55,10 @@
   let popupAnswered = false;
   /** A message the bot prepared for us to post into the chat, awaiting confirmation. */
   let prepared = $state<PreparedMessage | null>(null);
+  /** True once the page has said anything at all over the bridge. */
+  let sawEvent = $state(false);
+  /** The page loaded nothing and never spoke — most often a frame-ancestors CSP. */
+  let stalled = $state(false);
 
   /** The bot page talks to us with `postMessage(JSON.stringify({eventType, eventData}))`. */
   function send(eventType: string, eventData?: any) {
@@ -357,6 +361,7 @@
     }
 
     if(!payload?.eventType) return;
+    sawEvent = true;
 
     // Every inbound event is logged: when an app stalls, the last line before
     // it stopped is the answer it is waiting for.
@@ -374,6 +379,8 @@
     url = '';
     queryId = '';
     error = '';
+    sawEvent = false;
+    stalled = false;
     title = current.title || current.buttonText || 'Mini app';
     ready = false;
     mainButton = null;
@@ -405,6 +412,20 @@
       prolongWebView(request.peerId, request.botId, queryId).catch(() => {});
     }, 50_000);
     return () => clearInterval(timer);
+  });
+
+  /**
+   * Some mini apps pin `frame-ancestors` to web.telegram.org, so the iframe is
+   * blocked before a single byte runs and the window would otherwise sit blank
+   * forever. The block is invisible to us cross-origin — silence is the only
+   * signal there is.
+   */
+  $effect(() => {
+    if(!url || sawEvent) return;
+    const timer = setTimeout(() => {
+      if(!sawEvent) stalled = true;
+    }, 8000);
+    return () => clearTimeout(timer);
   });
 
   function onKey(event: KeyboardEvent) {
@@ -575,6 +596,18 @@
       </div>
     {/if}
 
+    {#if stalled}
+      <div class="stalled">
+        <p>This app would not load here.</p>
+        <p class="hint">
+          Some mini apps only allow the official Telegram web app to embed them.
+        </p>
+        <button onclick={() => window.open(url, '_blank', 'noopener,noreferrer')}>
+          Open in a new tab
+        </button>
+      </div>
+    {/if}
+
     {#if prepared}
       <div class="popup" role="dialog" aria-modal="true">
         <div class="popup-card">
@@ -720,6 +753,35 @@
   .tg-button:disabled {
     opacity: 0.5;
     cursor: default;
+  }
+
+  .stalled {
+    position: absolute;
+    inset: 44px 0 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 24px;
+    text-align: center;
+    background: var(--bg-solid);
+  }
+
+  .stalled .hint {
+    color: var(--text-dim);
+    font-size: 13px;
+  }
+
+  .stalled button {
+    margin-top: 6px;
+    padding: 10px 16px;
+    border: none;
+    border-radius: 10px;
+    background: var(--accent);
+    color: #fff;
+    font-weight: 600;
+    cursor: pointer;
   }
 
   .popup {
