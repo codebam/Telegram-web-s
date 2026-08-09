@@ -1456,27 +1456,50 @@
                 data-mid={message.mid}
               >{message.text}</p>
             {:else if message.stickerDocId}
-              <div
-                class="sticker-bubble"
-                class:out={message.out}
-                class:highlighted={highlightedMid === message.mid}
-                data-mid={message.mid}
-                use:observeForRead={message.mid}
-              >
-                <Sticker
-                  sticker={{
-                    docId: message.stickerDocId,
-                    kind: message.stickerKind || 'static',
-                    emoji: '',
-                    width: message.media?.width ?? 128,
-                    height: message.media?.height ?? 128
+              <!-- Wrapped in the same .line as a bubble, avatar and all, so a
+                   sticker starts on the same column as the messages around it
+                   instead of hugging the pane edge. -->
+              <div class="line" class:out={message.out}>
+                {#if !message.out}
+                  <button
+                    class="line-avatar"
+                    class:hidden={sameSenderAsPrevious(group)}
+                    onclick={() => (profilePeerId = message.fromId)}
+                    aria-label="View {message.fromTitle}"
+                  >
+                    <Avatar peerId={message.fromId} title={message.fromTitle} size={32} />
+                  </button>
+                {/if}
+                <div
+                  class="sticker-bubble"
+                  class:out={message.out}
+                  class:highlighted={highlightedMid === message.mid}
+                  class:selected={selected.has(message.mid)}
+                  data-mid={message.mid}
+                  use:observeForRead={message.mid}
+                  oncontextmenu={(e) => {
+                    e.preventDefault();
+                    messageMenu = {mid: message.mid, x: e.clientX, y: e.clientY};
                   }}
-                  size={140}
-                />
-                <span class="stamp">
-                  <button class="reply-btn" onclick={() => (replyTo = message)}>Reply</button>
-                  <span class="time">{timeOf(message.date)}</span>
-                </span>
+                  onclick={() => selecting && toggleSelected(message.mid)}
+                  role="presentation"
+                >
+                  <Sticker
+                    sticker={{
+                      docId: message.stickerDocId,
+                      kind: message.stickerKind || 'static',
+                      emoji: '',
+                      width: message.media?.width ?? 128,
+                      height: message.media?.height ?? 128
+                    }}
+                    size={140}
+                  />
+                  <span class="stamp">
+                    <button class="reply-btn" onclick={() => (replyTo = message)}>Reply</button>
+                    <button class="reply-btn" onclick={() => openForward(message)}>Forward</button>
+                    <span class="time">{timeOf(message.date)}</span>
+                  </span>
+                </div>
               </div>
             {:else}
               <div class="line" class:out={message.out}>
@@ -1791,8 +1814,12 @@
       {/if}
       <button onclick={() => { openForward(menuMessage); messageMenu = null; }}>Forward</button>
       <button onclick={() => startSelecting(menuMessage.mid)}>Select</button>
-      {#if menuMessage.editable}
+      <!-- A sticker or a bare media message is editable in the API sense but
+           has no text to edit; deleting it is still fair game. -->
+      {#if menuMessage.editable && menuMessage.text}
         <button onclick={() => { startEdit(menuMessage); messageMenu = null; }}>Edit</button>
+      {/if}
+      {#if menuMessage.editable}
         <button class="danger" onclick={() => { removeMessage(menuMessage); messageMenu = null; }}>Delete</button>
       {/if}
     {/if}
@@ -2055,14 +2082,15 @@
     cursor: pointer;
   }
 
+  /* Inside .line, which is a flex row: horizontal placement is the row's job
+     (justify-content), so this only sets the internal layout. */
   .sticker-bubble {
-    align-self: flex-start;
     display: grid;
     gap: 2px;
+    min-width: 0;
   }
 
   .sticker-bubble.out {
-    align-self: flex-end;
     justify-items: end;
   }
 
@@ -2565,8 +2593,10 @@
     color: var(--danger);
   }
 
-  .bubble.selected {
+  .bubble.selected,
+  .sticker-bubble.selected {
     outline: 2px solid var(--accent);
+    border-radius: 8px;
   }
 
   button.poll-a {
