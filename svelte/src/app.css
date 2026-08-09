@@ -6,6 +6,13 @@
  * outgoing messages, links), --action is reserved for things you can act on —
  * unread counts, the send button, active reactions. Keeping them separate is
  * what stops the interface reading as uniformly "branded".
+ *
+ * The accent marks an outgoing message rather than filling it. A solid violet
+ * bubble wrapped every screenshot in a violet frame and fought the image
+ * inside it; a translucent tint with a lit edge still reads as yours while
+ * leaving the content its own colour. The derived tokens below are declared
+ * once, not per theme — they are relative to --accent, which both themes
+ * share.
  */
 :root {
   --bg: #0e0f1a;
@@ -25,10 +32,19 @@
   --bubble-radius: 16px;
   --blur: 14px;
 
+  /* Outgoing messages and the selected chat row: marked by the accent, never
+     flooded by it. */
+  --bubble-out: color-mix(in srgb, var(--accent) 24%, transparent);
+  --bubble-out-border: color-mix(in srgb, var(--accent) 50%, transparent);
+  /* An accent tint rather than --bg-elevated, which is nearly invisible against
+     a white pane in the light theme. */
+  --row-active: color-mix(in srgb, var(--accent) 12%, transparent);
+  --row-active-rail: var(--accent);
+
   /* The field the panes float over. */
   --field:
-    radial-gradient(120% 90% at 8% 0%, rgba(110, 99, 255, 0.42), transparent 55%),
-    radial-gradient(90% 80% at 95% 110%, rgba(255, 122, 92, 0.34), transparent 55%);
+    radial-gradient(120% 90% at 8% 0%, rgba(110, 99, 255, 0.30), transparent 55%),
+    radial-gradient(90% 80% at 95% 110%, rgba(255, 122, 92, 0.22), transparent 55%);
 
   color-scheme: dark;
 }
@@ -44,8 +60,8 @@
     --text: #0f1222;
     --text-dim: #5b6279;
     --field:
-      radial-gradient(120% 90% at 8% 0%, rgba(110, 99, 255, 0.26), transparent 58%),
-      radial-gradient(90% 80% at 95% 110%, rgba(255, 122, 92, 0.2), transparent 58%);
+      radial-gradient(120% 90% at 8% 0%, rgba(110, 99, 255, 0.20), transparent 58%),
+      radial-gradient(90% 80% at 95% 110%, rgba(255, 122, 92, 0.15), transparent 58%);
     color-scheme: light;
   }
 }
@@ -60,8 +76,8 @@
   --text: #0f1222;
   --text-dim: #5b6279;
   --field:
-    radial-gradient(120% 90% at 8% 0%, rgba(110, 99, 255, 0.26), transparent 58%),
-    radial-gradient(90% 80% at 95% 110%, rgba(255, 122, 92, 0.2), transparent 58%);
+    radial-gradient(120% 90% at 8% 0%, rgba(110, 99, 255, 0.20), transparent 58%),
+    radial-gradient(90% 80% at 95% 110%, rgba(255, 122, 92, 0.15), transparent 58%);
   color-scheme: light;
 }
 
@@ -74,8 +90,8 @@
   --text: #f0f1f8;
   --text-dim: #9ba0bb;
   --field:
-    radial-gradient(120% 90% at 8% 0%, rgba(110, 99, 255, 0.42), transparent 55%),
-    radial-gradient(90% 80% at 95% 110%, rgba(255, 122, 92, 0.34), transparent 55%);
+    radial-gradient(120% 90% at 8% 0%, rgba(110, 99, 255, 0.30), transparent 55%),
+    radial-gradient(90% 80% at 95% 110%, rgba(255, 122, 92, 0.22), transparent 55%);
   color-scheme: dark;
 }
 
