@@ -677,7 +677,7 @@
     font-size: 13px;
   }
 
-  @media (max-width: 720px) {
+  @media (max-width: 860px) {
     .settings {
       position: fixed;
       inset: 0;
