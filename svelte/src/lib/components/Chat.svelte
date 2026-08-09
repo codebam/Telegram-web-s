@@ -2,6 +2,7 @@
   import {onMount, tick} from 'svelte';
 
   import Avatar from './Avatar.svelte';
+  import Glyph from './Glyph.svelte';
   import ChatInfo from './ChatInfo.svelte';
   import FolderEditor from './FolderEditor.svelte';
   import FormattedText from './FormattedText.svelte';
@@ -1395,13 +1396,13 @@
 <div class="shell" class:show-sidebar={showSidebarOnMobile} class:show-chat={!showSidebarOnMobile}>
   <aside>
     <header>
-      <button class="icon-button settings-open" onclick={() => (showSettings = true)} aria-label="Settings">⚙</button>
+      <button class="icon-button settings-open" onclick={() => (showSettings = true)} aria-label="Settings"><Glyph name="settings" /></button>
       {#if activeIsForum && activePeerId !== null}
         <button class="back" onclick={backToChats} aria-label="Back">←</button>
         <span>{dialogs.find((d) => d.peerId === activePeerId)?.title ?? 'Topics'}</span>
       {:else}
         <span>Chats</span>
-        <button class="icon-button new-chat" onclick={openNewChat} aria-label="New group or channel" title="New group or channel">✎</button>
+        <button class="icon-button new-chat" onclick={openNewChat} aria-label="New group or channel" title="New group or channel"><Glyph name="edit" /></button>
       {/if}
     </header>
 
@@ -1544,9 +1545,9 @@
             : presence}
         </span>
         {#if activeIsUser && !activeIsSelf}
-          <button class="icon-button" onclick={placeCall} aria-label="Call">📞</button>
+          <button class="icon-button" onclick={placeCall} aria-label="Call"><Glyph name="call" /></button>
         {/if}
-        <button class="icon-button" onclick={() => (chatSearchOpen = !chatSearchOpen)} aria-label="Search messages">🔍</button>
+        <button class="icon-button" onclick={() => (chatSearchOpen = !chatSearchOpen)} aria-label="Search messages"><Glyph name="search" /></button>
       </header>
 
       {#if chatSearchOpen}
@@ -1870,7 +1871,7 @@
 
       {#if !atBottom}
         <button class="to-bottom" onclick={() => { releasePin(); scrollToBottom(); }} aria-label="Scroll to latest">
-          ↓
+          <Glyph name="down" />
         </button>
       {/if}
 
@@ -1923,7 +1924,7 @@
             onclick={openBotMenuApp}
             title={botMenuButton.text}
             aria-label={botMenuButton.text}
-          >▸</button>
+          ><Glyph name="app" size={20} /></button>
         {/if}
         <button
           type="button"
@@ -1931,14 +1932,14 @@
           onclick={() => (showPicker = !showPicker)}
           aria-label="Emoji, stickers and GIFs"
           disabled={!!editing}
-        >😊</button>
+        ><Glyph name="emoji" size={20} /></button>
         <button
           type="button"
           class="attach"
           onclick={() => fileInput?.click()}
           aria-label="Attach file"
           disabled={!!editing}
-        >📎</button>
+        ><Glyph name="attach" size={20} /></button>
         <input
           class="file"
           type="file"
@@ -1955,7 +1956,7 @@
           onkeydown={onComposerKey}
         ></textarea>
         <button type="submit" disabled={!draft.trim()} aria-label={editing ? 'Save' : 'Send'}>
-          {editing ? '✓' : '↑'}
+          <Glyph name={editing ? 'check' : 'send'} />
         </button>
       </form>
     {/if}
@@ -2190,7 +2191,10 @@
     border: none;
     font-size: 20px;
     cursor: pointer;
-    padding: 0 4px;
+    padding: 4px;
+    display: grid;
+    place-items: center;
+    border-radius: 8px;
   }
 
   .attach:disabled {
@@ -2398,17 +2402,15 @@
     opacity: 1;
   }
 
-  .bubble.out .ticks.read {
-    color: #d6ffee;
-  }
-
   .row-button {
     display: flex;
     gap: 12px;
     width: 100%;
-    padding: 10px 14px;
+    padding: 7px 14px 7px 12px;
     background: none;
+    /* border-left comes after the shorthand, or the reset wipes the rail. */
     border: none;
+    border-left: 2px solid transparent;
     text-align: left;
     cursor: pointer;
     align-items: center;
@@ -2419,11 +2421,11 @@
     background: color-mix(in srgb, var(--text) 6%, transparent);
   }
 
+  /* A rail and a flat fill. The gradient wash this replaces sat on top of the
+     field behind it and the two fought. */
   .row-button.active {
-    background: linear-gradient(100deg,
-      color-mix(in srgb, var(--accent) 70%, transparent),
-      color-mix(in srgb, var(--action) 40%, transparent));
-    color: #fff;
+    background: var(--row-active);
+    border-left-color: var(--row-active-rail);
   }
 
   .topic-glyph {
@@ -2476,11 +2478,6 @@
     flex: none;
   }
 
-  .row-button.active .preview,
-  .row-button.active .time {
-    color: rgba(255, 255, 255, 0.8);
-  }
-
   .badge {
     flex: none;
     min-width: 19px;
@@ -2493,11 +2490,6 @@
     border-radius: 999px;
     padding: 0 6px;
     font-size: 11px;
-  }
-
-  .row-button.active .badge {
-    background: #fff;
-    color: var(--accent);
   }
 
   .folder-badge {
@@ -2585,12 +2577,13 @@
     gap: 6px;
   }
 
+  /* Tinted, not filled — see the note above --bubble-out in app.css. Text stays
+     the normal foreground, so an image or a screenshot keeps its own colour. */
   .bubble.out {
     align-self: flex-end;
     border-radius: var(--bubble-radius) var(--bubble-radius) 5px var(--bubble-radius);
-    background: linear-gradient(120deg, var(--accent), var(--accent-hover));
-    border-color: transparent;
-    color: #fff;
+    background: var(--bubble-out);
+    border-color: var(--bubble-out-border);
   }
 
   .author {
@@ -2609,21 +2602,8 @@
     text-decoration: underline;
   }
 
-  .bubble.out .author {
-    color: rgba(255, 255, 255, 0.9);
-  }
-
-  /* Accent-coloured children (mentions, links) sit on the accent gradient in an
-     outgoing bubble, which makes them the same colour as their background.
-     They inherit the bubble's own foreground instead. */
-  .bubble.out :global(.mention),
-  .bubble.out :global(a) {
-    color: #fff;
-  }
-
-  .bubble.out :global(a) {
-    text-decoration-color: rgba(255, 255, 255, 0.65);
-  }
+  /* Links and mentions read normally now that the bubble is a tint rather than
+     a slab of the accent they are coloured with. */
 
   .reply-quote {
     display: grid;
@@ -2804,6 +2784,14 @@
     color: inherit;
     cursor: pointer;
     font-size: 15px;
+    display: grid;
+    place-items: center;
+    padding: 4px;
+    border-radius: 8px;
+  }
+
+  .icon-button:hover {
+    background: color-mix(in srgb, var(--text) 8%, transparent);
   }
 
   .results {
