@@ -193,7 +193,7 @@
   }
 
   /* Phones have no room for a third column — show it as a full-screen sheet. */
-  @media (max-width: 720px) {
+  @media (max-width: 860px) {
     .info {
       position: fixed;
       inset: 0;

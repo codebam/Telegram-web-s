@@ -343,7 +343,7 @@
     justify-self: center;
   }
 
-  @media (max-width: 720px) {
+  @media (max-width: 860px) {
     .prev {
       left: 4px;
     }

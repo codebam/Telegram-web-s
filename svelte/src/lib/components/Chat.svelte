@@ -9,6 +9,7 @@
   import Media from './Media.svelte';
   import CallScreen from './CallScreen.svelte';
   import MiniApp from './MiniApp.svelte';
+  import NewChat from './NewChat.svelte';
   import PeerPicker from './PeerPicker.svelte';
   import SendFiles from './SendFiles.svelte';
   import Settings from './Settings.svelte';
@@ -133,6 +134,7 @@
   let editingFolder = $state<FolderItem | null>(null);
   let allDialogs = $state<DialogItem[]>([]);
   let folderEditorOpen = $state(false);
+  let newChatOpen = $state(false);
   let menuFor = $state<DialogItem | null>(null);
   let showInfo = $state(false);
   /** Profile being viewed from a message sender or member list, if any. */
@@ -423,6 +425,28 @@
     // The editor picks from every chat, not just the folder currently shown.
     allDialogs = await loadDialogs(100, 0);
     folderEditorOpen = true;
+  }
+
+  async function openNewChat() {
+    // Members are picked from every chat, not just the folder currently shown.
+    allDialogs = await loadDialogs(100, 0);
+    newChatOpen = true;
+  }
+
+  async function onChatCreated(peerId: number) {
+    newChatOpen = false;
+    query = '';
+    activeFolder = 0;
+
+    try {
+      dialogs = await loadDialogs(40, 0);
+    } catch (err: any) {
+      error = errorOf(err, 'Failed to reload chats');
+    }
+
+    // The dialog may not have landed in the list yet; openPeerChat works off
+    // the peer itself, so it opens either way.
+    await openPeerChat(peerId);
   }
 
   async function onFolderSaved() {
@@ -1214,6 +1238,7 @@
         <span>{dialogs.find((d) => d.peerId === activePeerId)?.title ?? 'Topics'}</span>
       {:else}
         <span>Chats</span>
+        <button class="icon-button new-chat" onclick={openNewChat} aria-label="New group or channel" title="New group or channel">✎</button>
       {/if}
     </header>
 
@@ -1779,6 +1804,14 @@
     dialogs={allDialogs}
     onpick={doForward}
     onclose={() => (forwarding = null)}
+  />
+{/if}
+
+{#if newChatOpen}
+  <NewChat
+    dialogs={allDialogs}
+    onclose={() => (newChatOpen = false)}
+    oncreated={onChatCreated}
   />
 {/if}
 
@@ -2408,6 +2441,11 @@
     font-size: 16px;
   }
 
+  .new-chat {
+    margin-left: auto;
+    font-size: 16px;
+  }
+
   .inline-results {
     max-height: 200px;
     overflow-y: auto;
@@ -2835,7 +2873,7 @@
   }
 
   /* Phones: one pane at a time, driven by .show-sidebar / .show-chat. */
-  @media (max-width: 720px) {
+  @media (max-width: 860px) {
     .shell {
       grid-template-columns: 1fr;
       gap: 0;

@@ -1594,6 +1594,47 @@ export async function onFoldersUpdate(callback: () => void): Promise<() => void>
   };
 }
 
+/* ---------- creating groups and channels ---------- */
+
+/**
+ * A plain group — `messages.createChat`, the same basic chat the official
+ * clients create. Telegram upgrades it to a megagroup on its own once a
+ * supergroup-only feature is used, so there is nothing to choose here.
+ * Returns the new peer id.
+ */
+export async function createGroup(title: string, memberPeerIds: number[]): Promise<number> {
+  const {managers} = await bootTelegram();
+  // Only users can seed a group; peer ids of chats are negative.
+  const userIds = memberPeerIds.filter((peerId) => peerId > 0);
+  const {chatId} = await managers.appChatsManager.createChat(title, userIds);
+  return -Number(chatId);
+}
+
+/**
+ * A broadcast channel, optionally seeded with members. Returns the new peer id.
+ */
+export async function createChannel(
+  title: string,
+  about: string,
+  memberPeerIds: number[]
+): Promise<number> {
+  const {managers} = await bootTelegram();
+  const chatId = await managers.appChatsManager.createChannel({
+    title,
+    about,
+    broadcast: true
+  });
+
+  const userIds = memberPeerIds.filter((peerId) => peerId > 0);
+  if(userIds.length) {
+    // Non-fatal: the channel exists either way, and a member can be blocked by
+    // their privacy settings from being added by anyone.
+    await managers.appChatsManager.inviteToChannel(chatId, userIds).catch(() => {});
+  }
+
+  return -Number(chatId);
+}
+
 export async function togglePin(peerId: number, filterId = 0): Promise<void> {
   const {managers} = await bootTelegram();
   await managers.appMessagesManager.toggleDialogPin({peerId, filterId});
