@@ -33,7 +33,7 @@ pnpm install
 pnpm start:svelte      # Web S dev server on :8081   <- the usual one
 pnpm build:svelte      # -> svelte/build/
 pnpm preview:svelte
-pnpm deploy:svelte     # build + wrangler pages deploy -> project tweb-svelte
+pnpm deploy:svelte     # manual wrangler push — an escape hatch, NOT how we deploy
 
 pnpm start             # tweb (Solid) dev server on :8080
 pnpm build             # typecheck + changelog + tweb build -> dist/
@@ -44,10 +44,23 @@ pnpm test              # Vitest
 pnpm test:lottie       # Playwright specs in e2e/
 ```
 
-Deployment is **manual**: `pnpm deploy:svelte` pushes `svelte/build` to
-Cloudflare Pages with wrangler. Nothing deploys on push, so a merged commit is
-not a released commit. Both apps read `.env` at the repo root (`VITE_API_ID`,
-`VITE_API_HASH`, `VITE_MTPROTO_*`).
+Deployment is **CI**: the Cloudflare Pages GitHub integration builds `svelte/`
+on every push to `master` and publishes it to https://telegram.codebam.ca. It is
+configured in the Cloudflare dashboard, not in this repo — there is no workflow
+file for it (`.github/workflows/production-image.yml` is upstream tweb's
+tag-triggered Docker build and has nothing to do with the site). Pushing to
+master ships. `pnpm deploy:svelte` exists as a manual wrangler escape hatch;
+prefer the pipeline.
+
+Anything the build reads from its environment is compiled into a **public**
+bundle. Pages clones with a credentialed origin
+(`https://x-access-token:ghs_…@github.com/…`), so never emit
+`remote.origin.url`, a token, or any build env var into the output without
+sanitising it first — see the `GIT_REPO_URL` derivation in
+`svelte/vite.config.ts`.
+
+Both apps read `.env` at the repo root (`VITE_API_ID`, `VITE_API_HASH`,
+`VITE_MTPROTO_*`).
 
 Debug query params (both apps, they share the stack): `?test=1` (test DCs),
 `?debug=1` (verbose logging), `?noSharedWorker=1`.
@@ -55,7 +68,8 @@ Debug query params (both apps, they share the stack): `?test=1` (test DCs),
 The running build stamps its own commit into the bundle (see
 `svelte/src/lib/buildInfo.ts`): the short SHA sits in the corner of the empty
 chat pane and at the bottom of the sign-in card, linking to that commit on
-GitHub. It is the quickest way to tell whether a deploy actually happened.
+GitHub. It is the quickest way to tell whether a deploy landed — compare it
+against `git rev-parse --short origin/master`.
 
 ### tweb preview
 
@@ -283,8 +297,11 @@ import {Message, Chat, User, InputPeer} from '@layer';
 - **Do not fix a user-facing bug in `src/` without checking `svelte/` first.**
   The two apps have separate UIs for the same features (pickers, chat, media);
   a fix in the Solid client does not reach the deployed app.
-- Do not assume a push is live — Cloudflare Pages is updated by
-  `pnpm deploy:svelte`, by hand.
+- Do not hand-deploy with `pnpm deploy:svelte` when the intent is to ship —
+  pushing to master is the deploy. A manual wrangler push puts the site on a
+  build nobody can trace back to a commit.
+- Never let a build-environment value reach the bundle unsanitised — the CI
+  checkout's git remote carries an access token, and the bundle is public.
 - Do not add `eslint-disable` / `oxlint-disable` without a reason
 - Never hand-edit or run `format-lang` to regenerate
   `src/scripts/out/langPack.strings` — it is generated from `lang.ts` /
