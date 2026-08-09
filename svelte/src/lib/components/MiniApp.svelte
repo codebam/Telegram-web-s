@@ -8,18 +8,24 @@
     readDeviceStorage,
     writeDeviceStorage,
     clearDeviceStorage,
+    getPreparedMessage,
+    sendPreparedMessage,
     themeParams,
-    type MiniAppRequest
+    type MiniAppRequest,
+    type PreparedMessage
   } from '$lib/telegram/miniApps';
 
   let {
     request,
     onclose,
-    onswitchinline
+    onswitchinline,
+    onlink
   }: {
     request: MiniAppRequest;
     onclose: () => void;
     onswitchinline?: (query: string) => void;
+    /** Returns true when the host opened the link itself (another mini app). */
+    onlink?: (url: string) => boolean;
   } = $props();
 
   type PopupButton = {type: string; text: string; id: string};
@@ -46,6 +52,8 @@
   let needConfirmation = false;
   let popup = $state<{title: string; message: string; buttons: PopupButton[]} | null>(null);
   let popupAnswered = false;
+  /** A message the bot prepared for us to post into the chat, awaiting confirmation. */
+  let prepared = $state<PreparedMessage | null>(null);
 
   /** The bot page talks to us with `postMessage(JSON.stringify({eventType, eventData}))`. */
   function send(eventType: string, eventData?: any) {
@@ -77,7 +85,28 @@
   }
 
   function openExternal(target: string) {
+    // A t.me link may itself point at a mini app; let the host take it first.
+    if(onlink?.(target)) return;
     window.open(target, '_blank', 'noopener,noreferrer');
+  }
+
+  async function confirmPrepared() {
+    const message = prepared;
+    if(!message) return;
+    prepared = null;
+
+    try {
+      await sendPreparedMessage(request.peerId, request.botId, message.queryAndResultId);
+      send('prepared_message_sent', undefined);
+      onclose();
+    } catch(err: any) {
+      send('prepared_message_failed', {error: err?.type || err?.message || 'UNKNOWN_ERROR'});
+    }
+  }
+
+  function declinePrepared() {
+    prepared = null;
+    send('prepared_message_failed', {error: 'USER_DECLINED'});
   }
 
   async function handle(eventType: string, data: any) {
@@ -284,6 +313,21 @@
         send('fullscreen_changed', {is_fullscreen: false});
         break;
 
+      case 'web_app_send_prepared_message':
+        try {
+          prepared = await getPreparedMessage(request.botId, data?.id);
+        } catch(err: any) {
+          send('prepared_message_failed', {error: err?.type || err?.message || 'MESSAGE_EXPIRED'});
+        }
+        break;
+
+      case 'web_app_request_chat':
+        send('requested_chat_failed', {req_id: data?.req_id, error: 'UNSUPPORTED'});
+        break;
+
+      case 'web_app_verify_age':
+        break;
+
       case 'web_app_set_header_color':
       case 'web_app_set_background_color':
       case 'web_app_set_bottom_bar_color':
@@ -292,6 +336,11 @@
       case 'web_app_stop_gyroscope':
       case 'web_app_stop_device_orientation':
         break;
+
+      default:
+        // An app waiting on an answer we never send just stalls, so make the
+        // gap visible rather than silent.
+        console.warn('[mini app] unhandled event', eventType, data);
     }
   }
 
@@ -425,6 +474,19 @@
             {mainButton.is_progress_visible ? '…' : mainButton.text}
           </button>
         {/if}
+      </div>
+    {/if}
+
+    {#if prepared}
+      <div class="popup" role="dialog" aria-modal="true">
+        <div class="popup-card">
+          <strong>Send this message?</strong>
+          <p>{prepared.title}{prepared.description ? ` — ${prepared.description}` : ''}</p>
+          <div class="popup-buttons">
+            <button onclick={declinePrepared}>Cancel</button>
+            <button onclick={confirmPrepared}>Send</button>
+          </div>
+        </div>
       </div>
     {/if}
 
