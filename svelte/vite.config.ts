@@ -69,11 +69,24 @@ const git = (command: string) => {
 // CF_PAGES_* are the Cloudflare Pages build environment's own view of the
 // deployment, and they are the fallback for a CI checkout with no usable .git.
 const GIT_COMMIT = git('git rev-parse HEAD') || process.env.CF_PAGES_COMMIT_SHA || '';
+
 // git@github.com:owner/repo.git | https://github.com/owner/repo.git -> https://github.com/owner/repo
-const GIT_REPO_URL = (git('git config --get remote.origin.url') || process.env.REPO_URL || '')
-.replace(/^git@([^:]+):/, 'https://$1/')
-.replace(/^ssh:\/\/git@/, 'https://')
-.replace(/\.git$/, '');
+//
+// The credential strip is not cosmetic: a CI checkout's origin carries the
+// token it cloned with (Cloudflare Pages uses
+// https://x-access-token:ghs_…@github.com/…), and this URL is compiled into a
+// bundle served to the public. Never emit the userinfo half of a remote.
+const GIT_REPO_URL = (() => {
+  const remote = (git('git config --get remote.origin.url') || process.env.REPO_URL || '')
+  .replace(/^git@([^:]+):/, 'https://$1/')
+  .replace(/^ssh:\/\/git@/, 'https://')
+  .replace(/^(https?:\/\/)[^/@]*@/, '$1')
+  .replace(/\.git$/, '');
+
+  // Whatever survived must be a bare https origin with no credentials left in
+  // it; anything else is dropped rather than shipped.
+  return /^https:\/\/[^/@\s]+\/[^@\s]+$/.test(remote) ? remote : '';
+})();
 
 export default defineConfig(({command}) => ({
   define: {
