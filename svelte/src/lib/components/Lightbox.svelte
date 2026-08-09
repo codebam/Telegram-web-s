@@ -21,8 +21,10 @@
     const message = current;
     if(!message) return;
     url = null;
-    // Full resolution here, not the bubble-sized thumb.
-    loadMediaUrl(peerId, message.mid, 1600).then((resolved) => {
+    // Full resolution here, not the bubble-sized thumb, and the real file for
+    // anything that plays.
+    const playable = message.media?.kind === 'video' || message.media?.kind === 'gif';
+    loadMediaUrl(peerId, message.mid, 1600, playable).then((resolved) => {
       if(current?.mid === message.mid) url = resolved;
     });
   });
@@ -45,6 +47,11 @@
   <div class="stage" onclick={(e) => e.stopPropagation()} role="presentation">
     {#if !url}
       <p class="muted">Loading…</p>
+    {:else if current?.media?.kind === 'gif'}
+      <!-- A GIF is a silent looping mp4, so it needs a <video> here just as it
+           does in the bubble — an <img> pointed at it renders nothing. -->
+      <!-- svelte-ignore a11y_media_has_caption -->
+      <video src={url} autoplay loop muted playsinline></video>
     {:else if current?.media?.kind === 'video'}
       <!-- svelte-ignore a11y_media_has_caption -->
       <video src={url} controls autoplay></video>
