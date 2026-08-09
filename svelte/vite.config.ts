@@ -66,9 +66,11 @@ const git = (command: string) => {
   }
 };
 
-const GIT_COMMIT = git('git rev-parse HEAD');
+// CF_PAGES_* are the Cloudflare Pages build environment's own view of the
+// deployment, and they are the fallback for a CI checkout with no usable .git.
+const GIT_COMMIT = git('git rev-parse HEAD') || process.env.CF_PAGES_COMMIT_SHA || '';
 // git@github.com:owner/repo.git | https://github.com/owner/repo.git -> https://github.com/owner/repo
-const GIT_REPO_URL = git('git config --get remote.origin.url')
+const GIT_REPO_URL = (git('git config --get remote.origin.url') || process.env.REPO_URL || '')
 .replace(/^git@([^:]+):/, 'https://$1/')
 .replace(/^ssh:\/\/git@/, 'https://')
 .replace(/\.git$/, '');
