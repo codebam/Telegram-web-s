@@ -71,7 +71,12 @@
     type MessageItem,
     type TopicItem
   } from '$lib/telegram/chats';
-  import {getBotMenuButton, type MiniAppRequest} from '$lib/telegram/miniApps';
+  import {
+    getBotMenuButton,
+    openBotAppLink,
+    parseMiniAppLink,
+    type MiniAppRequest
+  } from '$lib/telegram/miniApps';
   import {
     notifyMessage,
     setActiveNotificationPeer
@@ -989,6 +994,30 @@
 
   /* ---------- bot keyboards and mini apps ---------- */
 
+  /**
+   * A t.me link can point at a mini app rather than a chat — that is how a
+   * game's "join" button is sent. Those open in the app; anything else is an
+   * ordinary link.
+   */
+  function openLink(url: string): boolean {
+    const link = parseMiniAppLink(url);
+    if (!link) return false;
+
+    const peerId = activePeerId;
+    openBotAppLink(link, peerId ?? 0)
+      .then((request) => {
+        if (activePeerId === peerId) miniApp = request;
+      })
+      .catch(() => window.open(url, '_blank', 'noopener,noreferrer'));
+
+    return true;
+  }
+
+  /** Same rule, for places that must open the link themselves when it is not an app. */
+  function followLink(url: string) {
+    if (!openLink(url)) window.open(url, '_blank', 'noopener,noreferrer');
+  }
+
   function openBotMenuApp() {
     if (activePeerId === null || !botMenuButton) return;
 
@@ -1009,7 +1038,7 @@
 
     switch (button.kind) {
       case 'url':
-        if (button.url) window.open(button.url, '_blank', 'noopener,noreferrer');
+        if (button.url) followLink(button.url);
         break;
 
       case 'webview':
@@ -1036,7 +1065,7 @@
       case 'callback':
         try {
           const answer = await pressCallbackButton(activePeerId, message.mid, button.row, button.column);
-          if (answer.url) window.open(answer.url, '_blank', 'noopener,noreferrer');
+          if (answer.url) followLink(answer.url);
           else if (answer.message) error = answer.message;
         } catch (err: any) {
           error = errorOf(err, 'The bot did not answer');
@@ -1701,11 +1730,19 @@
                 {#if message.rich}
                   <RichMessage blocks={message.rich} onmention={openMention} />
                 {:else if message.parts.length}
-                  <FormattedText parts={message.parts} onmention={openMention} />
+                  <FormattedText parts={message.parts} onmention={openMention} onlink={openLink} />
                 {/if}
 
                 {#if message.webpage}
-                  <a class="webpage" href={message.webpage.url} target="_blank" rel="noopener noreferrer">
+                  <a
+                    class="webpage"
+                    href={message.webpage.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onclick={(e) => {
+                      if (openLink(message.webpage!.url)) e.preventDefault();
+                    }}
+                  >
                     {#if message.webpage.siteName}
                       <span class="site">{message.webpage.siteName}</span>
                     {/if}
@@ -1972,6 +2009,7 @@
   <MiniApp
     request={miniApp}
     onclose={() => (miniApp = null)}
+    onlink={openLink}
     onswitchinline={async (query) => {
       draft = `@${await botUsername(miniApp?.botId ?? 0)} ${query}`.trimEnd();
       onDraftInput();

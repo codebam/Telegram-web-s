@@ -18,6 +18,11 @@
     markdown?: boolean;
     /** Called with a @username or a bare user id when a mention is clicked. */
     onmention?: (mention: string, kind: 'username' | 'userId') => void;
+    /**
+     * Given a first chance at a link. Returning true means it was handled in
+     * the app — a t.me mini app link, say — and the browser should not follow it.
+     */
+    onlink?: (url: string) => boolean;
   } = $props();
 
   // Spoilers stay hidden until clicked, keyed by run index.
@@ -58,7 +63,14 @@
         {part.text}
       </button>
     {:else if part.url}
-      <a href={part.url} target="_blank" rel="noopener noreferrer">{part.text}</a>
+      <a
+        href={part.url}
+        target="_blank"
+        rel="noopener noreferrer"
+        onclick={(e) => {
+          if (onlink?.(part.url!)) e.preventDefault();
+        }}
+      >{part.text}</a>
     {:else if part.mention && part.mentionKind !== 'tag' && onmention}
       <button
         class="mention"

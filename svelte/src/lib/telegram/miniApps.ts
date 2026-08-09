@@ -24,6 +24,8 @@ export type MiniAppRequest = {
   fromAttachMenu?: boolean;
   /** messages.requestMainWebView — the bot's "main" app. */
   main?: boolean;
+  /** Key into the resolved-app cache, set by `openBotAppLink`. */
+  appKey?: string;
 };
 
 export type MiniAppSession = {
@@ -105,6 +107,7 @@ export async function requestWebView(request: MiniAppRequest): Promise<MiniAppSe
   const {managers} = await bootTelegram();
 
   const result: any = await managers.appAttachMenuBotsManager.requestWebView({
+    app: request.appKey ? botApps.get(request.appKey) : undefined,
     botId: request.botId,
     peerId: request.peerId,
     url: request.url,
@@ -160,6 +163,138 @@ export async function invokeWebViewCustomMethod(
   } catch(err: any) {
     return {error: err?.type || err?.message || 'UNKNOWN_ERROR'};
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* t.me mini app links                                                 */
+/* ------------------------------------------------------------------ */
+
+export type MiniAppLink = {
+  domain: string;
+  /** '' for the bot's main app (`t.me/bot?startapp=…`). */
+  appName: string;
+  startParam: string;
+};
+
+/** Raw `botApp` objects, kept out of component state so they stay cloneable. */
+const botApps = new Map<string, any>();
+
+const TME_HOSTS = new Set(['t.me', 'telegram.me', 'telegram.dog', 'www.t.me']);
+
+/**
+ * Recognises the t.me links that point at a mini app rather than a chat:
+ * `t.me/bot/appname?startapp=…` and `t.me/bot?startapp=…`. Everything else —
+ * plain profiles, invite links, message links — returns null and is left to
+ * open as an ordinary URL.
+ */
+export function parseMiniAppLink(raw: string): MiniAppLink | null {
+  let url: URL;
+  try {
+    url = new URL(raw, 'https://t.me');
+  } catch(err) {
+    return null;
+  }
+
+  if(!TME_HOSTS.has(url.hostname)) return null;
+
+  const parts = url.pathname.split('/').filter(Boolean);
+  const domain = parts[0];
+  if(!domain || !/^[a-zA-Z][\w\d_]{2,32}$/.test(domain)) return null;
+
+  const startParam = url.searchParams.get('startapp');
+  const appName = parts[1] ?? '';
+
+  // A numeric second segment is a message id, not an app short name.
+  if(appName && /^[a-zA-Z][\w\d_]{2,32}$/.test(appName)) {
+    return {domain, appName, startParam: startParam ?? ''};
+  }
+
+  if(parts.length === 1 && startParam !== null) {
+    return {domain, appName: '', startParam};
+  }
+
+  return null;
+}
+
+/** Resolves a mini app link into a request the host component can open. */
+export async function openBotAppLink(link: MiniAppLink, peerId: number): Promise<MiniAppRequest> {
+  const {managers} = await bootTelegram();
+
+  const user: any = await managers.appUsersManager.resolveUserByUsername(link.domain);
+  const botId = Number(user?.id ?? 0);
+  if(!botId) throw new Error('BOT_INVALID');
+
+  if(!link.appName) {
+    return {
+      botId,
+      peerId,
+      main: true,
+      startParam: link.startParam,
+      title: user.first_name || link.domain
+    };
+  }
+
+  const messagesBotApp: any = await managers.appAttachMenuBotsManager.getBotApp(botId, link.appName);
+  const app = messagesBotApp?.app;
+  if(!app) throw new Error('BOT_APP_INVALID');
+
+  const appKey = `${botId}_${link.appName}`;
+  botApps.set(appKey, app);
+
+  return {
+    botId,
+    peerId,
+    appKey,
+    startParam: link.startParam,
+    title: app.title || link.appName
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Prepared messages                                                   */
+/* ------------------------------------------------------------------ */
+
+export type PreparedMessage = {
+  queryAndResultId: string;
+  title: string;
+  description: string;
+};
+
+/**
+ * The inline result behind a prepared message, kept here rather than handed to
+ * the component — it goes straight back to the worker when sending, and a
+ * `$state` proxy would not survive the structured clone.
+ */
+const preparedResults = new Map<string, any>();
+
+/** `web_app_send_prepared_message` — the bot saved a message for us to share. */
+export async function getPreparedMessage(botId: number, id: string): Promise<PreparedMessage> {
+  const {managers} = await bootTelegram();
+
+  const prepared: any = await managers.appBotsManager.getPreparedMessage(botId, id);
+  const result = prepared?.result;
+  if(!result) throw new Error('MESSAGE_EXPIRED');
+
+  const queryAndResultId = `${prepared.query_id}_${result.id}`;
+  preparedResults.set(queryAndResultId, result);
+
+  return {
+    queryAndResultId,
+    title: result.title || result.send_message?.message?.slice(0, 60) || 'Message',
+    description: result.description || ''
+  };
+}
+
+export async function sendPreparedMessage(
+  peerId: number,
+  botId: number,
+  queryAndResultId: string
+): Promise<void> {
+  const {managers} = await bootTelegram();
+  await managers.appInlineBotsManager.sendInlineResult(peerId, botId, queryAndResultId, {
+    inlineResult: preparedResults.get(queryAndResultId),
+    clearDraft: true
+  } as any);
 }
 
 /* ------------------------------------------------------------------ */
