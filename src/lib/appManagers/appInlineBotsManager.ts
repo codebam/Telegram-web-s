@@ -278,12 +278,19 @@ export class AppInlineBotsManager extends AppManager {
       options.replyMarkup = inlineResult.send_message.reply_markup;
     }
 
-    if(inlineResult.send_message._ === 'botInlineMessageText') {
+    // A media web page result is a text message that carries the bot's own
+    // link preview. Sending is identical: viaBotId makes sendText post
+    // messages.sendInlineBotResult, and the server attaches the preview and
+    // the result's keyboard. Without this it fell through the switch below
+    // with no media and was dropped in silence.
+    const inlineSendMessage = inlineResult.send_message;
+    if(inlineSendMessage._ === 'botInlineMessageText' || inlineSendMessage._ === 'botInlineMessageMediaWebPage') {
       this.appMessagesManager.sendText({
         ...options,
         peerId,
-        text: inlineResult.send_message.message,
-        entities: inlineResult.send_message.entities
+        text: inlineSendMessage.message,
+        entities: inlineSendMessage.entities,
+        invertMedia: inlineSendMessage.pFlags.invert_media
       });
     } else {
       let caption = '';
