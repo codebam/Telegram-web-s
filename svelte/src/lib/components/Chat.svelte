@@ -16,6 +16,7 @@
   import Picker from './Picker.svelte';
   import RichMessage from './RichMessage.svelte';
   import Sticker from './Sticker.svelte';
+  import {GIT_COMMIT, GIT_COMMIT_SHORT, GIT_COMMIT_URL} from '$lib/buildInfo';
   import {
     availableReactions,
     deleteMessage,
@@ -1332,6 +1333,17 @@
     {#if activePeerId === null || (activeIsForum && !topicOpen)}
       <div class="empty">
         <p class="muted">{activeIsForum ? 'Select a topic' : 'Select a chat'}</p>
+        {#if GIT_COMMIT_URL}
+          <a
+            class="build-commit"
+            href={GIT_COMMIT_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Built from {GIT_COMMIT}"
+          >
+            {GIT_COMMIT_SHORT}
+          </a>
+        {/if}
       </div>
     {:else}
       <header>
@@ -2220,6 +2232,27 @@
     display: grid;
     place-items: center;
     height: 100%;
+  }
+
+  /* Which commit the running bundle came from — only while no chat is open, so
+     it never sits on top of a conversation. */
+  .empty .build-commit {
+    position: absolute;
+    right: 12px;
+    bottom: 10px;
+    padding: 2px 6px;
+    border-radius: 8px;
+    background: var(--bg-elevated);
+    color: var(--text-dim);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    text-decoration: none;
+    opacity: 0.7;
+    transition: opacity 0.15s;
+  }
+
+  .empty .build-commit:hover {
+    opacity: 1;
   }
 
   .messages {
