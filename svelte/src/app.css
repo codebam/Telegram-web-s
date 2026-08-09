@@ -7,6 +7,14 @@
  * unread counts, the send button, active reactions. Keeping them separate is
  * what stops the interface reading as uniformly "branded".
  *
+ * --pane is the floating surface; --bg-elevated is everything small that sits
+ * on it (chips, the search field, hover). They were one token, which is what
+ * made the light theme read as a white filter over the whole app: a sheet of
+ * 88% white, with more white stacked on top of it, over a ground barely
+ * darker than either. In light the pane is now the only white and the ground
+ * carries real colour; in dark, where a white tint on a dark ground was
+ * always doing the right thing, nothing changes.
+ *
  * The accent marks an outgoing message rather than filling it. A solid violet
  * bubble wrapped every screenshot in a violet frame and fought the image
  * inside it; a translucent tint with a lit edge still reads as yours while
@@ -16,6 +24,7 @@
  */
 :root {
   --bg: #0e0f1a;
+  --pane: rgba(255, 255, 255, 0.055);
   --bg-elevated: rgba(255, 255, 255, 0.055);
   --bg-solid: #14161f;
   --bubble-in: rgba(255, 255, 255, 0.08);
@@ -52,37 +61,40 @@
 /* System preference (theme mode "system" leaves data-theme unset). */
 @media (prefers-color-scheme: light) {
   :root:not([data-theme]) {
-    --bg: #e4e7f4;
-    --bg-elevated: rgba(255, 255, 255, 0.88);
-    --bg-solid: #ffffff;
-    --bubble-in: #ffffff;
-    --border: rgba(19, 22, 40, 0.13);
+    --bg: #a9b5dc;
+    --pane: rgba(255, 255, 255, 0.46);
+    --bg-elevated: rgba(19, 22, 40, 0.06);
+    --bg-solid: #f6f7fc;
+    --bubble-in: rgba(255, 255, 255, 0.72);
+    --border: rgba(19, 22, 40, 0.15);
     --text: #0f1222;
-    --text-dim: #5b6279;
+    --text-dim: #545b73;
     --field:
-      radial-gradient(120% 90% at 8% 0%, rgba(110, 99, 255, 0.20), transparent 58%),
-      radial-gradient(90% 80% at 95% 110%, rgba(255, 122, 92, 0.15), transparent 58%);
+      radial-gradient(120% 90% at 8% 0%, rgba(110, 99, 255, 0.34), transparent 58%),
+      radial-gradient(90% 80% at 95% 110%, rgba(255, 122, 92, 0.24), transparent 58%);
     color-scheme: light;
   }
 }
 
 /* Explicit choices from Settings → Appearance win over the media query. */
 :root[data-theme='light'] {
-  --bg: #e4e7f4;
-  --bg-elevated: rgba(255, 255, 255, 0.88);
-  --bg-solid: #ffffff;
-  --bubble-in: #ffffff;
-  --border: rgba(19, 22, 40, 0.13);
+  --bg: #a9b5dc;
+  --pane: rgba(255, 255, 255, 0.46);
+  --bg-elevated: rgba(19, 22, 40, 0.06);
+  --bg-solid: #f6f7fc;
+  --bubble-in: rgba(255, 255, 255, 0.72);
+  --border: rgba(19, 22, 40, 0.15);
   --text: #0f1222;
-  --text-dim: #5b6279;
+  --text-dim: #545b73;
   --field:
-    radial-gradient(120% 90% at 8% 0%, rgba(110, 99, 255, 0.20), transparent 58%),
-    radial-gradient(90% 80% at 95% 110%, rgba(255, 122, 92, 0.15), transparent 58%);
+    radial-gradient(120% 90% at 8% 0%, rgba(110, 99, 255, 0.34), transparent 58%),
+    radial-gradient(90% 80% at 95% 110%, rgba(255, 122, 92, 0.24), transparent 58%);
   color-scheme: light;
 }
 
 :root[data-theme='dark'] {
   --bg: #0e0f1a;
+  --pane: rgba(255, 255, 255, 0.055);
   --bg-elevated: rgba(255, 255, 255, 0.055);
   --bg-solid: #14161f;
   --bubble-in: rgba(255, 255, 255, 0.08);
@@ -172,6 +184,7 @@ button {
 /* ------------------------------------------------------------------ */
 :root[data-density='console'] {
   --bubble-in: transparent;
+  --pane: var(--bg-solid);
   --pane-radius: 6px;
   --bubble-radius: 4px;
   --blur: 0px;

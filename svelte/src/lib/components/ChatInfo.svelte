@@ -202,7 +202,7 @@
   .info {
     width: 320px;
     flex: none;
-    background: var(--bg-elevated);
+    background: var(--pane);
     border: 1px solid var(--border);
     border-radius: var(--pane-radius);
     backdrop-filter: blur(var(--blur));
