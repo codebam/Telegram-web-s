@@ -3087,13 +3087,21 @@
     bottom: 84px;
     width: 42px;
     height: 42px;
+    padding: 0;
+    /* The glyph is a block-level SVG; without this it sits wherever the
+       button's text baseline happens to fall, which is not the middle. */
+    display: grid;
+    place-items: center;
     border-radius: 50%;
     border: 1px solid var(--border);
-    background: var(--bg-elevated);
+    /* Solid, not the elevated tint: it floats over the conversation and has to
+       stay readable against whatever is behind it. */
+    background: var(--bg-solid);
     color: var(--text);
     font-size: 18px;
     cursor: pointer;
     z-index: 10;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22);
   }
 
   .unread-divider {

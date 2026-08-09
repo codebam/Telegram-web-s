@@ -1317,6 +1317,39 @@ export async function loadMediaUrl(
   }
 }
 
+/**
+ * Saves an attachment to disk.
+ *
+ * `loadMediaUrl` deliberately refuses to resolve a plain document — a chat
+ * full of attachments would download every one of them just to render the
+ * bubbles — so a file has no URL to hang off an `<a download>` and had no way
+ * to be saved at all. Fetching it is an explicit act, on click.
+ *
+ * tweb's `downloadToDisc` (its spelling) streams through the service worker,
+ * so a large file never has to be held in memory, and it falls back to a blob
+ * when the worker is unavailable.
+ */
+export async function saveMediaToDisk(peerId: number, mid: number): Promise<void> {
+  const key = messageKey(peerId, mid);
+  const message = rawMessages.get(key) ??
+    await (async () => {
+      const {managers} = await bootTelegram();
+      return managers.appMessagesManager.getMessageByPeer(peerId, mid);
+    })();
+
+  const media = message?.media;
+  const target = media?.document ?? media?.photo;
+  if(!target) throw new Error('Nothing to download');
+
+  await bootTelegram();
+  const {default: appDownloadManager} = await import('@lib/appDownloadManager');
+
+  await appDownloadManager.downloadToDisc({
+    media: target,
+    fileName: target.file_name || undefined
+  });
+}
+
 /* ------------------------------------------------------------------ */
 /* Stickers, GIFs and emoji                                            */
 /* ------------------------------------------------------------------ */
