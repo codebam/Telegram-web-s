@@ -34,4 +34,9 @@ ignore
 svelte/.svelte-kit
 svelte/build
 
+# Local env and scratch
+.env
+serve-tmp.mjs
+/.svelte-kit
+
 .pnpm-store/
