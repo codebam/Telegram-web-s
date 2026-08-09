@@ -2603,6 +2603,11 @@
     border: 1px solid var(--border);
     align-self: flex-start;
     display: grid;
+    /* minmax(0, …) rather than the default 1fr: a grid track is min-content
+       wide by default, so one long unbroken line — a fenced command, a URL —
+       grew the track straight past the bubble's max-width, and the code block
+       inside never got narrow enough to use its own overflow-x. */
+    grid-template-columns: minmax(0, 1fr);
     gap: 6px;
   }
 
