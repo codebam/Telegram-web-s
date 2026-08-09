@@ -1166,9 +1166,18 @@ export async function loadAvatarUrl(peerId: number): Promise<string | null> {
  * sized for the bubble; stickers and other documents resolve to the file
  * itself when it is an image. Returns null for anything not displayable.
  */
-export async function loadMediaUrl(peerId: number, mid: number, boxWidth = 480): Promise<string | null> {
+export async function loadMediaUrl(
+  peerId: number,
+  mid: number,
+  boxWidth = 480,
+  full = false
+): Promise<string | null> {
   const key = messageKey(peerId, mid);
-  if(mediaUrls.has(key)) return mediaUrls.get(key)!;
+  // Keyed by what was actually asked for: the bubble wants a 480px thumb and the
+  // lightbox the full file, and a single key handed the lightbox back the
+  // bubble's thumb — the "larger view" was the small one, scaled up.
+  const cacheKey = `${key}_${full ? 'full' : boxWidth}`;
+  if(mediaUrls.has(cacheKey)) return mediaUrls.get(cacheKey)!;
 
   const message = rawMessages.get(key);
   const media = message?.media;
@@ -1189,10 +1198,10 @@ export async function loadMediaUrl(peerId: number, mid: number, boxWidth = 480):
     // Voice notes and music play from the full file.
     try {
       const url = await appDownloadManager.downloadMediaURL({media: target});
-      mediaUrls.set(key, url ?? null);
+      mediaUrls.set(cacheKey, url ?? null);
       return url ?? null;
     } catch(err) {
-      mediaUrls.set(key, null);
+      mediaUrls.set(cacheKey, null);
       return null;
     }
   }
@@ -1205,23 +1214,25 @@ export async function loadMediaUrl(peerId: number, mid: number, boxWidth = 480):
     isVideo ||
     isGif;
   if(!isImage) {
-    mediaUrls.set(key, null);
+    mediaUrls.set(cacheKey, null);
     return null;
   }
 
   try {
-    // For a video we want its poster frame, so download a thumb; GIFs and
-    // photos-as-documents download in full.
+    // In a bubble a video is a poster frame, so download a thumb; GIFs and
+    // photos-as-documents download in full. `full` (the lightbox) wants the
+    // real file for anything playable, otherwise a <video> gets a still image.
     const thumb = choosePhotoSize(target, boxWidth, boxWidth, true);
+    const wantsThumb = !isGif && (media._ === 'messageMediaPhoto' || (isVideo && !full));
     const url = await appDownloadManager.downloadMediaURL({
       media: target,
-      thumb: !isGif && (isVideo || media._ === 'messageMediaPhoto') ? thumb : undefined
+      thumb: wantsThumb ? thumb : undefined
     });
-    mediaUrls.set(key, url ?? null);
+    mediaUrls.set(cacheKey, url ?? null);
     return url ?? null;
   } catch(err) {
     console.error('[media] download failed', key, err);
-    mediaUrls.set(key, null);
+    mediaUrls.set(cacheKey, null);
     return null;
   }
 }
