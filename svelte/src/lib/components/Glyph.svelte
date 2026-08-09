@@ -18,7 +18,9 @@
     | 'send'
     | 'check'
     | 'down'
-    | 'app';
+    | 'app'
+    | 'pin'
+    | 'muted';
 
   let {name, size = 18}: {name: GlyphName; size?: number} = $props();
 </script>
@@ -65,6 +67,12 @@
     <path d="M10 4v11.4M10 15.4L5.6 11M10 15.4L14.4 11" />
   {:else if name === 'app'}
     <path d="M7.6 5.4l6.4 4.6-6.4 4.6V5.4z" />
+  {:else if name === 'pin'}
+    <path d="M12.1 2.9l5 5-2 .6-1 1 .5 3.4-2.2-.8-5.6 5.6.5-3.3-2.4-2.4-3.3.5L7.2 6.9l-.8-2.2 3.4.5 1-1 .6-2z" />
+  {:else if name === 'muted'}
+    <path d="M6.6 8.2a3.4 3.4 0 016.8 0c0 3.2 1.3 4.3 1.3 4.3H5.3s1.3-1.1 1.3-4.3z" />
+    <path d="M8.7 15a1.5 1.5 0 002.6 0" />
+    <path d="M3.8 3.6l12.4 12.8" />
   {/if}
 </svg>
 

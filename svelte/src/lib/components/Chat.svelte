@@ -915,10 +915,32 @@
 
   /* ---------- message actions ---------- */
 
+  /**
+   * Put the caret back in the composer. Clicking Reply moves focus to the
+   * button, and opening a chat leaves it wherever it was, so anything that
+   * sets up a message has to hand focus back itself.
+   *
+   * Skipped on touch, where stealing focus pops the on-screen keyboard over
+   * the conversation the moment it opens. The test asks for a coarse pointer
+   * rather than a fine one: a device with no pointer at all reports neither,
+   * and should still get a focused composer.
+   */
+  async function focusComposer() {
+    if (window.matchMedia('(pointer: coarse)').matches) return;
+    await tick();
+    composer?.focus();
+  }
+
+  function replyToMessage(message: MessageItem) {
+    replyTo = message;
+    focusComposer();
+  }
+
   function startEdit(message: MessageItem) {
     editing = message;
     replyTo = null;
     draft = message.text;
+    focusComposer();
   }
 
   function cancelEdit() {
@@ -1269,6 +1291,7 @@
 
       await tick();
       pinScroll(firstUnreadMid);
+      focusComposer();
     } catch (err: any) {
       error = errorOf(err, 'Failed to load messages');
     } finally {
@@ -1470,8 +1493,12 @@
             <span class="meta">
               <span class="row">
                 <span class="title">
-                  {#if dialog.pinned}<span class="flag">📌</span>{/if}
-                  {#if dialog.muted}<span class="flag">🔕</span>{/if}
+                  {#if dialog.pinned}
+                    <span class="flag" title="Pinned"><Glyph name="pin" size={13} /></span>
+                  {/if}
+                  {#if dialog.muted}
+                    <span class="flag" title="Muted"><Glyph name="muted" size={13} /></span>
+                  {/if}
                   {dialog.title}
                 </span>
                 <span class="time">{timeOf(dialog.date)}</span>
@@ -1659,7 +1686,7 @@
                     size={140}
                   />
                   <span class="stamp">
-                    <button class="reply-btn" onclick={() => (replyTo = message)}>Reply</button>
+                    <button class="reply-btn" onclick={() => replyToMessage(message)}>Reply</button>
                     <button class="reply-btn" onclick={() => openForward(message)}>Forward</button>
                     <span class="time">{timeOf(message.date)}</span>
                   </span>
@@ -1836,7 +1863,7 @@
                     class="reply-btn"
                     onclick={() => (reactingTo = reactingTo === message.mid ? null : message.mid)}
                   >React</button>
-                  <button class="reply-btn" onclick={() => (replyTo = message)}>Reply</button>
+                  <button class="reply-btn" onclick={() => replyToMessage(message)}>Reply</button>
                   <button class="reply-btn" onclick={() => openForward(message)}>Forward</button>
                   {#if message.text}
                     <button class="reply-btn" onclick={() => copyText(message)}>Copy</button>
@@ -2024,7 +2051,7 @@
   <div class="menu-backdrop" onclick={() => (messageMenu = null)} role="presentation"></div>
   <div class="context-menu" style="left: {messageMenu.x}px; top: {messageMenu.y}px">
     {#if menuMessage}
-      <button onclick={() => { replyTo = menuMessage; messageMenu = null; }}>Reply</button>
+      <button onclick={() => { replyToMessage(menuMessage); messageMenu = null; }}>Reply</button>
       {#if menuMessage.text}
         <button onclick={() => { copyText(menuMessage); messageMenu = null; }}>Copy text</button>
       {/if}
@@ -2289,7 +2316,9 @@
   }
 
   .flag {
-    font-size: 11px;
+    display: inline-flex;
+    color: var(--text-dim);
+    flex: none;
   }
 
   .title-button {
