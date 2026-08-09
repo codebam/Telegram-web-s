@@ -96,6 +96,7 @@
   .text {
     margin: 0;
     white-space: pre-wrap;
+    min-width: 0;
     word-break: break-word;
   }
 
