@@ -119,6 +119,21 @@ export type MessageItem = {
    * Flattening those to text loses the structure, so they are kept as blocks.
    */
   rich: RichBlock[] | null;
+  /** Bot keyboard attached to the message — rows of buttons, empty when none. */
+  buttons: MessageButton[][];
+};
+
+/** A single button from a message's `reply_markup`. */
+export type MessageButton = {
+  row: number;
+  column: number;
+  kind: 'url' | 'callback' | 'webview' | 'simpleWebView' | 'switchInline' | 'text' | 'copy' | 'unsupported';
+  text: string;
+  /** Web-app and link buttons carry their own URL. */
+  url: string;
+  /** `switchInline` query, `copy` payload. */
+  payload: string;
+  samePeer: boolean;
 };
 
 export type WebPagePreview = {
@@ -584,7 +599,72 @@ async function toItem(message: any, peerId: number, selfId: number): Promise<Mes
     forwardedFrom: await forwardedTitle(message, selfId),
     webpage: webpageOf(message),
     poll: pollOf(message),
-    rich: richBlocksOf(message)
+    rich: richBlocksOf(message),
+    buttons: buttonsOf(message)
+  };
+}
+
+function buttonsOf(message: any): MessageButton[][] {
+  const markup = message?.reply_markup;
+  if(markup?._ !== 'replyInlineMarkup' && markup?._ !== 'replyKeyboardMarkup') return [];
+
+  return (markup.rows ?? [])
+  .map((row: any, rowIndex: number) =>
+    (row.buttons ?? []).map((button: any, column: number) => toButton(button, rowIndex, column))
+  )
+  .filter((row: MessageButton[]) => row.length);
+}
+
+function toButton(button: any, row: number, column: number): MessageButton {
+  const base = {row, column, text: button.text ?? '', url: '', payload: '', samePeer: false};
+
+  switch(button._) {
+    case 'keyboardButtonUrl':
+    case 'keyboardButtonUrlAuth':
+      return {...base, kind: 'url', url: button.url ?? ''};
+    case 'keyboardButtonWebView':
+      return {...base, kind: 'webview', url: button.url ?? ''};
+    case 'keyboardButtonSimpleWebView':
+      return {...base, kind: 'simpleWebView', url: button.url ?? ''};
+    case 'keyboardButtonCallback':
+      return {...base, kind: 'callback'};
+    case 'keyboardButtonSwitchInline':
+      return {
+        ...base,
+        kind: 'switchInline',
+        payload: button.query ?? '',
+        samePeer: !!button.pFlags?.same_peer
+      };
+    case 'keyboardButtonCopy':
+      return {...base, kind: 'copy', payload: button.copy_text ?? button.text ?? ''};
+    case 'keyboardButton':
+      return {...base, kind: 'text'};
+    default:
+      return {...base, kind: 'unsupported'};
+  }
+}
+
+/**
+ * Presses a `keyboardButtonCallback`. Returns whatever the bot answers with:
+ * a toast/alert message, or a URL to open.
+ */
+export async function pressCallbackButton(
+  peerId: number,
+  mid: number,
+  row: number,
+  column: number
+): Promise<{message: string; alert: boolean; url: string}> {
+  const {managers} = await bootTelegram();
+
+  const message = rawMessages.get(messageKey(peerId, mid)) ??
+    await managers.appMessagesManager.getMessageByPeer(peerId, mid);
+  const button = message?.reply_markup?.rows?.[row]?.buttons?.[column];
+
+  const answer: any = await managers.appInlineBotsManager.callbackButtonClick(peerId, mid, button);
+  return {
+    message: answer?.message ?? '',
+    alert: !!answer?.pFlags?.alert,
+    url: answer?.url ?? ''
   };
 }
 
@@ -1713,6 +1793,7 @@ export async function getPeerBrief(peerId: number): Promise<{
   isSelf: boolean;
   isBroadcast: boolean;
   isForum: boolean;
+  username: string;
 }> {
   const selfId = await getSelfId();
   const peer = await getPeer(peerId);
@@ -1720,6 +1801,7 @@ export async function getPeerBrief(peerId: number): Promise<{
   return {
     peerId,
     title: peerTitle(peer, selfId),
+    username: peer?.username ?? peer?.usernames?.[0]?.username ?? '',
     isUser: peer?._ === 'user',
     isSelf: peerId === selfId,
     isBroadcast: peer?._ === 'channel' && !!peer?.pFlags?.broadcast,
