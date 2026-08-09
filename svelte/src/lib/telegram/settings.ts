@@ -211,48 +211,52 @@ export async function loadAttachBots(): Promise<AttachBot[]> {
   }
 }
 
-/** Opens a bot's mini app and returns the URL to host in an iframe. */
-export async function openMiniApp(botId: number, peerId: number): Promise<string | null> {
-  const {managers} = await bootTelegram();
-  try {
-    const result: any = await managers.appAttachMenuBotsManager.requestWebView({
-      botId,
-      peerId,
-      fromBotMenu: true
-    } as any);
-    return result?.url ?? null;
-  } catch(err) {
-    return null;
-  }
-}
-
 export type InlineResultItem = {
   queryAndResultId: string;
   title: string;
   description: string;
 };
 
+export type InlineQueryAnswer = {
+  botId: number;
+  results: InlineResultItem[];
+  /** `inlineBotWebView` — the "open app" button shown above the results. */
+  switchWebView: {text: string; url: string} | null;
+  /** `inlineBotSwitchPM` — the "start bot" button shown above the results. */
+  switchPm: {text: string; startParam: string} | null;
+};
+
+const emptyInlineAnswer: InlineQueryAnswer = {botId: 0, results: [], switchWebView: null, switchPm: null};
+
 /** Inline bot query: "@bot some text" typed into the composer. */
 export async function queryInlineBot(
   peerId: number,
   botUsername: string,
   query: string
-): Promise<InlineResultItem[]> {
+): Promise<InlineQueryAnswer> {
   const {managers} = await bootTelegram();
 
   try {
     const peer: any = await managers.appUsersManager.resolveUsername(botUsername);
     const botId = Number(peer?.id ?? 0);
-    if(!botId) return [];
+    if(!botId) return emptyInlineAnswer;
 
     const result: any = await managers.appInlineBotsManager.getInlineResults(peerId, botId, query);
-    return (result?.results ?? []).map((item: any) => ({
-      queryAndResultId: `${result.query_id}_${item.id}`,
-      title: item.title ?? item.send_message?.message?.slice(0, 40) ?? 'Result',
-      description: item.description ?? ''
-    }));
+    const switchWebView = result?.switch_webview;
+    const switchPm = result?.switch_pm;
+
+    return {
+      botId,
+      results: (result?.results ?? []).map((item: any) => ({
+        queryAndResultId: `${result.query_id}_${item.id}`,
+        title: item.title ?? item.send_message?.message?.slice(0, 40) ?? 'Result',
+        description: item.description ?? ''
+      })),
+      switchWebView: switchWebView ? {text: switchWebView.text ?? 'Open app', url: switchWebView.url ?? ''} : null,
+      switchPm: switchPm ? {text: switchPm.text ?? 'Start', startParam: switchPm.start_param ?? ''} : null
+    };
   } catch(err) {
-    return [];
+    return emptyInlineAnswer;
   }
 }
 

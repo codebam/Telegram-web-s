@@ -50,6 +50,7 @@
     onTyping,
     onUserUpdate,
     openDiscussion,
+    pressCallbackButton,
     readUpTo,
     resolveUsername,
     saveDraftText,
@@ -66,14 +67,16 @@
     votePoll,
     type DialogItem,
     type FolderItem,
+    type MessageButton,
     type MessageItem,
     type TopicItem
   } from '$lib/telegram/chats';
+  import {getBotMenuButton, type MiniAppRequest} from '$lib/telegram/miniApps';
   import {
     notifyMessage,
     setActiveNotificationPeer
   } from '$lib/telegram/notifications';
-  import {queryInlineBot, sendInlineResult, type InlineResultItem} from '$lib/telegram/settings';
+  import {queryInlineBot, sendInlineResult, type InlineQueryAnswer, type InlineResultItem} from '$lib/telegram/settings';
   import {applyAccent, applyDensity, applyTheme} from '$lib/telegram/theme';
   import {startCall} from '$lib/telegram/extras';
 
@@ -157,10 +160,14 @@
   let lastTypingSent = 0;
   let showSidebarOnMobile = $state(true);
   let showSettings = $state(false);
-  let miniAppBotId = $state<number | null>(null);
+  /** The mini app currently hosted in an iframe, null when none is open. */
+  let miniApp = $state<MiniAppRequest | null>(null);
   let inlineResults = $state<InlineResultItem[]>([]);
+  let inlineSwitch = $state<InlineQueryAnswer | null>(null);
   let inlineBot = $state('');
   let inlineTimer: ReturnType<typeof setTimeout> | undefined;
+  /** The web-app button a bot pins next to the composer, if this chat is a bot. */
+  let botMenuButton = $state<{text: string; url: string} | null>(null);
   /** Files queued by paste, drop or the attach button, pending confirmation. */
   let pendingFiles = $state<File[]>([]);
 
@@ -928,11 +935,14 @@
    * its results above the input.
    */
   function onInlineInput() {
-    const match = /^@(\w{3,32})\s+(.*)$/.exec(draft);
+    // The query part is optional: "@bot" alone already asks the bot for its
+    // default results, which is where an "open app" button usually lives.
+    const match = /^@(\w{3,32})(?:\s+([\s\S]*))?$/.exec(draft);
     clearTimeout(inlineTimer);
 
     if (!match || activePeerId === null) {
       inlineResults = [];
+      inlineSwitch = null;
       inlineBot = '';
       return;
     }
@@ -940,7 +950,10 @@
     const [, bot, query] = match;
     inlineBot = bot;
     inlineTimer = setTimeout(async () => {
-      inlineResults = await queryInlineBot(activePeerId!, bot, query);
+      const answer = await queryInlineBot(activePeerId!, bot, query ?? '');
+      if (inlineBot !== bot) return;
+      inlineResults = answer.results;
+      inlineSwitch = answer;
     }, 400);
   }
 
@@ -948,6 +961,7 @@
     if (activePeerId === null) return;
     const bot = inlineBot;
     inlineResults = [];
+    inlineSwitch = null;
     draft = '';
 
     try {
@@ -956,6 +970,126 @@
       error = errorOf(err, 'Failed to send inline result');
     }
   }
+
+  /** The "open app" button an inline bot puts above its results. */
+  function openInlineWebApp() {
+    const answer = inlineSwitch;
+    if (!answer?.switchWebView || activePeerId === null) return;
+
+    miniApp = {
+      botId: answer.botId,
+      peerId: activePeerId,
+      url: answer.switchWebView.url,
+      buttonText: answer.switchWebView.text,
+      title: answer.switchWebView.text,
+      isSimpleWebView: true,
+      fromSwitchWebView: true
+    };
+  }
+
+  /* ---------- bot keyboards and mini apps ---------- */
+
+  function openBotMenuApp() {
+    if (activePeerId === null || !botMenuButton) return;
+
+    miniApp = {
+      botId: activePeerId,
+      peerId: activePeerId,
+      url: botMenuButton.url,
+      buttonText: botMenuButton.text,
+      title: botMenuButton.text,
+      fromBotMenu: true
+    };
+  }
+
+  async function pressButton(message: MessageItem, button: MessageButton) {
+    if (activePeerId === null) return;
+    // Keyboards belong to the bot that sent the message.
+    const botId = message.fromId;
+
+    switch (button.kind) {
+      case 'url':
+        if (button.url) window.open(button.url, '_blank', 'noopener,noreferrer');
+        break;
+
+      case 'webview':
+        miniApp = {
+          botId,
+          peerId: activePeerId,
+          url: button.url,
+          buttonText: button.text,
+          title: button.text
+        };
+        break;
+
+      case 'simpleWebView':
+        miniApp = {
+          botId,
+          peerId: activePeerId,
+          url: button.url,
+          buttonText: button.text,
+          title: button.text,
+          isSimpleWebView: true
+        };
+        break;
+
+      case 'callback':
+        try {
+          const answer = await pressCallbackButton(activePeerId, message.mid, button.row, button.column);
+          if (answer.url) window.open(answer.url, '_blank', 'noopener,noreferrer');
+          else if (answer.message) error = answer.message;
+        } catch (err: any) {
+          error = errorOf(err, 'The bot did not answer');
+        }
+        break;
+
+      case 'switchInline':
+        draft = `@${await botUsername(botId)} ${button.payload}`.trimEnd();
+        onDraftInput();
+        composer?.focus();
+        break;
+
+      case 'copy':
+        try {
+          await navigator.clipboard.writeText(button.payload);
+        } catch (err) {
+          // Clipboard access can be denied; nothing else to do here.
+        }
+        break;
+
+      case 'text':
+        try {
+          await sendMessage(activePeerId, button.text, {threadId: activeThreadId});
+        } catch (err: any) {
+          error = errorOf(err, 'Send failed');
+        }
+        break;
+    }
+  }
+
+  async function botUsername(botId: number): Promise<string> {
+    const peer = await getPeerBrief(botId);
+    return peer?.username ?? '';
+  }
+
+  /**
+   * Whether this chat's bot pins a web app next to the composer. Fetched after
+   * the chat has rendered so it never delays opening one.
+   */
+  $effect(() => {
+    const peerId = activePeerId;
+    botMenuButton = null;
+    if (peerId === null) return;
+
+    let cancelled = false;
+    getBotMenuButton(peerId).then((button) => {
+      if (!cancelled) botMenuButton = button;
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  });
 
   /**
    * Ctrl+Up / Ctrl+Down walks the reply target through recent messages, like
@@ -1605,6 +1739,27 @@
                   </div>
                 {/if}
 
+                {#if message.buttons.length}
+                  <div class="keyboard">
+                    {#each message.buttons as row, rowIndex (rowIndex)}
+                      <div class="keyboard-row">
+                        {#each row as button (button.column)}
+                          <button
+                            class="keyboard-btn"
+                            disabled={button.kind === 'unsupported'}
+                            onclick={() => pressButton(message, button)}
+                          >
+                            {#if button.kind === 'webview' || button.kind === 'simpleWebView'}
+                              <span class="kb-icon">▸</span>
+                            {/if}
+                            {button.text}
+                          </button>
+                        {/each}
+                      </div>
+                    {/each}
+                  </div>
+                {/if}
+
                 {#if message.reactions.length}
                   <span class="reactions">
                     {#each message.reactions as reaction (reaction.emoticon)}
@@ -1682,6 +1837,12 @@
         </button>
       {/if}
 
+      {#if inlineSwitch?.switchWebView}
+        <div class="inline-switch">
+          <button onclick={openInlineWebApp}>{inlineSwitch.switchWebView.text}</button>
+        </div>
+      {/if}
+
       {#if inlineResults.length}
         <div class="inline-results">
           {#each inlineResults as result (result.queryAndResultId)}
@@ -1717,6 +1878,15 @@
             onemoji={(emoji) => (draft += emoji)}
             ondocument={pickDocument}
           />
+        {/if}
+        {#if botMenuButton}
+          <button
+            type="button"
+            class="attach bot-menu"
+            onclick={openBotMenuApp}
+            title={botMenuButton.text}
+            aria-label={botMenuButton.text}
+          >▸</button>
         {/if}
         <button
           type="button"
@@ -1757,7 +1927,10 @@
   {#if showSettings}
     <Settings
       onclose={() => (showSettings = false)}
-      onminiapp={(botId) => { miniAppBotId = botId; showSettings = false; }}
+      onminiapp={(botId) => {
+        miniApp = {botId, peerId: activePeerId ?? botId, fromAttachMenu: true};
+        showSettings = false;
+      }}
     />
   {/if}
 
@@ -1795,11 +1968,15 @@
   />
 {/if}
 
-{#if miniAppBotId !== null}
+{#if miniApp}
   <MiniApp
-    botId={miniAppBotId}
-    peerId={activePeerId ?? miniAppBotId}
-    onclose={() => (miniAppBotId = null)}
+    request={miniApp}
+    onclose={() => (miniApp = null)}
+    onswitchinline={async (query) => {
+      draft = `@${await botUsername(miniApp?.botId ?? 0)} ${query}`.trimEnd();
+      onDraftInput();
+      composer?.focus();
+    }}
   />
 {/if}
 
@@ -2473,6 +2650,62 @@
   .new-chat {
     margin-left: auto;
     font-size: 16px;
+  }
+
+  .keyboard {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 6px;
+  }
+
+  .keyboard-row {
+    display: flex;
+    gap: 4px;
+  }
+
+  .keyboard-btn {
+    flex: 1;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--bg-elevated);
+    color: var(--text);
+    font-size: 13px;
+    cursor: pointer;
+  }
+
+  .keyboard-btn:hover:not(:disabled) {
+    border-color: var(--accent);
+  }
+
+  .keyboard-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  .kb-icon {
+    color: var(--accent);
+    margin-right: 4px;
+  }
+
+  .inline-switch {
+    padding: 6px 10px 0;
+  }
+
+  .inline-switch button {
+    width: 100%;
+    padding: 10px;
+    border: none;
+    border-radius: 10px;
+    background: var(--accent);
+    color: #fff;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .bot-menu {
+    color: var(--accent);
   }
 
   .inline-results {
