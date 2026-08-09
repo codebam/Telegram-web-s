@@ -1,6 +1,7 @@
 <script lang="ts">
   import AnimatedSticker from './AnimatedSticker.svelte';
   import {loadDocUrl, type StickerItem} from '$lib/telegram/chats';
+  import {enqueueLoad} from '$lib/telegram/loadQueue';
 
   let {
     sticker,
@@ -9,19 +10,40 @@
   }: {sticker: StickerItem; size?: number; autoplay?: boolean} = $props();
 
   let url = $state<string | null>(null);
+  let el = $state<HTMLSpanElement | null>(null);
+  // Nothing downloads until the tile is actually near the viewport: a saved-GIF
+  // grid is hundreds of items deep and every one of them is a whole video file.
+  let seen = $state(false);
+
+  $effect(() => {
+    if(!el || seen) return;
+
+    const observer = new IntersectionObserver((entries) => {
+      if(entries.some((entry) => entry.isIntersecting)) {
+        seen = true;
+        observer.disconnect();
+      }
+    }, {rootMargin: '150px'});
+
+    observer.observe(el);
+    return () => observer.disconnect();
+  });
 
   $effect(() => {
     const id = sticker.docId;
     if(sticker.kind === 'animated') return; // rendered by the Lottie worker
+    if(!seen) return;
     url = null;
-    loadDocUrl(id).then((resolved) => {
+    enqueueLoad(() => loadDocUrl(id)).then((resolved) => {
       if(id === sticker.docId) url = resolved;
     });
   });
 </script>
 
-<span class="sticker" style="width: {size}px; height: {size}px">
-  {#if sticker.kind === 'animated'}
+<span class="sticker" bind:this={el} style="width: {size}px; height: {size}px">
+  {#if !seen}
+    <span class="placeholder">{sticker.emoji || '⬜'}</span>
+  {:else if sticker.kind === 'animated'}
     <AnimatedSticker docId={sticker.docId} {size} />
   {:else if !url}
     <span class="placeholder">{sticker.emoji || '⬜'}</span>
