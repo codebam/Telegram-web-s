@@ -1,5 +1,6 @@
 <script lang="ts">
-  import {loadMediaUrl, type MediaItem} from '$lib/telegram/chats';
+  import Glyph from './Glyph.svelte';
+  import {loadMediaUrl, saveMediaToDisk, type MediaItem} from '$lib/telegram/chats';
 
   let {peerId, mid, media}: {peerId: number; mid: number; media: MediaItem} = $props();
 
@@ -31,6 +32,22 @@
       unit++;
     }
     return `${value.toFixed(value < 10 && unit > 0 ? 1 : 0)} ${units[unit]}`;
+  }
+
+  let saving = $state(false);
+  let saveError = $state('');
+
+  async function save() {
+    if(saving) return;
+    saving = true;
+    saveError = '';
+    try {
+      await saveMediaToDisk(peerId, mid);
+    } catch(err: any) {
+      saveError = err?.type || err?.message || 'Download failed';
+    } finally {
+      saving = false;
+    }
   }
 
   function duration(seconds: number) {
@@ -77,15 +94,19 @@
     </span>
   </div>
 {:else}
-  <a class="file" href={url ?? undefined} download={media.name || 'file'}>
-    <span class="glyph">📎</span>
+  <!-- A document has no URL until it is asked for: see saveMediaToDisk. -->
+  <button class="file" onclick={save} disabled={saving} title="Download {media.name || 'file'}">
+    <span class="glyph"><Glyph name={saving ? 'file' : 'save'} size={20} /></span>
     <span class="info">
       <span class="name">{media.name || 'File'}</span>
       <span class="sub">
-        {[duration(media.duration), humanSize(media.size), url ? 'Download' : ''].filter(Boolean).join(' · ')}
+        {saveError ||
+          [duration(media.duration), humanSize(media.size), saving ? 'Saving…' : 'Download']
+            .filter(Boolean)
+            .join(' · ')}
       </span>
     </span>
-  </a>
+  </button>
 {/if}
 
 <style>
@@ -140,6 +161,21 @@
     align-items: center;
     color: inherit;
     text-decoration: none;
+    width: 100%;
+    padding: 0;
+    background: none;
+    border: none;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  button.file:hover .name {
+    text-decoration: underline;
+  }
+
+  button.file:disabled {
+    cursor: default;
   }
 
   audio {
@@ -148,6 +184,9 @@
   }
 
   .glyph {
+    display: grid;
+    place-items: center;
+    opacity: 0.75;
     font-size: 22px;
   }
 
