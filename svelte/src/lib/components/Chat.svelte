@@ -1157,6 +1157,25 @@
       return;
     }
 
+    // Bare Up on an empty composer picks up the last message you can still
+    // edit — the desktop shortcut for "fix what I just sent". With text in the
+    // box Up is caret movement and must stay that way.
+    if (
+      e.key === 'ArrowUp' &&
+      !e.ctrlKey &&
+      !e.metaKey &&
+      !e.shiftKey &&
+      !e.altKey &&
+      !draft &&
+      !editing
+    ) {
+      const last = [...messages].reverse().find((m) => m.editable && m.text && !m.service);
+      if (!last) return;
+      e.preventDefault();
+      startEdit(last);
+      return;
+    }
+
     if (!e.ctrlKey || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
     if (!messages.length) return;
     e.preventDefault();
@@ -1175,6 +1194,52 @@
 
     replyTo = order[next];
     jumpTo(order[next].mid);
+  }
+
+  /**
+   * Escape peels one layer off the chat at a time and, once nothing is left to
+   * dismiss, closes the conversation back to the chat list.
+   *
+   * Overlays that own their own Escape (the lightbox, the file confirmation,
+   * the story viewer) or that are not modal (a mini app) get skipped: this
+   * handler is on window and would otherwise fire behind them. The story
+   * viewer keeps its state inside Stories, so it is detected in the DOM.
+   */
+  function onWindowKey(e: KeyboardEvent) {
+    if (e.key !== 'Escape' || e.isComposing) return;
+
+    if (
+      lightboxIndex !== null ||
+      pendingFiles.length ||
+      miniApp ||
+      showSettings ||
+      folderEditorOpen ||
+      newChatOpen ||
+      editingFolder ||
+      forwarding ||
+      profilePeerId !== null ||
+      showInfo ||
+      document.querySelector('.viewer')
+    ) {
+      return;
+    }
+
+    if (messageMenu) messageMenu = null;
+    else if (menuFor) menuFor = null;
+    else if (reactingTo !== null) reactingTo = null;
+    else if (readByFor) readByFor = null;
+    else if (selecting) {
+      selecting = false;
+      selected = new Set();
+    }
+    else if (showPicker) showPicker = false;
+    else if (chatSearchOpen) closeChatSearch();
+    else if (editing) cancelEdit();
+    else if (replyTo) replyTo = null;
+    else if (activePeerId !== null || topicOpen) backToChats();
+    else return;
+
+    e.preventDefault();
   }
 
   /** Grow with the content instead of scrolling a single line. */
@@ -1412,7 +1477,7 @@
   }
 </script>
 
-<svelte:window onpaste={onPaste} />
+<svelte:window onpaste={onPaste} onkeydown={onWindowKey} />
 
 <CallScreen />
 
