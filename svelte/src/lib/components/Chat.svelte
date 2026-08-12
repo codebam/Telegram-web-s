@@ -129,6 +129,9 @@
   let searching = $state(false);
   let loadingOlder = $state(false);
   let reachedStart = $state(false);
+  // False while the loaded window is centred on an older message (a jump), when
+  // the bottom of the list is not the bottom of the chat.
+  let windowAtLatest = $state(true);
   let presence = $state('');
   let typingNames = $state<string[]>([]);
   let editing = $state<MessageItem | null>(null);
@@ -654,6 +657,7 @@
       try {
         messages = await loadAround(activePeerId, mid, {threadId: activeThreadId});
         reachedStart = false;
+        windowAtLatest = false;
       } catch (err: any) {
         error = errorOf(err, 'Could not load that message');
         return;
@@ -1171,7 +1175,10 @@
     if (e.key === 'Enter' && !e.isComposing) {
       if (e.shiftKey || e.ctrlKey || e.metaKey) return;
       e.preventDefault();
-      submit(e);
+      // Nothing to send: treat it as "take me back to the end", which is where
+      // Enter leaves you after a send anyway.
+      if (!draft.trim() && !editing) jumpToLatest();
+      else submit(e);
       return;
     }
 
@@ -1356,6 +1363,7 @@
     messages = [];
     firstUnreadMid = null;
     reachedStart = false;
+    windowAtLatest = true;
     typingNames = [];
     editing = null;
     getPresence(peerId).then((info) => (presence = info.text)).catch(() => (presence = ''));
@@ -1389,7 +1397,9 @@
 
   async function focusSearchBox() {
     await tick();
-    searchBox?.focus();
+    // select(), not focus(): whatever was searched for last is left highlighted
+    // so the next keystroke replaces it instead of appending to it.
+    searchBox?.select();
   }
 
   function backToChats() {
@@ -1414,6 +1424,31 @@
   async function scrollToBottom() {
     await tick();
     if (scroller) scroller.scrollTop = scroller.scrollHeight;
+  }
+
+  /**
+   * Back to the end of the conversation. After a jump the loaded window sits
+   * around an older message, so the newest page has to be fetched again before
+   * scrolling means anything.
+   */
+  async function jumpToLatest() {
+    releasePin();
+
+    if (!windowAtLatest && activePeerId !== null) {
+      loadingHistory = true;
+      try {
+        messages = await loadHistory(activePeerId, {threadId: activeThreadId});
+        windowAtLatest = true;
+        reachedStart = false;
+        highlightedMid = null;
+      } catch (err: any) {
+        error = errorOf(err, 'Failed to load messages');
+      } finally {
+        loadingHistory = false;
+      }
+    }
+
+    await scrollToBottom();
   }
 
   /**
@@ -1469,6 +1504,11 @@
     e.preventDefault();
     const text = draft.trim();
     if (!text || activePeerId === null) return;
+
+    // The debounced draft save is still pending with the text being sent; let
+    // it fire and it writes the message back as a draft right after sendText
+    // cleared it.
+    clearTimeout(typingTimer);
 
     if (editing) {
       const target = editing;
@@ -1996,7 +2036,7 @@
       </div>
 
       {#if !atBottom}
-        <button class="to-bottom" onclick={() => { releasePin(); scrollToBottom(); }} aria-label="Scroll to latest">
+        <button class="to-bottom" onclick={jumpToLatest} aria-label="Scroll to latest">
           <Glyph name="down" />
         </button>
       {/if}
