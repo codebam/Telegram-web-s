@@ -229,6 +229,69 @@ export async function markStoriesRead(peerId: number, maxId: number): Promise<vo
 }
 
 /* ------------------------------------------------------------------ */
+/* Business bots                                                       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * A bot connected to a Telegram Business account answers chats on the owner's
+ * behalf. It is per-chat state: the owner can pause it for one conversation
+ * and take over, or disconnect it from that conversation for good.
+ */
+export type BusinessBot = {
+  botId: number;
+  title: string;
+  username: string | null;
+  /** Paused means still connected, but not replying in this chat. */
+  paused: boolean;
+  /** True when the bot is allowed to answer at all — a read-only bot cannot. */
+  canReply: boolean;
+  /** Deep link the bot offers for its own settings, when it has one. */
+  manageUrl: string | null;
+};
+
+export async function getBusinessBot(peerId: number): Promise<BusinessBot | null> {
+  const {managers} = await bootTelegram();
+
+  try {
+    const settings: any = await managers.appProfileManager.getPeerSettings(peerId);
+    const botId = Number(settings?.business_bot_id ?? 0);
+    if(!botId) return null;
+
+    const bot: any = await managers.appUsersManager.getUser(botId);
+    return {
+      botId,
+      title: [bot?.first_name, bot?.last_name].filter(Boolean).join(' ') || bot?.username || 'Bot',
+      username: bot?.username ?? null,
+      paused: !!settings.pFlags?.business_bot_paused,
+      canReply: !!settings.pFlags?.business_bot_can_reply,
+      manageUrl: settings.business_bot_manage_url ?? null
+    };
+  } catch(err) {
+    return null;
+  }
+}
+
+export async function setBusinessBotPaused(peerId: number, paused: boolean): Promise<void> {
+  const {managers} = await bootTelegram();
+  await managers.appProfileManager.toggleConnectedBotPaused(peerId, paused);
+}
+
+export async function removeBusinessBot(peerId: number): Promise<void> {
+  const {managers} = await bootTelegram();
+  await managers.appProfileManager.disablePeerConnectedBot(peerId);
+}
+
+/** Fires whenever a chat's peer settings change, the bot's state among them. */
+export async function onPeerSettings(
+  callback: (peerId: number) => void
+): Promise<() => void> {
+  const {default: rootScope} = await import('@lib/rootScope');
+  const handler = ({peerId}: {peerId: number}) => callback(Number(peerId));
+  rootScope.addEventListener('peer_settings', handler);
+  return () => rootScope.removeEventListener('peer_settings', handler);
+}
+
+/* ------------------------------------------------------------------ */
 /* Calls                                                               */
 /* ------------------------------------------------------------------ */
 

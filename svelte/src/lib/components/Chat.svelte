@@ -84,7 +84,14 @@
   } from '$lib/telegram/notifications';
   import {queryInlineBot, sendInlineResult, type InlineQueryAnswer, type InlineResultItem} from '$lib/telegram/settings';
   import {applyAccent, applyDensity, applyTheme} from '$lib/telegram/theme';
-  import {startCall} from '$lib/telegram/extras';
+  import {
+    getBusinessBot,
+    onPeerSettings,
+    removeBusinessBot,
+    setBusinessBotPaused,
+    startCall,
+    type BusinessBot
+  } from '$lib/telegram/extras';
 
   let dialogs = $state<DialogItem[]>([]);
   let topics = $state<TopicItem[]>([]);
@@ -158,6 +165,8 @@
   let lightboxIndex = $state<number | null>(null);
   let highlightedMid = $state<number | null>(null);
   let pinnedMessage = $state<MessageItem | null>(null);
+  let businessBot = $state<BusinessBot | null>(null);
+  let businessBotBusy = $state(false);
   let forwarding = $state<MessageItem | null>(null);
   let atBottom = $state(true);
   let chatQuery = $state('');
@@ -1368,6 +1377,8 @@
     editing = null;
     getPresence(peerId).then((info) => (presence = info.text)).catch(() => (presence = ''));
     loadPinned(peerId, threadId).then((message) => (pinnedMessage = message)).catch(() => (pinnedMessage = null));
+    businessBot = null;
+    refreshBusinessBot(peerId);
     setActiveNotificationPeer(peerId);
     getReadOutboxMaxId(peerId).then((maxId) => {
       if (activePeerId === peerId) readOutboxMaxId = maxId;
@@ -1392,6 +1403,67 @@
       error = errorOf(err, 'Failed to load messages');
     } finally {
       loadingHistory = false;
+    }
+  }
+
+  /* ---------- business bot ---------- */
+
+  /**
+   * A business bot only ever manages a private chat, and the bar it gets is
+   * per-chat: leaving the conversation must not carry its state over.
+   */
+  async function refreshBusinessBot(peerId: number) {
+    if (peerId <= 0) return;
+
+    const bot = await getBusinessBot(peerId);
+    if (activePeerId === peerId) businessBot = bot;
+  }
+
+  $effect(() => {
+    let disposed = false;
+    let off: (() => void) | undefined;
+
+    onPeerSettings((peerId) => {
+      if (peerId === activePeerId) refreshBusinessBot(peerId);
+    }).then((unsubscribe) => {
+      if (disposed) unsubscribe();
+      else off = unsubscribe;
+    });
+
+    return () => {
+      disposed = true;
+      off?.();
+    };
+  });
+
+  async function toggleBusinessBot() {
+    if (!businessBot || activePeerId === null || businessBotBusy) return;
+
+    const peerId = activePeerId;
+    const paused = !businessBot.paused;
+    businessBotBusy = true;
+    try {
+      await setBusinessBotPaused(peerId, paused);
+      if (activePeerId === peerId && businessBot) businessBot = {...businessBot, paused};
+    } catch (err: any) {
+      error = errorOf(err, paused ? 'Could not stop the bot' : 'Could not start the bot');
+    } finally {
+      businessBotBusy = false;
+    }
+  }
+
+  async function disconnectBusinessBot() {
+    if (!businessBot || activePeerId === null || businessBotBusy) return;
+
+    const peerId = activePeerId;
+    businessBotBusy = true;
+    try {
+      await removeBusinessBot(peerId);
+      if (activePeerId === peerId) businessBot = null;
+    } catch (err: any) {
+      error = errorOf(err, 'Could not remove the bot');
+    } finally {
+      businessBotBusy = false;
     }
   }
 
@@ -1744,6 +1816,29 @@
           <button onclick={forwardSelected}>Forward</button>
           <button class="danger" onclick={deleteSelected}>Delete</button>
           <button onclick={() => { selecting = false; selected = new Set(); }}>Cancel</button>
+        </div>
+      {/if}
+
+      {#if businessBot}
+        <div class="business-bar">
+          <Avatar peerId={businessBot.botId} title={businessBot.title} size={28} />
+          <span class="business-text">
+            <span class="business-title">{businessBot.title}</span>
+            <span class="business-note">
+              {businessBot.paused ? 'Stopped for this chat' : 'Replying to this chat for you'}
+            </span>
+          </span>
+          <button class="business-action" disabled={businessBotBusy} onclick={toggleBusinessBot}>
+            {businessBot.paused ? 'Start bot' : 'Stop bot'}
+          </button>
+          {#if businessBot.manageUrl}
+            <button class="business-action" onclick={() => openLink(businessBot!.manageUrl!)}>
+              Manage
+            </button>
+          {/if}
+          <button class="business-action danger" disabled={businessBotBusy} onclick={disconnectBusinessBot}>
+            Remove
+          </button>
         </div>
       {/if}
 
@@ -3223,6 +3318,56 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .business-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 18px;
+    border-bottom: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    flex: none;
+  }
+
+  .business-text {
+    display: grid;
+    gap: 1px;
+    min-width: 0;
+    margin-right: auto;
+  }
+
+  .business-title {
+    font-size: 13px;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .business-note {
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+
+  .business-action {
+    flex: none;
+    padding: 4px 10px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: none;
+    color: var(--accent);
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .business-action:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  .business-action.danger {
+    color: var(--danger);
   }
 
   .to-bottom {
