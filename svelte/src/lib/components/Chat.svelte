@@ -36,6 +36,7 @@
     loadFolders,
     loadHistory,
     loadPinned,
+    hidePinnedMessage,
     loadOlder,
     loadTopics,
     markDialogRead,
@@ -1406,6 +1407,24 @@
     }
   }
 
+  /**
+   * Hide the pinned bar for this chat. The manager remembers which message was
+   * dismissed, so pinning something newer shows the bar again.
+   */
+  async function dismissPinned() {
+    if (activePeerId === null) return;
+
+    const peerId = activePeerId;
+    const previous = pinnedMessage;
+    pinnedMessage = null;
+    try {
+      await hidePinnedMessage(peerId);
+    } catch (err: any) {
+      if (activePeerId === peerId) pinnedMessage = previous;
+      error = errorOf(err, 'Could not hide the pinned message');
+    }
+  }
+
   /* ---------- business bot ---------- */
 
   /**
@@ -1843,10 +1862,15 @@
       {/if}
 
       {#if pinnedMessage}
-        <button class="pinned-bar" onclick={() => jumpTo(pinnedMessage!.mid)}>
-          <span class="pinned-label">Pinned message</span>
-          <span class="pinned-text">{pinnedMessage.text || 'Media'}</span>
-        </button>
+        <div class="pinned-bar">
+          <button class="pinned-jump" onclick={() => jumpTo(pinnedMessage!.mid)}>
+            <span class="pinned-label">Pinned message</span>
+            <span class="pinned-text">{pinnedMessage.text || 'Media'}</span>
+          </button>
+          <button class="pinned-dismiss" onclick={dismissPinned} aria-label="Hide pinned message" title="Hide pinned message">
+            <Glyph name="close" />
+          </button>
+        </div>
       {/if}
 
       <div
@@ -3293,17 +3317,44 @@
   }
 
   .pinned-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-right: 12px;
+    border-bottom: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    flex: none;
+  }
+
+  .pinned-jump {
     display: grid;
     gap: 1px;
+    flex: 1;
+    min-width: 0;
     text-align: left;
     padding: 8px 18px;
     border: none;
-    border-bottom: 1px solid var(--border);
-    border-left: 3px solid var(--accent);
     background: none;
     color: inherit;
     cursor: pointer;
+  }
+
+  .pinned-dismiss {
     flex: none;
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    border: none;
+    border-radius: 50%;
+    background: none;
+    color: var(--text-dim);
+    cursor: pointer;
+  }
+
+  .pinned-dismiss:hover {
+    background: color-mix(in srgb, var(--text) 8%, transparent);
+    color: var(--text);
   }
 
   .pinned-label {

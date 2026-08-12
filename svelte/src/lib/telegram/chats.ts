@@ -956,11 +956,22 @@ export async function loadPinned(peerId: number, threadId?: number): Promise<Mes
     const mid = pinned?.maxId ?? pinned?.mid;
     if(!mid) return null;
 
+    // Dismissing the bar records the pinned id it was showing; anything newer
+    // pinned afterwards brings it back on its own.
+    const state: any = await managers.appStateManager.getState();
+    if((state?.hiddenPinnedMessages?.[peerId] ?? 0) >= mid) return null;
+
     const message = await managers.appMessagesManager.getMessageByPeer(peerId, mid);
     return message ? toItem(message, peerId, selfId) : null;
   } catch(err) {
     return null;
   }
+}
+
+/** Hide the pinned bar for this chat until something new is pinned. */
+export async function hidePinnedMessage(peerId: number): Promise<void> {
+  const {managers} = await bootTelegram();
+  await managers.appMessagesManager.hidePinnedMessages(peerId);
 }
 
 export async function editMessage(peerId: number, mid: number, text: string): Promise<void> {
