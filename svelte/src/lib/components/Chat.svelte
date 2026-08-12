@@ -814,18 +814,35 @@
 
   /* ---------- search ---------- */
 
+  async function runSearch() {
+    searching = true;
+    try {
+      dialogs = await searchDialogs(query);
+    } catch (err: any) {
+      error = errorOf(err, 'Search failed');
+    } finally {
+      searching = false;
+    }
+  }
+
   function onQueryInput() {
     clearTimeout(searchTimer);
-    searchTimer = setTimeout(async () => {
-      searching = true;
-      try {
-        dialogs = await searchDialogs(query);
-      } catch (err: any) {
-        error = errorOf(err, 'Search failed');
-      } finally {
-        searching = false;
-      }
-    }, 250);
+    searchTimer = setTimeout(runSearch, 250);
+  }
+
+  /**
+   * Enter opens the first result. The keystroke can beat the debounce, so run
+   * the pending search first rather than acting on the previous query's list.
+   */
+  async function onQueryKey(e: KeyboardEvent) {
+    if (e.key !== 'Enter' || e.isComposing || !query.trim()) return;
+    e.preventDefault();
+
+    clearTimeout(searchTimer);
+    await runSearch();
+
+    const first = dialogs[0];
+    if (first) openChat(first);
   }
 
   /* ---------- scrollback ---------- */
@@ -1512,6 +1529,7 @@
           placeholder="Search chats"
           bind:value={query}
           oninput={onQueryInput}
+          onkeydown={onQueryKey}
         />
       </div>
       <Stories />
