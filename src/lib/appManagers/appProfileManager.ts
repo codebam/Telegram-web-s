@@ -1290,6 +1290,56 @@ export class AppProfileManager extends AppManager {
     });
   }
 
+  /**
+   * A business bot connected to the account answers this chat on the owner's
+   * behalf. Pausing leaves it connected but silent; the server does not send
+   * an update back, so patch the cached settings and announce them locally.
+   */
+  public toggleConnectedBotPaused(peerId: PeerId, paused: boolean) {
+    return this.apiManager.invokeApiSingleProcess({
+      method: 'account.toggleConnectedBotPaused',
+      params: {
+        peer: this.appPeersManager.getInputPeerById(peerId),
+        paused
+      },
+      processResult: () => {
+        this.patchPeerSettings(peerId, (settings) => {
+          if(paused) settings.pFlags.business_bot_paused = true;
+          else delete settings.pFlags.business_bot_paused;
+        });
+      }
+    });
+  }
+
+  /** Disconnect the business bot from this chat entirely. */
+  public disablePeerConnectedBot(peerId: PeerId) {
+    return this.apiManager.invokeApiSingleProcess({
+      method: 'account.disablePeerConnectedBot',
+      params: {
+        peer: this.appPeersManager.getInputPeerById(peerId)
+      },
+      processResult: () => {
+        this.patchPeerSettings(peerId, (settings) => {
+          delete settings.pFlags.business_bot_paused;
+          delete settings.pFlags.business_bot_can_reply;
+          delete settings.business_bot_id;
+          delete settings.business_bot_manage_url;
+        });
+      }
+    });
+  }
+
+  private patchPeerSettings(peerId: PeerId, callback: (settings: PeerSettings.peerSettings) => void) {
+    callbackify(this.getPeerSettings(peerId), (peerSettings) => {
+      callback(peerSettings as PeerSettings.peerSettings);
+      this.apiUpdatesManager.processLocalUpdate({
+        _: 'updatePeerSettings',
+        peer: this.appPeersManager.getOutputPeer(peerId),
+        settings: peerSettings
+      });
+    });
+  }
+
   private onUpdateChatParticipants = (update: Update.updateChatParticipants) => this.modifyCachedFullChat(update.participants.chat_id, (chatFull) => {
     const participants = update.participants;
     (chatFull as ChatFull.chatFull).participants = participants;
