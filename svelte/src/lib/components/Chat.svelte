@@ -134,6 +134,7 @@
   let editing = $state<MessageItem | null>(null);
   let fileInput: HTMLInputElement | undefined = $state();
   let composer: HTMLTextAreaElement | undefined = $state();
+  let searchBox: HTMLInputElement | undefined = $state();
   let dragging = $state(false);
   let typingTimer: ReturnType<typeof setTimeout> | undefined;
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1236,7 +1237,12 @@
     else if (chatSearchOpen) closeChatSearch();
     else if (editing) cancelEdit();
     else if (replyTo) replyTo = null;
-    else if (activePeerId !== null || topicOpen) backToChats();
+    else if (activePeerId !== null || topicOpen) {
+      backToChats();
+      // Landing back on the list, not on a forum's topic list: the search box
+      // only exists in that state, and only after the pane re-renders.
+      if (activePeerId === null) focusSearchBox();
+    }
     else return;
 
     e.preventDefault();
@@ -1362,6 +1368,11 @@
     } finally {
       loadingHistory = false;
     }
+  }
+
+  async function focusSearchBox() {
+    await tick();
+    searchBox?.focus();
   }
 
   function backToChats() {
@@ -1496,7 +1507,12 @@
 
     {#if !(activeIsForum && activePeerId !== null)}
       <div class="search">
-        <input placeholder="Search chats" bind:value={query} oninput={onQueryInput} />
+        <input
+          bind:this={searchBox}
+          placeholder="Search chats"
+          bind:value={query}
+          oninput={onQueryInput}
+        />
       </div>
       <Stories />
       {#if folders.length > 1}
