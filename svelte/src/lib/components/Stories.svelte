@@ -21,6 +21,20 @@
   /** Photos get a fixed run; videos play for their own duration. */
   const PHOTO_SECONDS = 5;
 
+  /**
+   * The strip lives in the sidebar, and the sidebar is a `backdrop-filter`
+   * pane: that makes it the containing block for `position: fixed`, so the
+   * viewer would cover the chat list only. Move it to the body instead.
+   */
+  function portal(node: HTMLElement) {
+    document.body.appendChild(node);
+    return {
+      destroy() {
+        node.remove();
+      }
+    };
+  }
+
   let frame: number | undefined;
   let startedAt = 0;
   let elapsedBeforePause = 0;
@@ -157,7 +171,7 @@
 {/if}
 
 {#if openPeer}
-  <div class="viewer" onclick={close} role="presentation">
+  <div class="viewer" use:portal onclick={close} role="presentation">
     <div
       class="stage"
       onclick={(e) => e.stopPropagation()}
