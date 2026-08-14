@@ -45,6 +45,13 @@ export type MediaItem = {
   name: string;
   size: number;
   duration: number;
+  /**
+   * Self-destructing media (`ttl_seconds`) or a one-time voice/video note. The
+   * UI must never render it as ordinary media: keeping a copy on screen after
+   * it expires would interfere with a basic Telegram feature, which the API
+   * terms forbid.
+   */
+  selfDestruct: boolean;
 };
 
 export type ReplyPreview = {
@@ -217,7 +224,8 @@ function mediaOf(message: any): MediaItem | null {
       height: biggest?.h ?? 0,
       name: '',
       size: media.photo.size ?? 0,
-      duration: 0
+      duration: 0,
+      selfDestruct: !!media.ttl_seconds
     };
   }
 
@@ -247,7 +255,10 @@ function mediaOf(message: any): MediaItem | null {
       height: size?.h ?? 0,
       name: filename?.file_name ?? '',
       size: document.size ?? 0,
-      duration: video?.duration ?? audio?.duration ?? 0
+      duration: video?.duration ?? audio?.duration ?? 0,
+      // A one-time voice message or video note carries the same flag as a
+      // self-destructing photo, plus `round_message` / `voice` once-flags.
+      selfDestruct: !!media.ttl_seconds
     };
   }
 
@@ -2028,4 +2039,77 @@ export async function onMessageSent(
 
   rootScope.addEventListener('message_sent', handler);
   return () => rootScope.removeEventListener('message_sent', handler);
+}
+
+/* ------------------------------------------------------------------ */
+/* Sponsored messages                                                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Telegram's API terms require a third-party client that shows channels to
+ * display the official sponsored messages and to report their views and clicks
+ * back — see https://core.telegram.org/api/terms. Nothing here may filter,
+ * reorder or hide what the server returns.
+ */
+export type SponsoredItem = {
+  /** Opaque handle for view/click reporting; the raw random_id stays below. */
+  key: string;
+  title: string;
+  text: string;
+  url: string;
+  buttonText: string;
+  /** "About this ad" details the server attaches to the promotion. */
+  sponsorInfo: string;
+  additionalInfo: string;
+  recommended: boolean;
+};
+
+/** random_id is a Uint8Array — never let it reach Svelte state as a proxy. */
+const sponsoredRandomIds = new Map<string, Uint8Array>();
+
+const sponsoredKey = (randomId: Uint8Array) =>
+  Array.from(randomId, (byte) => byte.toString(16).padStart(2, '0')).join('');
+
+/**
+ * The next sponsored message for a channel, or null when the server has none.
+ *
+ * The manager caches the response for five minutes and rotates through the
+ * returned list, so calling this once per chat open is what the official
+ * clients do.
+ */
+export async function loadSponsored(peerId: number): Promise<SponsoredItem | null> {
+  const {managers} = await bootTelegram();
+  const result: any = await managers.appMessagesManager.getSponsoredMessage(peerId);
+  const sponsored = result?.messages?.[0];
+  if(!sponsored) return null;
+
+  const key = sponsoredKey(sponsored.random_id);
+  sponsoredRandomIds.set(key, sponsored.random_id);
+
+  return {
+    key,
+    title: sponsored.title ?? '',
+    text: sponsored.message ?? '',
+    url: sponsored.url ?? '',
+    buttonText: sponsored.button_text || 'Open',
+    sponsorInfo: sponsored.sponsor_info ?? '',
+    additionalInfo: sponsored.additional_info ?? '',
+    recommended: !!sponsored.pFlags?.recommended
+  };
+}
+
+/** Report that the sponsored message was actually shown to the user. */
+export async function viewSponsored(key: string): Promise<void> {
+  const randomId = sponsoredRandomIds.get(key);
+  if(!randomId) return;
+  const {managers} = await bootTelegram();
+  await managers.appMessagesManager.viewSponsoredMessage(randomId);
+}
+
+/** Report that the user opened the sponsored message's link. */
+export async function clickSponsored(key: string): Promise<void> {
+  const randomId = sponsoredRandomIds.get(key);
+  if(!randomId) return;
+  const {managers} = await bootTelegram();
+  await managers.appMessagesManager.clickSponsoredMessage(randomId);
 }

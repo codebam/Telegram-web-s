@@ -21,6 +21,7 @@
   import {GIT_COMMIT, GIT_COMMIT_SHORT, GIT_COMMIT_URL} from '$lib/buildInfo';
   import {
     availableReactions,
+    clickSponsored,
     deleteMessage,
     deleteMessages,
     forwardMessage,
@@ -36,6 +37,7 @@
     loadFolders,
     loadHistory,
     loadPinned,
+    loadSponsored,
     hidePinnedMessage,
     loadOlder,
     loadTopics,
@@ -66,11 +68,13 @@
     toggleMute,
     togglePin,
     toggleReaction,
+    viewSponsored,
     votePoll,
     type DialogItem,
     type FolderItem,
     type MessageButton,
     type MessageItem,
+    type SponsoredItem,
     type TopicItem
   } from '$lib/telegram/chats';
   import {
@@ -166,6 +170,13 @@
   let lightboxIndex = $state<number | null>(null);
   let highlightedMid = $state<number | null>(null);
   let pinnedMessage = $state<MessageItem | null>(null);
+  /**
+   * The channel's sponsored message. Telegram's API terms require third-party
+   * clients to show these unmodified and to report views and clicks, so nothing
+   * below filters or hides what the server returns.
+   */
+  let sponsored = $state<SponsoredItem | null>(null);
+  let sponsoredViewed = '';
   let businessBot = $state<BusinessBot | null>(null);
   let businessBotBusy = $state(false);
   let forwarding = $state<MessageItem | null>(null);
@@ -196,6 +207,7 @@
     messages.filter(
       (m) =>
         m.media &&
+        !m.media.selfDestruct &&
         (m.media.kind === 'photo' || m.media.kind === 'video' || m.media.kind === 'gif') &&
         !m.stickerDocId
     )
@@ -1073,6 +1085,30 @@
     if (!openLink(url)) window.open(url, '_blank', 'noopener,noreferrer');
   }
 
+  /* ---------- sponsored messages ---------- */
+
+  /**
+   * Report the impression once the ad has actually been on screen — a view sent
+   * on mount would be a view the user never had.
+   */
+  function sponsoredSeen(node: HTMLElement, key: string) {
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      observer.disconnect();
+      if (sponsoredViewed === key) return;
+      sponsoredViewed = key;
+      viewSponsored(key).catch(() => {});
+    });
+
+    observer.observe(node);
+    return {destroy: () => observer.disconnect()};
+  }
+
+  function openSponsored(item: SponsoredItem) {
+    clickSponsored(item.key).catch(() => {});
+    followLink(item.url);
+  }
+
   function openBotMenuApp() {
     if (activePeerId === null || !botMenuButton) return;
 
@@ -1380,6 +1416,17 @@
     loadPinned(peerId, threadId).then((message) => (pinnedMessage = message)).catch(() => (pinnedMessage = null));
     businessBot = null;
     refreshBusinessBot(peerId);
+    // Off the chat-open path on purpose: the ad is fetched after the history
+    // renders, never awaited before it. Only non-user peers carry one, and the
+    // manager itself returns nothing for channels we can post to.
+    sponsored = null;
+    if (peerId < 0) {
+      loadSponsored(peerId)
+        .then((item) => {
+          if (activePeerId === peerId) sponsored = item;
+        })
+        .catch(() => {});
+    }
     setActiveNotificationPeer(peerId);
     getReadOutboxMaxId(peerId).then((maxId) => {
       if (activePeerId === peerId) readOutboxMaxId = maxId;
@@ -1779,6 +1826,11 @@
     {#if activePeerId === null || (activeIsForum && !topicOpen)}
       <div class="empty">
         <p class="muted">{activeIsForum ? 'Select a topic' : 'Select a chat'}</p>
+        <!-- Same disclosure the sign-in card carries; required for a
+             third-party client by https://core.telegram.org/api/terms. -->
+        <p class="disclosure">
+          Web S is an unofficial client built on the Telegram API. Not affiliated with Telegram.
+        </p>
         {#if GIT_COMMIT_URL}
           <a
             class="build-commit"
@@ -2003,6 +2055,13 @@
                       </button>
                     {/each}
                   </div>
+                {:else if message.media?.selfDestruct}
+                  <!-- Self-destructing media is never rendered here: this client
+                       cannot enforce the expiry, and showing a copy that outlives
+                       it would interfere with the feature. -->
+                  <span class="self-destruct">
+                    🔥 {message.out ? 'Self-destructing media sent' : 'Self-destructing media — open it in an official Telegram app'}
+                  </span>
                 {:else if message.media}
                   {#if message.media.kind === 'photo' || message.media.kind === 'video' || message.media.kind === 'gif'}
                     <button class="media-button" onclick={() => openLightbox(message)}>
@@ -2151,6 +2210,26 @@
               </div>
             {/if}
           {/each}
+
+          {#if sponsored}
+            <div class="sponsored" use:sponsoredSeen={sponsored.key}>
+              <span class="sponsored-label">
+                {sponsored.recommended ? 'Recommended' : 'Sponsored'}
+              </span>
+              {#if sponsored.title}
+                <span class="sponsored-title">{sponsored.title}</span>
+              {/if}
+              <span class="sponsored-text">{sponsored.text}</span>
+              {#if sponsored.sponsorInfo || sponsored.additionalInfo}
+                <span class="sponsored-info">
+                  {[sponsored.sponsorInfo, sponsored.additionalInfo].filter(Boolean).join(' · ')}
+                </span>
+              {/if}
+              <button class="sponsored-btn" onclick={() => openSponsored(sponsored!)}>
+                {sponsored.buttonText}
+              </button>
+            </div>
+          {/if}
         {/if}
       </div>
 
@@ -2787,7 +2866,17 @@
   .empty {
     display: grid;
     place-items: center;
+    align-content: center;
+    gap: 8px;
     height: 100%;
+  }
+
+  .empty .disclosure {
+    max-width: 320px;
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--text-dim);
+    text-align: center;
   }
 
   /* Which commit the running bundle came from — only while no chat is open, so
@@ -3369,6 +3458,64 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .self-destruct {
+    display: inline-block;
+    padding: 6px 10px;
+    border-radius: 10px;
+    border: 1px dashed var(--border);
+    font-size: 13px;
+    color: var(--text-dim);
+  }
+
+  .sponsored {
+    align-self: flex-start;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-width: 560px;
+    margin: 8px 0;
+    padding: 10px 12px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    background: var(--surface-2, rgba(127, 127, 127, 0.08));
+  }
+
+  .sponsored-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .sponsored-title {
+    font-weight: 600;
+  }
+
+  .sponsored-text {
+    font-size: 14px;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .sponsored-info {
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+
+  .sponsored-btn {
+    align-self: flex-start;
+    margin-top: 4px;
+    padding: 6px 12px;
+    border: none;
+    border-radius: 8px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
   }
 
   .business-bar {
