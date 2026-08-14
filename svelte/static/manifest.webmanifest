@@ -1,7 +1,7 @@
 {
   "name": "Web S",
   "short_name": "Web S",
-  "description": "A messaging client",
+  "description": "Unofficial Telegram client built on the Telegram API. Not affiliated with Telegram.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

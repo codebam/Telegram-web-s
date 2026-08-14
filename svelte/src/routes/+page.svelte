@@ -209,6 +209,14 @@
     {#if error}
       <p class="error">{error}</p>
     {/if}
+
+    <!-- Required by https://core.telegram.org/api/terms: a third-party client
+         must state in-app that it is unofficial and uses the Telegram API. -->
+    <p class="disclosure">
+      Web S is an unofficial client built on the
+      <a href="https://core.telegram.org/api" target="_blank" rel="noopener noreferrer">Telegram API</a>.
+      It is not affiliated with, endorsed by, or operated by Telegram.
+    </p>
   </div>
 
   {#if GIT_COMMIT_URL}
@@ -232,6 +240,18 @@
     display: grid;
     place-items: center;
     padding: 24px;
+  }
+
+  .disclosure {
+    margin-top: 18px;
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--text-dim);
+    text-align: center;
+  }
+
+  .disclosure a {
+    color: inherit;
   }
 
   /* The commit this build came from — same marker the empty chat pane shows
