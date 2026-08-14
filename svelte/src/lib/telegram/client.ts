@@ -74,6 +74,12 @@ async function doBoot(): Promise<TelegramClient> {
   // and we never run.
   await managers.apiUpdatesManager.attach();
 
+  // Warm the content-restriction settings here so the first history load never
+  // pays for them on the chat-open path.
+  import('./restrictions')
+    .then(({warmRestrictionSettings}) => warmRestrictionSettings())
+    .catch(() => {});
+
   return {
     managers,
     authState: allStates[getCurrentAccount()].state.authState

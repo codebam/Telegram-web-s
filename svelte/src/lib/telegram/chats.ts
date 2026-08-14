@@ -1,4 +1,5 @@
 import {bootTelegram} from './client';
+import {peerRestrictionText, restrictionTextOf} from './restrictions';
 
 /**
  * Data layer between tweb's worker-side managers and the Svelte UI.
@@ -27,6 +28,11 @@ export type DialogItem = {
   readMaxId: number;
   /** Highest outgoing message the *other* side has read — drives read ticks. */
   readOutboxMaxId: number;
+  /**
+   * The server's wording for why this peer is restricted on this platform, ''
+   * when it is not. Its content must not be rendered while this is set.
+   */
+  restrictionText: string;
 };
 
 export type TopicItem = {
@@ -52,6 +58,12 @@ export type MediaItem = {
    * terms forbid.
    */
   selfDestruct: boolean;
+  /**
+   * The server still counts this media as unheard/unwatched. Playing it has to
+   * report `readMessageContents` back, the same as the official clients — the
+   * sender is entitled to that receipt.
+   */
+  unread: boolean;
 };
 
 export type ReplyPreview = {
@@ -128,6 +140,11 @@ export type MessageItem = {
   rich: RichBlock[] | null;
   /** Bot keyboard attached to the message — rows of buttons, empty when none. */
   buttons: MessageButton[][];
+  /**
+   * Why the server restricts this message on this platform, '' when it does
+   * not. Set means the body and media must stay hidden behind the reason.
+   */
+  restrictionText: string;
 };
 
 /** A single button from a message's `reply_markup`. */
@@ -225,7 +242,8 @@ function mediaOf(message: any): MediaItem | null {
       name: '',
       size: media.photo.size ?? 0,
       duration: 0,
-      selfDestruct: !!media.ttl_seconds
+      selfDestruct: !!media.ttl_seconds,
+      unread: !!message.pFlags?.media_unread
     };
   }
 
@@ -258,7 +276,8 @@ function mediaOf(message: any): MediaItem | null {
       duration: video?.duration ?? audio?.duration ?? 0,
       // A one-time voice message or video note carries the same flag as a
       // self-destructing photo, plus `round_message` / `voice` once-flags.
-      selfDestruct: !!media.ttl_seconds
+      selfDestruct: !!media.ttl_seconds,
+      unread: !!message.pFlags?.media_unread
     };
   }
 
@@ -463,6 +482,10 @@ async function richBody(message: any): Promise<{text: string; entities: any[]} |
 
 /** Preview text for the chat list, including rich messages. */
 async function previewOf(message: any): Promise<string> {
+  // A restricted message must not leak through the chat list either.
+  const restricted = await restrictionTextOf(message?.restriction_reason);
+  if(restricted) return restricted;
+
   const plain = messagePreview(message);
   if(plain) return plain;
 
@@ -527,7 +550,8 @@ export async function loadDialogs(limit = 40, filterId = 0): Promise<DialogItem[
         pinned: !!dialog.pFlags?.pinned,
         muted: (dialog.notify_settings?.mute_until ?? 0) > Date.now() / 1000,
         readMaxId: dialog.read_inbox_max_id ?? 0,
-        readOutboxMaxId: dialog.read_outbox_max_id ?? 0
+        readOutboxMaxId: dialog.read_outbox_max_id ?? 0,
+        restrictionText: await peerRestrictionText(peer)
       };
     })
   );
@@ -611,7 +635,8 @@ async function toItem(message: any, peerId: number, selfId: number): Promise<Mes
     webpage: webpageOf(message),
     poll: pollOf(message),
     rich: richBlocksOf(message),
-    buttons: buttonsOf(message)
+    buttons: buttonsOf(message),
+    restrictionText: await restrictionTextOf(message.restriction_reason)
   };
 }
 
@@ -1136,7 +1161,8 @@ export async function searchDialogs(query: string, limit = 40): Promise<DialogIt
         pinned: !!dialog.pFlags?.pinned,
         muted: (dialog.notify_settings?.mute_until ?? 0) > Date.now() / 1000,
         readMaxId: dialog.read_inbox_max_id ?? 0,
-        readOutboxMaxId: dialog.read_outbox_max_id ?? 0
+        readOutboxMaxId: dialog.read_outbox_max_id ?? 0,
+        restrictionText: await peerRestrictionText(peer)
       };
     })
   );
@@ -1172,6 +1198,21 @@ export async function readUpTo(peerId: number, maxId: number, threadId?: number)
   if(!maxId) return;
   const {managers} = await bootTelegram();
   await managers.appMessagesManager.readHistory({peerId, maxId, threadId});
+}
+
+/**
+ * Report that unread media (a voice message, a video note, a mention) has
+ * actually been consumed.
+ *
+ * `readHistory` alone never clears `media_unread`, so without this the sender
+ * keeps seeing an unplayed voice message forever — a read status this client
+ * would be silently withholding. The manager wraps
+ * `messages.readMessageContents` and the mention/reaction counters with it.
+ */
+export async function readMediaContents(peerId: number, mids: number[]): Promise<void> {
+  if(!mids.length) return;
+  const {managers} = await bootTelegram();
+  await managers.appMessagesManager.readMessages(peerId, mids);
 }
 
 /** Explicit "mark as read" action from the chat list. */
