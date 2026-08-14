@@ -50,6 +50,7 @@
     onMessagesDeleted,
     onNewMessage,
     onReadStateChange,
+    readMediaContents,
     readParticipants,
     onTyping,
     onUserUpdate,
@@ -177,6 +178,11 @@
    */
   let sponsored = $state<SponsoredItem | null>(null);
   let sponsoredViewed = '';
+  /**
+   * Set while the open peer is restricted on this platform. Its history is not
+   * loaded at all — the server's reason is shown in place of the timeline.
+   */
+  let activeRestriction = $state('');
   let businessBot = $state<BusinessBot | null>(null);
   let businessBotBusy = $state(false);
   let forwarding = $state<MessageItem | null>(null);
@@ -208,6 +214,7 @@
       (m) =>
         m.media &&
         !m.media.selfDestruct &&
+        !m.restrictionText &&
         (m.media.kind === 'photo' || m.media.kind === 'video' || m.media.kind === 'gif') &&
         !m.stickerDocId
     )
@@ -836,6 +843,12 @@
   function openLightbox(message: MessageItem) {
     const index = mediaMessages.findIndex((m) => m.mid === message.mid);
     if (index >= 0) lightboxIndex = index;
+
+    // Opening unwatched media is what makes it watched; the sender is owed
+    // that receipt just as much as a read text message.
+    if (message.media?.unread && !message.out && activePeerId !== null) {
+      readMediaContents(activePeerId, [message.mid]).catch(() => {});
+    }
   }
 
   /* ---------- search ---------- */
@@ -1377,8 +1390,14 @@
     messages = [];
     replyTo = null;
     error = '';
+    // A peer the server restricts on this platform: its history is never
+    // requested, only the reason is shown.
+    activeRestriction = dialog.restrictionText;
+    sponsored = null;
 
     topicOpen = false;
+
+    if (activeRestriction) return;
 
     if (dialog.isForum) {
       try {
@@ -1934,7 +1953,9 @@
         role="log"
         aria-label="Messages"
       >
-        {#if loadingHistory}
+        {#if activeRestriction}
+          <p class="muted centered restricted-peer">{activeRestriction}</p>
+        {:else if loadingHistory}
           <p class="muted">Loading…</p>
         {:else}
           {#if loadingOlder}
@@ -1956,6 +1977,20 @@
                 class:highlighted={highlightedMid === message.mid}
                 data-mid={message.mid}
               >{message.text}</p>
+            {:else if message.restrictionText}
+              <!-- The server restricts this message on this platform. Only its
+                   own wording is shown; body, media and buttons stay hidden. -->
+              <div class="line" class:out={message.out}>
+                <div
+                  class="bubble restricted"
+                  class:out={message.out}
+                  data-mid={message.mid}
+                  use:observeForRead={message.mid}
+                >
+                  <span class="restricted-text">{message.restrictionText}</span>
+                  <span class="stamp"><span class="time">{timeOf(message.date)}</span></span>
+                </div>
+              </div>
             {:else if message.stickerDocId}
               <!-- Wrapped in the same .line as a bubble, avatar and all, so a
                    sticker starts on the same column as the messages around it
@@ -3458,6 +3493,20 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .bubble.restricted {
+    font-style: italic;
+    color: var(--text-dim);
+  }
+
+  .restricted-text {
+    white-space: pre-wrap;
+  }
+
+  .restricted-peer {
+    margin: auto;
+    max-width: 420px;
   }
 
   .self-destruct {

@@ -1,6 +1,6 @@
 <script lang="ts">
   import Glyph from './Glyph.svelte';
-  import {loadMediaUrl, saveMediaToDisk, type MediaItem} from '$lib/telegram/chats';
+  import {loadMediaUrl, readMediaContents, saveMediaToDisk, type MediaItem} from '$lib/telegram/chats';
 
   let {peerId, mid, media}: {peerId: number; mid: number; media: MediaItem} = $props();
 
@@ -50,6 +50,18 @@
     }
   }
 
+  /**
+   * Playing an unheard voice message owes the sender a receipt — the official
+   * clients send it on play, and only once.
+   */
+  let reportedRead = false;
+
+  function onPlay() {
+    if(reportedRead || !media.unread) return;
+    reportedRead = true;
+    readMediaContents(peerId, [mid]).catch(() => {});
+  }
+
   function duration(seconds: number) {
     if(!seconds) return '';
     const m = Math.floor(seconds / 60);
@@ -85,7 +97,7 @@
     <span class="info">
       <span class="name">{media.name || 'Voice message'}</span>
       {#if url}
-        <audio src={url} controls preload="none"></audio>
+        <audio src={url} controls preload="none" onplay={onPlay}></audio>
       {:else if failed}
         <span class="sub">Unavailable</span>
       {:else}
