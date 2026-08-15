@@ -85,8 +85,11 @@
     type MiniAppRequest
   } from '$lib/telegram/miniApps';
   import {
+    isPeerMuted,
     notifyMessage,
-    setActiveNotificationPeer
+    onPushClick,
+    setActiveNotificationPeer,
+    syncPushSubscription
   } from '$lib/telegram/notifications';
   import {queryInlineBot, sendInlineResult, type InlineQueryAnswer, type InlineResultItem} from '$lib/telegram/settings';
   import {applyAccent, applyDensity, applyTheme} from '$lib/telegram/theme';
@@ -334,6 +337,14 @@
         loadingChats = false;
       }
 
+      // Re-register the push subscription on every boot: the browser can drop
+      // one, and the token Telegram pushes to has to be the current one.
+      syncPushSubscription();
+      onPushClick((peerId) => {
+        window.focus();
+        openPeerChat(peerId);
+      });
+
       // Live updates append a single message instead of reloading the whole
       // history — no flicker, no lost scroll position, one round-trip per event.
       const off = await onNewMessage(async (peerId, mid, threadId) => {
@@ -354,7 +365,11 @@
         if (!isActive) {
           const item = await getMessage(peerId, mid);
           const dialog = dialogs.find((d) => d.peerId === peerId);
-          if (item && !item.out && !dialog?.muted) {
+          // Ask the notification settings rather than the loaded dialog list:
+          // a peer outside the current folder — or one muted only by the
+          // per-type default — has no entry there and used to notify anyway.
+          const muted = item && !item.out ? await isPeerMuted(peerId, threadId) : true;
+          if (item && !item.out && !muted) {
             notifyMessage({
               title: dialog?.title ?? item.fromTitle,
               body: item.text || 'Media',
