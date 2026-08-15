@@ -378,6 +378,16 @@ export class AppNotificationsManager extends AppManager {
     return isMuted;
   }
 
+  // * isPeerLocalMuted reads the cache synchronously; warm it up first so a
+  // * peer whose settings were never fetched doesn't read as unmuted
+  public async getPeerMessagesMuted(peerId: PeerId, threadId?: number) {
+    await Promise.all([
+      this.getNotifyPeerTypeSettings(),
+      this.getNotifySettings({_: 'inputNotifyPeer', peer: this.appPeersManager.getInputPeerById(peerId)})
+    ]);
+    return this.isPeerLocalMuted({peerId, threadId});
+  }
+
   public isPeerStoriesMuted(peerId: PeerId) {
     const notifySettings = this.getPeerLocalSettings({peerId});
     return !!notifySettings?.stories_muted;
