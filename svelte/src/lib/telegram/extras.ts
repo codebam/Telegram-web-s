@@ -211,10 +211,13 @@ export async function loadStoryUrl(peerId: number, id: number): Promise<string |
 
   try {
     // Photos need an explicit size: without one the download resolves against
-    // photoSizeEmpty and throws. Videos download their poster frame.
+    // photoSizeEmpty and throws. A video story plays in a <video>, so it wants
+    // the real file — handing it the poster frame puts a JPEG in a video
+    // element, which renders blank.
+    const isPhoto = media._ === 'messageMediaPhoto';
     const url = await appDownloadManager.downloadMediaURL({
       media: target,
-      thumb: choosePhotoSize(target, 720, 1280, true)
+      thumb: isPhoto ? choosePhotoSize(target, 720, 1280, true) : undefined
     });
     storyUrls.set(key, url ?? null);
     return url ?? null;
