@@ -1,3 +1,4 @@
+import getPeerId from '@appManagers/utils/peers/getPeerId';
 import {bootTelegram} from './client';
 
 /**
@@ -136,7 +137,11 @@ export async function loadStoriesFeed(): Promise<StoryPeer[]> {
 
     return Promise.all(
       peerStories.map(async(entry: any) => {
-        const peerId = Number(entry.peerId ?? entry.peer?.user_id ?? entry.peer?.channel_id ?? 0);
+        // A channel's peerId is the negated channel_id, so the raw `peer`
+        // constructor has to go through getPeerId — reading channel_id off it
+        // addresses a peer nobody has stories for, and the viewer then opens
+        // on an empty list.
+        const peerId = Number(getPeerId(entry.peer));
         const peer: any = await managers.appPeersManager.getPeer(peerId);
         const stories: any[] = entry.stories ?? [];
 
