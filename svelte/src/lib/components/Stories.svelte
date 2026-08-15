@@ -17,6 +17,30 @@
   /** 0–1 fill of the current segment; drives both the bar and auto-advance. */
   let progress = $state(0);
   let paused = $state(false);
+  let video = $state<HTMLVideoElement | null>(null);
+
+  const MUTED_KEY = 'webs:stories-muted';
+  /** Sound is on unless it was turned off before; the choice sticks. */
+  let muted = $state(localStorage.getItem(MUTED_KEY) === '1');
+
+  function toggleMuted() {
+    muted = !muted;
+    localStorage.setItem(MUTED_KEY, muted ? '1' : '0');
+  }
+
+  /**
+   * Opening a story is a click, so unmuted autoplay is normally allowed — but
+   * a browser that still blocks it rejects play() and would otherwise leave a
+   * frozen frame. Fall back to muted rather than to nothing.
+   */
+  function startPlayback() {
+    const el = video;
+    el?.play().catch(() => {
+      if(el !== video || el.muted) return;
+      muted = true;
+      el.play().catch(() => {});
+    });
+  }
 
   /** Photos get a fixed run; videos play for their own duration. */
   const PHOTO_SECONDS = 5;
@@ -94,12 +118,14 @@
     paused = true;
     elapsedBeforePause = performance.now() - startedAt;
     stop();
+    video?.pause();
   }
 
   function resume() {
     if(!openPeer || !paused) return;
     paused = false;
     play();
+    startPlayback();
   }
 
   // Restart the timer whenever the story or its media changes.
@@ -194,6 +220,13 @@
       <header>
         <Avatar peerId={openPeer.peerId} title={openPeer.title} size={32} />
         <span>{openPeer.title}</span>
+        {#if stories[index]?.isVideo}
+          <button
+            class="sound"
+            onclick={toggleMuted}
+            aria-label={muted ? 'Unmute' : 'Mute'}
+          >{muted ? '🔇' : '🔊'}</button>
+        {/if}
         <button class="close" onclick={close} aria-label="Close">✕</button>
       </header>
 
@@ -201,7 +234,15 @@
         <p class="muted">Loading…</p>
       {:else if stories[index]?.isVideo}
         <!-- svelte-ignore a11y_media_has_caption -->
-        <video src={url} autoplay muted playsinline onended={() => step(1)}></video>
+        <video
+          bind:this={video}
+          src={url}
+          autoplay
+          playsinline
+          {muted}
+          oncanplay={startPlayback}
+          onended={() => step(1)}
+        ></video>
       {:else}
         <img src={url} alt="" />
       {/if}
@@ -306,13 +347,22 @@
     font-size: 14px;
   }
 
+  header span {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  header .sound,
   header .close {
-    margin-left: auto;
     background: none;
     border: none;
     color: #fff;
     cursor: pointer;
     font-size: 16px;
+    flex: none;
   }
 
   img,
