@@ -486,7 +486,7 @@ async function previewOf(message: any): Promise<string> {
   const restricted = await restrictionTextOf(message?.restriction_reason);
   if(restricted) return restricted;
 
-  const plain = messagePreview(message);
+  const plain = await messagePreview(message);
   if(plain) return plain;
 
   const rich = await richBody(message);
@@ -494,7 +494,7 @@ async function previewOf(message: any): Promise<string> {
 }
 
 /** Short one-line description, used in the chat list and reply previews. */
-function messagePreview(message: any): string {
+async function messagePreview(message: any): Promise<string> {
   if(!message) return '';
   if(message._ === 'messageService') return serviceText(message);
   if(message.message) return message.message;
@@ -513,10 +513,66 @@ function messagePreview(message: any): string {
   }
 }
 
-function serviceText(message: any): string {
-  const action = message.action?._ ?? '';
+/** Name of a peer as it should read inside a service message. */
+async function actorName(peerId: number, selfId: number): Promise<string> {
+  if(!peerId) return 'Someone';
+  if(peerId === selfId) return 'You';
+  return peerTitle(await getPeer(peerId), selfId);
+}
+
+async function serviceText(message: any): Promise<string> {
+  const action = message?.action;
+  if(!action) return 'Service message';
+
+  const selfId = await getSelfId();
+  const actorId = Number(message.fromId ?? message.from_id?.user_id ?? 0);
+  const actor = await actorName(actorId, selfId);
+
+  switch(action._) {
+    case 'messageActionChatAddUser': {
+      const ids = (action.users ?? []).map(Number);
+      // Joining a group by tapping its link arrives as an add of oneself.
+      if(ids.length === 1 && ids[0] === actorId) return `${actor} joined the group`;
+      const names = await Promise.all(ids.map((id: number) => actorName(id, selfId)));
+      return `${actor} added ${names.join(', ') || 'a user'}`;
+    }
+
+    case 'messageActionChatDeleteUser': {
+      const id = Number(action.user_id);
+      if(id === actorId) return `${actor} left the group`;
+      return `${actor} removed ${await actorName(id, selfId)}`;
+    }
+
+    case 'messageActionChatJoinedByLink':
+      return `${actor} joined the group via invite link`;
+
+    case 'messageActionChatJoinedByRequest':
+      return `${actor} was accepted into the group`;
+
+    case 'messageActionChatCreate':
+      return `${actor} created the group ${action.title ?? ''}`.trim();
+
+    case 'messageActionChannelCreate':
+      return `${actor} created the channel ${action.title ?? ''}`.trim();
+
+    case 'messageActionChatEditTitle':
+      return `${actor} changed the title to ${action.title ?? ''}`.trim();
+
+    case 'messageActionChatEditPhoto':
+      return `${actor} changed the chat photo`;
+
+    case 'messageActionChatDeletePhoto':
+      return `${actor} removed the chat photo`;
+
+    case 'messageActionPinMessage':
+      return `${actor} pinned a message`;
+
+    case 'messageActionCustomAction':
+      return action.message ?? 'Service message';
+  }
+
   // "messageActionChatAddUser" → "Chat add user"
-  const words = action.replace(/^messageAction/, '').replace(/([A-Z])/g, ' $1').trim();
+  const words = (action._ ?? '').replace(/^messageAction/, '').replace(/([A-Z])/g, ' $1').trim();
   return words ? words.charAt(0).toUpperCase() + words.slice(1).toLowerCase() : 'Service message';
 }
 
@@ -597,7 +653,7 @@ async function toItem(message: any, peerId: number, selfId: number): Promise<Mes
   const fromId = Number(message.fromId ?? message.from_id?.user_id ?? peerId);
   const fromPeer = fromId === selfId ? null : await getPeer(fromId);
 
-  let text = message._ === 'messageService' ? serviceText(message) : (message.message ?? '');
+  let text = message._ === 'messageService' ? await serviceText(message) : (message.message ?? '');
   let entities = message.entities ?? [];
 
   if(!text && message._ !== 'messageService') {
@@ -766,7 +822,7 @@ async function replyOf(message: any, peerId: number, selfId: number): Promise<Re
   return {
     mid: replyToMid,
     title: fromId === selfId ? 'You' : peerTitle(fromPeer, selfId),
-    text: messagePreview(replied)
+    text: await messagePreview(replied)
   };
 }
 
