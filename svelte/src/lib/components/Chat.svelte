@@ -990,10 +990,82 @@
     }
   }
 
-  function openReactionPicker(event: MouseEvent, mid: number) {
-    event.preventDefault();
-    event.stopPropagation();
-    reactionPickerFor = {mid, x: event.clientX, y: event.clientY};
+  /** Opens the picker where the context menu was, and closes that menu. */
+  function openReactionPicker(mid: number, x: number, y: number) {
+    messageMenu = null;
+    reactionPickerFor = {mid, x, y};
+  }
+
+  /**
+   * The message menu — reactions included — is reached by right-clicking or
+   * long-pressing a bubble, the way the official clients do it. Touch browsers
+   * fire `contextmenu` on a long press only patchily, so the touch path is
+   * driven here, cancelled as soon as the finger moves so a scroll never pops
+   * a menu, and the click that follows the press is swallowed so the bubble's
+   * own tap handler does not fire behind it.
+   */
+  function pressMenu(node: HTMLElement, mid: number) {
+    let currentMid = mid;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let startX = 0;
+    let startY = 0;
+
+    const swallowClick = (event: MouseEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      node.removeEventListener('click', swallowClick, true);
+    };
+
+    const cancel = () => {
+      if (timer) clearTimeout(timer);
+      timer = null;
+    };
+
+    const oncontextmenu = (event: MouseEvent) => {
+      event.preventDefault();
+      messageMenu = {mid: currentMid, x: event.clientX, y: event.clientY};
+    };
+
+    const ontouchstart = (event: TouchEvent) => {
+      const touch = event.touches[0];
+      if (!touch) return;
+      node.removeEventListener('click', swallowClick, true);
+      startX = touch.clientX;
+      startY = touch.clientY;
+      cancel();
+      timer = setTimeout(() => {
+        timer = null;
+        node.addEventListener('click', swallowClick, true);
+        messageMenu = {mid: currentMid, x: startX, y: startY};
+      }, 450);
+    };
+
+    const ontouchmove = (event: TouchEvent) => {
+      const touch = event.touches[0];
+      if (!touch) return;
+      if (Math.abs(touch.clientX - startX) > 10 || Math.abs(touch.clientY - startY) > 10) cancel();
+    };
+
+    node.addEventListener('contextmenu', oncontextmenu);
+    node.addEventListener('touchstart', ontouchstart, {passive: true});
+    node.addEventListener('touchmove', ontouchmove, {passive: true});
+    node.addEventListener('touchend', cancel);
+    node.addEventListener('touchcancel', cancel);
+
+    return {
+      update(next: number) {
+        currentMid = next;
+      },
+      destroy() {
+        cancel();
+        node.removeEventListener('contextmenu', oncontextmenu);
+        node.removeEventListener('touchstart', ontouchstart);
+        node.removeEventListener('touchmove', ontouchmove);
+        node.removeEventListener('touchend', cancel);
+        node.removeEventListener('touchcancel', cancel);
+        node.removeEventListener('click', swallowClick, true);
+      }
+    };
   }
 
   async function pickReaction(option: ReactionOption) {
@@ -4095,10 +4167,7 @@
                   class:selected={selected.has(message.mid)}
                   data-mid={message.mid}
                   use:observeForRead={message.mid}
-                  oncontextmenu={(e) => {
-                    e.preventDefault();
-                    messageMenu = {mid: message.mid, x: e.clientX, y: e.clientY};
-                  }}
+                  use:pressMenu={message.mid}
                   onclick={() => selecting && toggleSelected(message.mid)}
                   role="presentation"
                 >
@@ -4140,10 +4209,7 @@
                 class:selected={selected.has(message.mid)}
                 data-mid={message.mid}
                 use:observeForRead={message.mid}
-                oncontextmenu={(e) => {
-                  e.preventDefault();
-                  messageMenu = {mid: message.mid, x: e.clientX, y: e.clientY};
-                }}
+                use:pressMenu={message.mid}
                 onclick={() => (selecting ? toggleSelected(message.mid) : openInPlayer(message))}
                 ondblclick={() => quickReact(message)}
                 role="presentation"
@@ -4325,7 +4391,6 @@
                     mid={message.mid}
                     count={message.reactions.length}
                     revision={reactionRevisions[message.mid] ?? 0}
-                    onopenpicker={(event) => openReactionPicker(event, message.mid)}
                     onopenstars={() => (starReactionFor = message.mid)}
                     onerror={(text) => (error = text)}
                   />
@@ -4355,10 +4420,6 @@
                       {message.repliesCount} 💬
                     </button>
                   {/if}
-                  <button
-                    class="reply-btn"
-                    onclick={(event) => openReactionPicker(event, message.mid)}
-                  >React</button>
                   <button class="reply-btn" onclick={() => replyToMessage(message)}>Reply</button>
                   <button class="reply-btn" onclick={() => openForward(message)}>Forward</button>
                   {#if message.text}
@@ -4861,10 +4922,7 @@
       </button>
       {#if !menuMessage.service}
         <button
-          onclick={() => {
-            reactionPickerFor = {mid: menuMessage.mid, x: messageMenu!.x, y: messageMenu!.y};
-            messageMenu = null;
-          }}
+          onclick={() => openReactionPicker(menuMessage.mid, messageMenu!.x, messageMenu!.y)}
         >React…</button>
       {/if}
       {#if menuMessage.text}

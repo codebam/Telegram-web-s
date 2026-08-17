@@ -153,7 +153,10 @@ export async function loadViewerMedia(
   if(urlCache.has(key)) return urlCache.get(key)!;
 
   const {managers} = await bootTelegram();
-  const {default: appDownloadManager} = await import('@lib/appDownloadManager');
+  const [{default: appDownloadManager}, {default: choosePhotoSize}] = await Promise.all([
+    import('@lib/appDownloadManager'),
+    import('@appManagers/utils/photos/choosePhotoSize')
+  ]);
 
   let target: any;
   if(docId) {
@@ -169,7 +172,12 @@ export async function loadViewerMedia(
   }
 
   try {
-    const url = await appDownloadManager.downloadMediaURL({media: target});
+    // A photo has no downloadable file of its own — every rendition is a
+    // photoSize, so one has to be picked. Without it the download has no
+    // location and every image in the viewer fails. Documents download whole.
+    const isPhoto = target._ === 'photo';
+    const thumb = isPhoto ? choosePhotoSize(target, 3840, 3840, true) : undefined;
+    const url = await appDownloadManager.downloadMediaURL({media: target, thumb});
     urlCache.set(key, url ?? null);
     return url ?? null;
   } catch(err) {
