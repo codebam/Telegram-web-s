@@ -1,33 +1,31 @@
 <script lang="ts">
   import Avatar from './Avatar.svelte';
-  import NotificationSettings from './NotificationSettings.svelte';
+  import {
+    disableNotifications,
+    enableNotifications,
+    notificationsEnabled,
+    permission
+  } from '$lib/telegram/notifications';
   import {
     loadAttachBots,
     loadBusiness,
+    loadNotifyScopes,
     loadProfile,
     loadSessions,
     logOut,
     saveBusinessIntro,
     saveProfile,
     saveUsername,
+    setNotifyScope,
     terminateOtherSessions,
     terminateSession,
     type AttachBot,
     type BusinessInfo,
+    type NotifyScope,
     type ProfileInfo,
     type SessionInfo
   } from '$lib/telegram/settings';
-  import {
-    ACCENTS,
-    getAccent,
-    getDensity,
-    getThemeMode,
-    setAccent,
-    setDensity,
-    setThemeMode,
-    type Density,
-    type ThemeMode
-  } from '$lib/telegram/theme';
+  import AppearanceSettings from './AppearanceSettings.svelte';
   import {loadPremium, loadStars, type PremiumInfo, type StarsInfo} from '$lib/telegram/extras';
 
   let {onclose, onminiapp}: {onclose: () => void; onminiapp: (botId: number) => void} = $props();
@@ -52,9 +50,8 @@
   let status = $state('');
   let error = $state('');
 
-  let theme = $state<ThemeMode>(getThemeMode());
-  let accent = $state(getAccent());
-  let density = $state<Density>(getDensity());
+  let scopes = $state<Record<NotifyScope, boolean> | null>(null);
+  let desktopOn = $state(notificationsEnabled());
 
   let sessions = $state<SessionInfo[]>([]);
   let business = $state<BusinessInfo | null>(null);
@@ -76,6 +73,8 @@
           lastName = profile.lastName;
           bio = profile.bio;
           username = profile.username;
+        } else if(current === 'notifications' && !scopes) {
+          scopes = await loadNotifyScopes();
         } else if(current === 'sessions' && !sessions.length) {
           sessions = await loadSessions();
         } else if(current === 'business' && !business) {
@@ -114,6 +113,28 @@
       error = err?.type || err?.message || 'Failed to save';
     } finally {
       saving = false;
+    }
+  }
+
+  async function toggleDesktop() {
+    if(desktopOn) {
+      disableNotifications();
+      desktopOn = false;
+    } else {
+      desktopOn = await enableNotifications();
+      if(!desktopOn) error = 'Permission denied by the browser';
+    }
+  }
+
+  async function toggleScope(scope: NotifyScope) {
+    if(!scopes) return;
+    const next = !scopes[scope];
+    scopes = {...scopes, [scope]: next};
+    try {
+      await setNotifyScope(scope, next);
+    } catch(err: any) {
+      error = err?.type || err?.message || 'Failed to update';
+      scopes = {...scopes, [scope]: !next};
     }
   }
 
@@ -198,48 +219,30 @@
       {/if}
 
     {:else if section === 'appearance'}
-      <p class="label">Theme</p>
-      <div class="chips">
-        {#each ['system', 'light', 'dark'] as mode}
-          <button
-            class:on={theme === mode}
-            onclick={() => { theme = mode as ThemeMode; setThemeMode(theme); }}
-          >{mode}</button>
-        {/each}
-      </div>
-
-      <p class="label">Density</p>
-      <div class="chips">
-        <button
-          class:on={density === 'comfortable'}
-          onclick={() => { density = 'comfortable'; setDensity(density); }}
-        >comfortable</button>
-        <button
-          class:on={density === 'console'}
-          onclick={() => { density = 'console'; setDensity(density); }}
-        >console</button>
-      </div>
-      <p class="muted small">
-        Console swaps bubbles for an aligned monospace grid — about twice as many
-        messages per screen.
-      </p>
-
-      <p class="label">Accent</p>
-      <div class="swatches">
-        {#each ACCENTS as option}
-          <button
-            class="swatch"
-            class:on={accent === option.value}
-            style="background: {option.value}"
-            title={option.name}
-            aria-label={option.name}
-            onclick={() => { accent = option.value; setAccent(accent); }}
-          ></button>
-        {/each}
-      </div>
+      <AppearanceSettings />
 
     {:else if section === 'notifications'}
-      <NotificationSettings />
+      <label class="toggle">
+        <input type="checkbox" checked={desktopOn} onchange={toggleDesktop} />
+        <span>Desktop notifications</span>
+      </label>
+      <p class="muted small">Browser permission: {permission()}</p>
+
+      <p class="label">Notify me about</p>
+      {#if !scopes}
+        <p class="muted">Loading…</p>
+      {:else}
+        {#each [['users', 'Private chats'], ['groups', 'Groups'], ['channels', 'Channels']] as [key, label]}
+          <label class="toggle">
+            <input
+              type="checkbox"
+              checked={scopes[key as NotifyScope]}
+              onchange={() => toggleScope(key as NotifyScope)}
+            />
+            <span>{label}</span>
+          </label>
+        {/each}
+      {/if}
 
     {:else if section === 'sessions'}
       {#if !sessions.length}
@@ -449,45 +452,6 @@
     text-transform: uppercase;
     letter-spacing: 0.04em;
     color: var(--text-dim);
-  }
-
-  .chips {
-    display: flex;
-    gap: 6px;
-  }
-
-  .chips button {
-    padding: 6px 12px;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    background: transparent;
-    color: inherit;
-    cursor: pointer;
-    font-size: 13px;
-    text-transform: capitalize;
-  }
-
-  .chips button.on {
-    background: var(--accent);
-    border-color: transparent;
-    color: #fff;
-  }
-
-  .swatches {
-    display: flex;
-    gap: 8px;
-  }
-
-  .swatch {
-    width: 28px;
-    height: 28px;
-    border-radius: 50%;
-    border: 2px solid transparent;
-    cursor: pointer;
-  }
-
-  .swatch.on {
-    border-color: var(--text);
   }
 
   .toggle {
