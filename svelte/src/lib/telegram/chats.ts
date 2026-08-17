@@ -1,5 +1,6 @@
 import {bootTelegram} from './client';
 import {peerRestrictionText, restrictionTextOf} from './restrictions';
+import type {MessageEntity} from '@layer';
 
 /**
  * Data layer between tweb's worker-side managers and the Svelte UI.
@@ -890,12 +891,13 @@ export async function getMessage(peerId: number, mid: number): Promise<MessageIt
 export async function sendMessage(
   peerId: number,
   text: string,
-  options: {replyToMsgId?: number; threadId?: number} = {}
+  options: {replyToMsgId?: number; threadId?: number; entities?: MessageEntity[]} = {}
 ): Promise<void> {
   const {managers} = await bootTelegram();
   await managers.appMessagesManager.sendText({
     peerId,
     text,
+    entities: options.entities,
     clearDraft: true,
     replyToMsgId: options.replyToMsgId ?? options.threadId,
     threadId: options.threadId
@@ -1066,12 +1068,17 @@ export async function hidePinnedMessage(peerId: number): Promise<void> {
   await managers.appMessagesManager.hidePinnedMessages(peerId);
 }
 
-export async function editMessage(peerId: number, mid: number, text: string): Promise<void> {
+export async function editMessage(
+  peerId: number,
+  mid: number,
+  text: string,
+  entities?: MessageEntity[]
+): Promise<void> {
   const {managers} = await bootTelegram();
   const message = rawMessages.get(messageKey(peerId, mid)) ??
     await managers.appMessagesManager.getMessageByPeer(peerId, mid);
   if(!message) throw new Error('Message not found');
-  await managers.appMessagesManager.editMessage(message, text);
+  await managers.appMessagesManager.editMessage(message, text, {entities});
 }
 
 export async function deleteMessage(peerId: number, mid: number, revoke = true): Promise<void> {
