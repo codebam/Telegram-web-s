@@ -1,14 +1,25 @@
 <script lang="ts">
-  import {onMount, tick} from 'svelte';
+  import {onMount, tick, untrack} from 'svelte';
 
   import Avatar from './Avatar.svelte';
   import Glyph from './Glyph.svelte';
   import ChatInfo from './ChatInfo.svelte';
+  import ChecklistBubble from './ChecklistBubble.svelte';
+  import ContactBubble from './ContactBubble.svelte';
+  import GameBubble from './GameBubble.svelte';
+  import GiftBubble from './GiftBubble.svelte';
+  import InvoiceBubble from './InvoiceBubble.svelte';
+  import LocationBubble from './LocationBubble.svelte';
+  import LocationSender from './LocationSender.svelte';
+  import PollComposer from './PollComposer.svelte';
+  import PollResults from './PollResults.svelte';
   import FolderEditor from './FolderEditor.svelte';
+  import FormatBar from './FormatBar.svelte';
   import FormattedText from './FormattedText.svelte';
   import InlinePreview from './InlinePreview.svelte';
   import BoostPanel from './BoostPanel.svelte';
   import Lightbox from './Lightbox.svelte';
+  import AudioPlayerBar from './AudioPlayerBar.svelte';
   import Media from './Media.svelte';
   import MessagePayment from './MessagePayment.svelte';
   import CallScreen from './CallScreen.svelte';
@@ -18,13 +29,41 @@
   import LinkSheet from './LinkSheet.svelte';
   import NewChat from './NewChat.svelte';
   import PeerPicker from './PeerPicker.svelte';
+  import ForwardSheet from './ForwardSheet.svelte';
+  import ForwardHeader from './ForwardHeader.svelte';
+  import ReplyHeader from './ReplyHeader.svelte';
   import SendFiles from './SendFiles.svelte';
+  import {sendFilesGrouped, type SendFileItem, type UploadHandle, type UploadProgress} from '$lib/telegram/upload';
   import Settings from './Settings.svelte';
   import Stories from './Stories.svelte';
   import Picker from './Picker.svelte';
+  import GlobalSearch from './GlobalSearch.svelte';
+  import EmojiStatus from './EmojiStatus.svelte';
+  import {customEmojiEntities, type PendingCustomEmoji} from '$lib/telegram/emoji';
+  import ReactionBar from './ReactionBar.svelte';
+  import ReactionPicker from './ReactionPicker.svelte';
+  import StarReactionSheet from './StarReactionSheet.svelte';
   import RichMessage from './RichMessage.svelte';
   import Sticker from './Sticker.svelte';
+  import VoiceRecorder from './VoiceRecorder.svelte';
+  import StickerSetSheet from './StickerSetSheet.svelte';
+  import StickerSuggest from './StickerSuggest.svelte';
+  import GifSaveAction from './GifSaveAction.svelte';
+  import CommentsButton from './CommentsButton.svelte';
+  import SavedTags from './SavedTags.svelte';
+  import TopicEditor from './TopicEditor.svelte';
+  import TopicIcon from './TopicIcon.svelte';
+  import BotBar from './BotBar.svelte';
+  import InlineKeyboard from './InlineKeyboard.svelte';
+  import ReplyKeyboard from './ReplyKeyboard.svelte';
+  import Suggestions from './Suggestions.svelte';
+  import {parseStickerSetLink} from '$lib/telegram/stickers';
   import {GIT_COMMIT, GIT_COMMIT_SHORT, GIT_COMMIT_URL} from '$lib/buildInfo';
+  import {
+    sendQuickReaction,
+    sendReaction as sendMessageReaction,
+    type ReactionOption
+  } from '$lib/telegram/reactions';
   import {
     parseTelegramLink,
     resolveLink,
@@ -33,11 +72,9 @@
     type TelegramLink
   } from '$lib/telegram/links';
   import {
-    availableReactions,
     clickSponsored,
     deleteMessage,
     deleteMessages,
-    forwardMessage,
     getDraftText,
     editMessage,
     getMessage,
@@ -53,7 +90,6 @@
     loadSponsored,
     hidePinnedMessage,
     loadOlder,
-    loadTopics,
     markDialogRead,
     markDialogUnread,
     onDialogsUpdate,
@@ -65,33 +101,66 @@
     onReadStateChange,
     readMediaContents,
     readParticipants,
-    reactionParticipants,
     onTyping,
     onUserUpdate,
-    openDiscussion,
     pressCallbackButton,
     readUpTo,
     resolveUsername,
     saveDraftText,
-    searchMessages,
     setOwnOnline,
-    searchDialogs,
     sendDocument,
-    sendFiles,
     sendMessage,
     sendTyping,
     toggleMute,
     togglePin,
-    toggleReaction,
     viewSponsored,
     votePoll,
     type DialogItem,
     type FolderItem,
     type MessageButton,
     type MessageItem,
-    type SponsoredItem,
-    type TopicItem
+    type PollPreview,
+    type SponsoredItem
   } from '$lib/telegram/chats';
+  import {sendContact} from '$lib/telegram/messageTypes';
+  import {
+    FOLDER_ID_ARCHIVE,
+    getArchiveSummary,
+    isPeerOnline,
+    loadArchivedDialogs,
+    loadFolderMemberships,
+    reorderPinnedDialogs,
+    setDialogArchived,
+    toggleFolderMembership,
+    type ArchiveSummary,
+    type FolderMembership
+  } from '$lib/telegram/archive';
+  import {
+    clearTrackedQuote,
+    forwardTo,
+    quoteFromSelection,
+    replySendOptions,
+    trackQuoteSelection,
+    trackedQuote,
+    type ForwardOptions,
+    type ReplyQuote
+  } from '$lib/telegram/reply';
+  import {
+    canCreateTopic,
+    deleteTopic,
+    isSavedViewedAsChats,
+    isViewingForumAsMessages,
+    loadSavedDialogs,
+    loadTopics,
+    openCommentThread,
+    setSavedViewedAsChats,
+    setTopicClosed,
+    setTopicHidden,
+    setViewForumAsMessages,
+    toggleTopicPin,
+    type SavedDialogItem,
+    type TopicItem
+  } from '$lib/telegram/topics';
   import {
     getBotMenuButton,
     openBotAppLink,
@@ -105,9 +174,42 @@
     setActiveNotificationPeer,
     syncPushSubscription
   } from '$lib/telegram/notifications';
+  import {parseComposerText, partsToMarkdown} from '$lib/telegram/composerFormat';
   import {queryInlineBot, sendInlineResult, type InlineQueryAnswer, type InlineResultItem} from '$lib/telegram/settings';
+  import {
+    dialogTargetFor,
+    findMessageIdByDate,
+    searchChatMembers,
+    searchChatMessages,
+    MEDIA_FILTERS,
+    type MediaFilter,
+    type SearchPeerItem
+  } from '$lib/telegram/search';
+  import {
+    acceptUrlAuth,
+    clearBotHistory,
+    filterBotCommands,
+    getBotChatState,
+    getReplyKeyboard,
+    hostOf,
+    loadBotCommands,
+    needsUrlConfirmation,
+    onReplyKeyboardChange,
+    rememberHashtags,
+    requestUrlAuth,
+    searchHashtags,
+    searchMentions,
+    setBotBlocked,
+    startBot,
+    type BotChatState,
+    type BotCommandItem,
+    type ReplyKeyboardButton,
+    type ReplyKeyboardState,
+    type SuggestionItem
+  } from '$lib/telegram/botUi';
   import {applyAccent, applyDensity, applyTheme} from '$lib/telegram/theme';
-  import {paidReactionsAvailable} from '$lib/telegram/payments';
+  import {playAudioMessage} from '$lib/telegram/player';
+  import {applyAppearance} from '$lib/telegram/appearance';
   import {
     getBusinessBot,
     onPeerSettings,
@@ -116,6 +218,21 @@
     startCall,
     type BusinessBot
   } from '$lib/telegram/extras';
+  import EffectOverlay from './EffectOverlay.svelte';
+  import EffectPicker from './EffectPicker.svelte';
+  import ScheduledMessages from './ScheduledMessages.svelte';
+  import SendAsPicker from './SendAsPicker.svelte';
+  import SendOptionsSheet from './SendOptionsSheet.svelte';
+  import {
+    countScheduled,
+    getCurrentSendAs,
+    getSlowMode,
+    isSilentByDefault,
+    onChatFullUpdate,
+    onScheduledUpdate,
+    sendMessageWithOptions,
+    type SlowMode
+  } from '$lib/telegram/sendOptions';
 
   let dialogs = $state<DialogItem[]>([]);
   let topics = $state<TopicItem[]>([]);
@@ -131,6 +248,46 @@
    * timeline" from "nothing picked yet".
    */
   let topicOpen = $state(false);
+  /**
+   * The synthetic "All messages" row above a forum's topics — thread id 0 means
+   * the chat's own timeline, which `openTopic` maps back to no thread at all.
+   */
+  const allMessagesRow: TopicItem = {
+    threadId: 0,
+    title: 'All messages',
+    preview: '',
+    date: 0,
+    unread: 0,
+    closed: false,
+    hidden: false,
+    pinned: false,
+    isGeneral: false,
+    iconColor: 0,
+    iconEmojiId: '',
+    canManage: false
+  };
+  /** Right-clicked topic row, keyed by thread id. */
+  let topicMenuFor = $state<number | null>(null);
+  /** Open topic editor: `{topic: null}` creates, `{topic}` edits. */
+  let topicEditor = $state<{topic: TopicItem | null} | null>(null);
+  let canManageForum = $state(false);
+  /** Forum shown as one flat timeline instead of a topic list. */
+  let forumAsMessages = $state(false);
+  /**
+   * What the open thread actually is. A thread id alone cannot tell a forum
+   * topic from a comment thread from a saved sub-chat, and the header, the
+   * back button and the composer all behave differently for each.
+   */
+  let threadKind = $state<'' | 'topic' | 'comments' | 'saved'>('');
+  /** Comments already on the channel post whose thread is open. */
+  let threadCommentCount = $state(0);
+  /** Where a comment thread was entered from, for the back button. */
+  let commentsOrigin = $state<{peerId: number; title: string} | null>(null);
+  /** Saved Messages split per original sender instead of one timeline. */
+  let savedAsChats = $state(false);
+  let savedDialogs = $state<SavedDialogItem[]>([]);
+  /** Tag currently filtering Saved Messages, '' for no filter. */
+  let savedTag = $state('');
   /** Calls are one-to-one only, and never to Saved Messages. */
   let activeIsUser = $state(false);
   let activeIsSelf = $state(false);
@@ -141,33 +298,54 @@
    */
   let readOutboxMaxId = $state(0);
   let activeIsChannel = $state(false);
-  /** The channel accepts paid (star) reactions on its posts. */
-  let starReactionsOn = $state(false);
+  /**
+   * The sidebar shows a sub-list instead of the chat list: a forum's topics, or
+   * Saved Messages split per sender. Both replace the search box and folders
+   * with a back button to the chat list.
+   */
+  let topicListOpen = $derived(activeIsForum && activePeerId !== null && !forumAsMessages);
+  let savedListOpen = $derived(activeIsSelf && activePeerId !== null && savedAsChats);
+  let sublistOpen = $derived(topicListOpen || savedListOpen);
   /** Peer whose boost page is open, null when closed. */
   let boostPeerId = $state<number | null>(null);
-
-  $effect(() => {
-    const peerId = activePeerId;
-    starReactionsOn = false;
-    if(peerId === null || !activeIsChannel) return;
-    paidReactionsAvailable(peerId).then((available) => {
-      if(peerId === activePeerId) starReactionsOn = available;
-    });
-  });
   /** Names of the people who have read a message, fetched on demand. */
   let readByFor = $state<{mid: number; names: string[]} | null>(null);
-  let reactionMenu = $state<{mid: number; emoticon: string; x: number; y: number} | null>(null);
-  let reactionParticipantsFor = $state<{
-    mid: number;
-    emoticon: string;
-    names: string[];
-    loading: boolean;
-  } | null>(null);
+  /** Open reaction picker, anchored where it was summoned from. */
+  let reactionPickerFor = $state<{mid: number; x: number; y: number} | null>(null);
+  /** Message whose paid (star) reaction sheet is open. */
+  let starReactionFor = $state<number | null>(null);
+  /**
+   * Bumped per message whenever a reaction is sent from here, so that bubble's
+   * bar re-reads its counters even when the server update lands later. Keyed by
+   * mid so one reaction does not make every bubble re-read.
+   */
+  let reactionRevisions = $state<Record<number, number>>({});
+
+  function bumpReaction(mid: number) {
+    reactionRevisions = {...reactionRevisions, [mid]: (reactionRevisions[mid] ?? 0) + 1};
+  }
 
   let loadingChats = $state(true);
   let loadingHistory = $state(false);
   let draft = $state('');
   let replyTo = $state<MessageItem | null>(null);
+  /**
+   * Everything about the pending reply that a `MessageItem` cannot carry: the
+   * quoted excerpt and, for a reply into another chat, where the original
+   * lives. Kept beside `replyTo` rather than inside it because the reply target
+   * is cleared from a dozen places; `mid` is what ties the two together, so a
+   * stale context is simply ignored instead of attaching to the wrong message.
+   */
+  let replyContext = $state<{
+    mid: number;
+    peerId: number;
+    chatTitle: string;
+    quote: ReplyQuote | null;
+  } | null>(null);
+  /** The message a "Reply in…" pick is about to carry into another chat. */
+  let replyingElsewhere = $state<MessageItem | null>(null);
+  /** Its quote, captured before the picker took the selection away. */
+  let replyElsewhereQuote: ReplyQuote | null = null;
   let error = $state('');
   let scroller: HTMLDivElement | undefined = $state();
   /** First unread message id, used for the divider and the open position. */
@@ -177,7 +355,8 @@
   let observer: ResizeObserver | undefined;
 
   let query = $state('');
-  let searching = $state(false);
+  /** True while the sidebar search pane replaces the chat list. */
+  let searchOpen = $state(false);
   let loadingOlder = $state(false);
   let reachedStart = $state(false);
   // False while the loaded window is centred on an older message (a jump), when
@@ -187,11 +366,11 @@
   let typingNames = $state<string[]>([]);
   let editing = $state<MessageItem | null>(null);
   let fileInput: HTMLInputElement | undefined = $state();
+  let mediaInput: HTMLInputElement | undefined = $state();
   let composer: HTMLTextAreaElement | undefined = $state();
   let searchBox: HTMLInputElement | undefined = $state();
   let dragging = $state(false);
   let typingTimer: ReturnType<typeof setTimeout> | undefined;
-  let searchTimer: ReturnType<typeof setTimeout> | undefined;
 
   let folders = $state<FolderItem[]>([]);
   let activeFolder = $state(0);
@@ -200,12 +379,183 @@
   let folderEditorOpen = $state(false);
   let newChatOpen = $state(false);
   let menuFor = $state<DialogItem | null>(null);
+
+  /* ---------- archive, folder membership, presence, pinned order ---------- */
+
+  /** True while the list shows folder 1 instead of the current folder. */
+  let archiveOpen = $state(false);
+  let archivedDialogs = $state<DialogItem[]>([]);
+  let archiveSummary = $state<ArchiveSummary>({total: 0, unread: 0});
+  let loadingArchive = $state(false);
+  /** Peer ids currently online, for the dot on private rows. */
+  let onlinePeerIds = $state<number[]>([]);
+  /** peerId → names typing in that chat right now, for the row preview. */
+  let typingByPeer = $state<Record<number, string[]>>({});
+  /** Peer whose "Add to folder" submenu is open, if any. */
+  let folderMenuFor = $state<number | null>(null);
+  let folderMemberships = $state<FolderMembership[]>([]);
+  let dragPeerId = $state<number | null>(null);
+  let dragOverPeerId = $state<number | null>(null);
+
+  /** The rows on screen: the archive when it is open, the folder otherwise. */
+  let listedDialogs = $derived(archiveOpen ? archivedDialogs : dialogs);
+
+  onMount(() => {
+    let unsubscribe: (() => void) | undefined;
+    let disposed = false;
+
+    (async () => {
+      archiveSummary = await getArchiveSummary();
+
+      const offDialogs = await onDialogsUpdate(async () => {
+        archiveSummary = await getArchiveSummary();
+        if (archiveOpen) archivedDialogs = await loadArchivedDialogs();
+      });
+
+      // The list shows "typing…" for any chat, not just the open one, so it
+      // keeps its own subscription rather than widening the header's.
+      const offTyping = await onTyping((peerId, _threadId, names) => {
+        typingByPeer = {...typingByPeer, [peerId]: names};
+      });
+
+      const offUsers = await onUserUpdate(async (userId) => {
+        const online = await isPeerOnline(userId);
+        const has = onlinePeerIds.includes(userId);
+        if (online && !has) onlinePeerIds = [...onlinePeerIds, userId];
+        else if (!online && has) onlinePeerIds = onlinePeerIds.filter((id) => id !== userId);
+      });
+
+      const all = () => {
+        offDialogs();
+        offTyping();
+        offUsers();
+      };
+
+      if (disposed) all();
+      else unsubscribe = all;
+    })();
+
+    return () => {
+      disposed = true;
+      unsubscribe?.();
+    };
+  });
+
+  // Presence for the rows on screen. Statuses are already cached with the peer,
+  // so this costs a worker round-trip per row and nothing on the network.
+  $effect(() => {
+    const peerIds = listedDialogs.filter((d) => d.isUser && !d.isSelf).map((d) => d.peerId);
+    let cancelled = false;
+
+    (async () => {
+      const states = await Promise.all(peerIds.map((peerId) => isPeerOnline(peerId)));
+      if (!cancelled) onlinePeerIds = peerIds.filter((_, index) => states[index]);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  });
+
+  function typingTextFor(peerId: number): string {
+    const names = typingByPeer[peerId] ?? [];
+    if (!names.length) return '';
+    return `${names.join(', ')} ${names.length > 1 ? 'are' : 'is'} typing…`;
+  }
+
+  async function openArchive() {
+    archiveOpen = true;
+    menuFor = null;
+    folderMenuFor = null;
+    loadingArchive = true;
+    try {
+      archivedDialogs = await loadArchivedDialogs();
+    } catch (err: any) {
+      error = errorOf(err, 'Failed to load the archive');
+    } finally {
+      loadingArchive = false;
+    }
+  }
+
+  function closeArchive() {
+    archiveOpen = false;
+    menuFor = null;
+    folderMenuFor = null;
+  }
+
+  async function openFolderMenu(dialog: DialogItem) {
+    if (folderMenuFor === dialog.peerId) {
+      folderMenuFor = null;
+      return;
+    }
+
+    folderMenuFor = dialog.peerId;
+    folderMemberships = await loadFolderMemberships(dialog.peerId);
+  }
+
+  /* ---------- drag-to-reorder pinned chats ---------- */
+
+  function onRowDragStart(event: DragEvent, dialog: DialogItem) {
+    if (!dialog.pinned) return;
+    dragPeerId = dialog.peerId;
+    event.dataTransfer?.setData('text/plain', String(dialog.peerId));
+    if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+  }
+
+  function onRowDragOver(event: DragEvent, dialog: DialogItem) {
+    if (dragPeerId === null || !dialog.pinned) return;
+    // Only a prevented dragover marks the row as a valid drop target.
+    event.preventDefault();
+    dragOverPeerId = dialog.peerId;
+  }
+
+  function onRowDragEnd() {
+    dragPeerId = null;
+    dragOverPeerId = null;
+  }
+
+  async function onRowDrop(event: DragEvent, dialog: DialogItem) {
+    const from = dragPeerId;
+    dragPeerId = null;
+    dragOverPeerId = null;
+    if (from === null || !dialog.pinned || from === dialog.peerId) return;
+    event.preventDefault();
+
+    const list = listedDialogs;
+    const order = list.filter((d) => d.pinned).map((d) => d.peerId);
+    const fromIndex = order.indexOf(from);
+    const toIndex = order.indexOf(dialog.peerId);
+    if (fromIndex === -1 || toIndex === -1) return;
+    order.splice(toIndex, 0, ...order.splice(fromIndex, 1));
+
+    // Show the new order straight away; the server confirms it right after.
+    const byPeerId = new Map(list.map((d) => [d.peerId, d]));
+    const reordered = [
+      ...order.map((peerId) => byPeerId.get(peerId)!),
+      ...list.filter((d) => !d.pinned)
+    ];
+    if (archiveOpen) archivedDialogs = reordered;
+    else dialogs = reordered;
+
+    try {
+      await reorderPinnedDialogs(order, archiveOpen ? FOLDER_ID_ARCHIVE : activeFolder);
+    } catch (err: any) {
+      error = errorOf(err, 'Failed to reorder pinned chats');
+      if (archiveOpen) archivedDialogs = await loadArchivedDialogs();
+      else dialogs = await loadDialogs(40, activeFolder);
+    }
+  }
   let showInfo = $state(false);
   /** Profile being viewed from a message sender or member list, if any. */
   let profilePeerId = $state<number | null>(null);
   let showPicker = $state(false);
-  let reactionPalette = $state<string[]>([]);
-  let reactingTo = $state<number | null>(null);
+  /**
+   * Custom emoji sitting in the draft as their plain alt text; on send they
+   * become messageEntityCustomEmoji entities over those characters.
+   */
+  let pendingCustomEmoji = $state<PendingCustomEmoji[]>([]);
+  /** Sticker-pack preview, opened from an addstickers link or "View pack". */
+  let packSheet = $state<{setKey: string; docId: string} | null>(null);
   let lightboxIndex = $state<number | null>(null);
   let highlightedMid = $state<number | null>(null);
   let pinnedMessage = $state<MessageItem | null>(null);
@@ -223,12 +573,26 @@
   let activeRestriction = $state('');
   let businessBot = $state<BusinessBot | null>(null);
   let businessBotBusy = $state(false);
-  let forwarding = $state<MessageItem | null>(null);
+  /** Messages queued for the forward sheet, empty when it is closed. */
+  let forwarding = $state<MessageItem[]>([]);
   let atBottom = $state(true);
   let chatQuery = $state('');
   let chatResults = $state<MessageItem[] | null>(null);
   let chatSearchOpen = $state(false);
   let chatSearchTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Server-side total for the current in-chat search — the M in "N of M". */
+  let chatResultCount = $state(0);
+  let chatResultIndex = $state(-1);
+  let chatResultsEnd = $state(true);
+  let chatSearching = $state(false);
+  /** Sender filter: groups and channels only, a DM has just two of them. */
+  let chatFrom = $state<SearchPeerItem | null>(null);
+  let chatFromOpen = $state(false);
+  let chatFromQuery = $state('');
+  let chatMembers = $state<SearchPeerItem[]>([]);
+  let chatFilter = $state<MediaFilter>('all');
+  let chatDate = $state('');
+  let chatFiltersOpen = $state(false);
   let selecting = $state(false);
   let selected = $state<Set<number>>(new Set());
   let messageMenu = $state<{mid: number; x: number; y: number} | null>(null);
@@ -248,6 +612,42 @@
   let botMenuButton = $state<{text: string; url: string} | null>(null);
   /** Files queued by paste, drop or the attach button, pending confirmation. */
   let pendingFiles = $state<File[]>([]);
+  /** The batch currently uploading, null when nothing is in flight. */
+  let upload = $state<UploadHandle | null>(null);
+  let uploadProgress = $state<UploadProgress[] | null>(null);
+  /** Nesting depth of the drag currently over the pane — see onDragEnter. */
+  let dragDepth = 0;
+
+  /** Batch progress as one number, for the bar on the pending bubble. */
+  const uploadOverall = $derived(
+    uploadProgress?.length ?
+      uploadProgress.reduce((sum, item) => sum + item.progress, 0) / uploadProgress.length :
+      null
+  );
+
+  /* ---------- bot keyboards, commands and autocomplete ---------- */
+
+  /** The keyboard the chat's bot last attached, null while it is unknown. */
+  let replyKeyboard = $state<ReplyKeyboardState | null>(null);
+  let replyKeyboardOpen = $state(false);
+  /** The force-reply already honoured, so it does not re-arm on every update. */
+  let forcedReplyMid = 0;
+  /** `row:column` of the callback button waiting on the bot. */
+  let callbackBusyKey = $state('');
+  /** A bot link the user has to approve before it opens. */
+  let linkPrompt = $state<{text: string; confirm: string; onconfirm: () => void} | null>(null);
+  let botState = $state<BotChatState | null>(null);
+  let botBusy = $state(false);
+  let botCommands: BotCommandItem[] = [];
+  /** Which trigger opened the suggestion strip, null when it is closed. */
+  let suggestKind = $state<'command' | 'mention' | 'hashtag' | null>(null);
+  let suggestItems = $state<SuggestionItem[]>([]);
+  let suggestIndex = $state(0);
+  /** Range in the draft the picked suggestion replaces. */
+  let suggestFrom = 0;
+  let suggestTo = 0;
+  /** Guards a slow lookup against a newer keystroke. */
+  let suggestToken = 0;
 
   /** Media messages in order — the lightbox pages through these. */
   const mediaMessages = $derived(
@@ -361,14 +761,13 @@
     applyTheme();
     applyAccent();
     applyDensity();
+    // Wallpaper, text size, bubble spacing and the power-saving flags — all of
+    // them land as CSS variables on <html>.
+    applyAppearance();
 
     (async () => {
       try {
-        [dialogs, folders, reactionPalette] = await Promise.all([
-          loadDialogs(),
-          loadFolders(),
-          availableReactions()
-        ]);
+        [dialogs, folders] = await Promise.all([loadDialogs(), loadFolders()]);
       } catch (err: any) {
         error = errorOf(err, 'Failed to load chats');
       } finally {
@@ -565,9 +964,12 @@
 
   async function runDialogAction(action: () => Promise<void>) {
     menuFor = null;
+    folderMenuFor = null;
     try {
       await action();
       dialogs = await loadDialogs(40, activeFolder);
+      archiveSummary = await getArchiveSummary();
+      if (archiveOpen) archivedDialogs = await loadArchivedDialogs();
     } catch (err: any) {
       error = errorOf(err, 'Action failed');
     }
@@ -588,38 +990,106 @@
     }
   }
 
-  async function react(message: MessageItem, emoticon: string) {
-    if (activePeerId === null) return;
-    reactingTo = null;
+  /** Opens the picker where the context menu was, and closes that menu. */
+  function openReactionPicker(mid: number, x: number, y: number) {
+    messageMenu = null;
+    reactionPickerFor = {mid, x, y};
+  }
+
+  /**
+   * The message menu — reactions included — is reached by right-clicking or
+   * long-pressing a bubble, the way the official clients do it. Touch browsers
+   * fire `contextmenu` on a long press only patchily, so the touch path is
+   * driven here, cancelled as soon as the finger moves so a scroll never pops
+   * a menu, and the click that follows the press is swallowed so the bubble's
+   * own tap handler does not fire behind it.
+   */
+  function pressMenu(node: HTMLElement, mid: number) {
+    let currentMid = mid;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let startX = 0;
+    let startY = 0;
+
+    const swallowClick = (event: MouseEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      node.removeEventListener('click', swallowClick, true);
+    };
+
+    const cancel = () => {
+      if (timer) clearTimeout(timer);
+      timer = null;
+    };
+
+    const oncontextmenu = (event: MouseEvent) => {
+      event.preventDefault();
+      messageMenu = {mid: currentMid, x: event.clientX, y: event.clientY};
+    };
+
+    const ontouchstart = (event: TouchEvent) => {
+      const touch = event.touches[0];
+      if (!touch) return;
+      node.removeEventListener('click', swallowClick, true);
+      startX = touch.clientX;
+      startY = touch.clientY;
+      cancel();
+      timer = setTimeout(() => {
+        timer = null;
+        node.addEventListener('click', swallowClick, true);
+        messageMenu = {mid: currentMid, x: startX, y: startY};
+      }, 450);
+    };
+
+    const ontouchmove = (event: TouchEvent) => {
+      const touch = event.touches[0];
+      if (!touch) return;
+      if (Math.abs(touch.clientX - startX) > 10 || Math.abs(touch.clientY - startY) > 10) cancel();
+    };
+
+    node.addEventListener('contextmenu', oncontextmenu);
+    node.addEventListener('touchstart', ontouchstart, {passive: true});
+    node.addEventListener('touchmove', ontouchmove, {passive: true});
+    node.addEventListener('touchend', cancel);
+    node.addEventListener('touchcancel', cancel);
+
+    return {
+      update(next: number) {
+        currentMid = next;
+      },
+      destroy() {
+        cancel();
+        node.removeEventListener('contextmenu', oncontextmenu);
+        node.removeEventListener('touchstart', ontouchstart);
+        node.removeEventListener('touchmove', ontouchmove);
+        node.removeEventListener('touchend', cancel);
+        node.removeEventListener('touchcancel', cancel);
+        node.removeEventListener('click', swallowClick, true);
+      }
+    };
+  }
+
+  async function pickReaction(option: ReactionOption) {
+    const picker = reactionPickerFor;
+    reactionPickerFor = null;
+    if (!picker || activePeerId === null) return;
+
     try {
-      await toggleReaction(activePeerId, message.mid, emoticon);
-      const updated = await getMessage(activePeerId, message.mid);
-      if (updated) messages = messages.map((m) => (m.mid === message.mid ? updated : m));
+      await sendMessageReaction(activePeerId, picker.mid, option);
+      bumpReaction(picker.mid);
     } catch (err: any) {
       error = errorOf(err, 'Reaction failed');
     }
   }
 
-  function openReactionMenu(event: MouseEvent, message: MessageItem, emoticon: string) {
-    event.preventDefault();
-    event.stopPropagation();
-    reactionMenu = {mid: message.mid, emoticon, x: event.clientX, y: event.clientY};
-  }
+  /** Double-click a bubble to send the configured quick reaction. */
+  async function quickReact(message: MessageItem) {
+    if (activePeerId === null || message.service || selecting) return;
 
-  async function showReactionParticipants() {
-    const menu = reactionMenu;
-    reactionMenu = null;
-    if (!menu || activePeerId === null) return;
-
-    reactionParticipantsFor = {mid: menu.mid, emoticon: menu.emoticon, names: [], loading: true};
-    const participants = await reactionParticipants(activePeerId, menu.mid, menu.emoticon);
-    if (reactionParticipantsFor?.mid === menu.mid && reactionParticipantsFor.emoticon === menu.emoticon) {
-      reactionParticipantsFor = {
-        mid: menu.mid,
-        emoticon: menu.emoticon,
-        names: participants.map((participant) => participant.title),
-        loading: false
-      };
+    try {
+      await sendQuickReaction(activePeerId, message.mid);
+      bumpReaction(message.mid);
+    } catch (err: any) {
+      error = errorOf(err, 'Reaction failed');
     }
   }
 
@@ -666,25 +1136,152 @@
 
   /* ---------- in-chat search ---------- */
 
+  /** Filters narrow the search on their own — an empty query is fine with one. */
+  const chatSearchNarrowed = $derived(
+    !!chatQuery.trim() || chatFilter !== 'all' || !!chatFrom
+  );
+
+  /** Sender picking only makes sense where there is more than one sender. */
+  const canFilterBySender = $derived(activePeerId !== null && activePeerId < 0);
+
+  function chatSearchOptions(offsetId = 0) {
+    return {
+      threadId: activeThreadId,
+      fromPeerId: chatFrom?.peerId,
+      filter: chatFilter,
+      offsetId
+    };
+  }
+
+  async function runChatSearch() {
+    if (activePeerId === null || !chatSearchNarrowed) {
+      chatResults = null;
+      chatResultCount = 0;
+      chatResultIndex = -1;
+      chatResultsEnd = true;
+      return;
+    }
+
+    const peerId = activePeerId;
+    chatSearching = true;
+    try {
+      const page = await searchChatMessages(peerId, chatQuery, chatSearchOptions());
+      if (activePeerId !== peerId) return;
+      chatResults = page.items.map((item) => item.message);
+      chatResultCount = page.count;
+      chatResultIndex = page.items.length ? 0 : -1;
+      chatResultsEnd = page.isEnd;
+    } catch (err: any) {
+      error = errorOf(err, 'Search failed');
+    } finally {
+      chatSearching = false;
+    }
+  }
+
   function onChatQueryInput() {
     clearTimeout(chatSearchTimer);
-    chatSearchTimer = setTimeout(async () => {
-      if (activePeerId === null || !chatQuery.trim()) {
-        chatResults = null;
-        return;
-      }
-      try {
-        chatResults = await searchMessages(activePeerId, chatQuery, {threadId: activeThreadId});
-      } catch (err: any) {
-        error = errorOf(err, 'Search failed');
-      }
-    }, 300);
+    chatSearchTimer = setTimeout(runChatSearch, 300);
+  }
+
+  /** A filter change is a deliberate click, so it searches without the debounce. */
+  function applyChatFilter(filter: MediaFilter) {
+    chatFilter = filter;
+    clearTimeout(chatSearchTimer);
+    runChatSearch();
+  }
+
+  async function openFromPicker() {
+    chatFromOpen = !chatFromOpen;
+    if (chatFromOpen && activePeerId !== null) {
+      chatMembers = await searchChatMembers(activePeerId, chatFromQuery);
+    }
+  }
+
+  async function onFromQueryInput() {
+    if (activePeerId === null) return;
+    chatMembers = await searchChatMembers(activePeerId, chatFromQuery);
+  }
+
+  function pickFrom(member: SearchPeerItem | null) {
+    chatFrom = member;
+    chatFromOpen = false;
+    chatFromQuery = '';
+    clearTimeout(chatSearchTimer);
+    runChatSearch();
+  }
+
+  /** Older results, pulled in when the user pages past the loaded ones. */
+  async function loadMoreChatResults() {
+    if (activePeerId === null || chatResultsEnd || chatSearching || !chatResults?.length) return;
+
+    const peerId = activePeerId;
+    chatSearching = true;
+    try {
+      const page = await searchChatMessages(
+        peerId,
+        chatQuery,
+        chatSearchOptions(chatResults[chatResults.length - 1].mid)
+      );
+      if (activePeerId !== peerId) return;
+
+      const known = new Set(chatResults.map((m) => m.mid));
+      const fresh = page.items.map((item) => item.message).filter((m) => !known.has(m.mid));
+      chatResults = [...chatResults, ...fresh];
+      chatResultsEnd = page.isEnd || !fresh.length;
+    } catch (err: any) {
+      error = errorOf(err, 'Search failed');
+    } finally {
+      chatSearching = false;
+    }
+  }
+
+  /** Step through results newest-first; `step` of 1 goes towards older ones. */
+  async function stepResult(step: number) {
+    if (!chatResults?.length) return;
+
+    const next = chatResultIndex + step;
+    if (next < 0) return;
+
+    if (next >= chatResults.length) {
+      await loadMoreChatResults();
+      if (next >= (chatResults?.length ?? 0)) return;
+    }
+
+    chatResultIndex = next;
+    jumpTo(chatResults[next].mid);
+  }
+
+  function selectResult(index: number) {
+    chatResultIndex = index;
+    if (chatResults?.[index]) jumpTo(chatResults[index].mid);
+  }
+
+  /** Jump the timeline to the first message on the picked day. */
+  async function jumpToDate(value: string) {
+    chatDate = value;
+    if (!value || activePeerId === null) return;
+
+    // The day's last second: the server answers with the newest message at or
+    // before the offset, which is the bottom of that day.
+    const end = new Date(`${value}T23:59:59`);
+    const mid = await findMessageIdByDate(activePeerId, Math.floor(end.getTime() / 1000), activeThreadId);
+    if (mid) jumpTo(mid);
+    else error = 'No messages on that day';
   }
 
   function closeChatSearch() {
     chatSearchOpen = false;
     chatQuery = '';
     chatResults = null;
+    chatResultCount = 0;
+    chatResultIndex = -1;
+    chatResultsEnd = true;
+    chatFrom = null;
+    chatFromOpen = false;
+    chatFromQuery = '';
+    chatFilter = 'all';
+    chatDate = '';
+    chatFiltersOpen = false;
   }
 
   /* ---------- selection ---------- */
@@ -719,7 +1316,9 @@
 
   async function forwardSelected() {
     if (!selected.size) return;
-    forwarding = messages.find((m) => selected.has(m.mid)) ?? null;
+    // Oldest first, so the batch lands in the target chat in the order it was
+    // written rather than the order it happened to be clicked in.
+    forwarding = messages.filter((m) => selected.has(m.mid)).sort((a, b) => a.mid - b.mid);
     allDialogs = await loadDialogs(100, 0);
   }
 
@@ -736,22 +1335,62 @@
     }
   }
 
+  /**
+   * A channel post's comments live in the linked discussion group, so opening
+   * them swaps the peer as well as the thread. The channel is remembered so the
+   * back button returns to the post instead of the chat list.
+   */
   async function openComments(message: MessageItem) {
     if (activePeerId === null) return;
     try {
-      const discussion = await openDiscussion(activePeerId, message.mid);
-      if (!discussion) {
+      const thread = await openCommentThread(activePeerId, message.mid);
+      if (!thread) {
         error = 'No discussion for this post';
         return;
       }
-      activePeerId = discussion.peerId;
-      activeThreadId = discussion.threadId;
+
+      commentsOrigin = {peerId: activePeerId, title: activeTitle};
+      activePeerId = thread.peerId;
+      activeThreadId = thread.threadId;
       activeTitle = 'Comments';
+      threadKind = 'comments';
+      threadCommentCount = thread.count || message.repliesCount;
       activeIsForum = false;
-      await openHistory(discussion.peerId, discussion.threadId);
+      // The discussion group is a megagroup: ticks, not view counts, and the
+      // composer must be live so a comment can actually be posted.
+      activeIsChannel = false;
+      activeIsUser = false;
+      activeIsSelf = false;
+      activeRestriction = '';
+      topicOpen = true;
+      replyTo = null;
+      await openHistory(thread.peerId, thread.threadId, thread.count, thread.readMaxId);
     } catch (err: any) {
       error = errorOf(err, 'Could not open comments');
     }
+  }
+
+  /** Back out of a comment thread to the channel post it belongs to. */
+  async function leaveCommentThread() {
+    const origin = commentsOrigin;
+    commentsOrigin = null;
+    threadKind = '';
+    threadCommentCount = 0;
+    activeThreadId = undefined;
+    if (!origin) {
+      activePeerId = null;
+      return;
+    }
+
+    const dialog = dialogs.find((d) => d.peerId === origin.peerId);
+    if (dialog) {
+      await openChat(dialog);
+      return;
+    }
+
+    activePeerId = origin.peerId;
+    activeTitle = origin.title;
+    await openHistory(origin.peerId);
   }
 
   /* ---------- jumping to a message ---------- */
@@ -789,23 +1428,37 @@
     }, 1600);
   }
 
+  /**
+   * Jump from a reply header to the message it answers. A cross-chat reply
+   * points into another conversation, so that one is opened first.
+   */
+  async function jumpToReply(reply: NonNullable<MessageItem['reply']>) {
+    if (reply.deleted) return;
+
+    if (reply.peerId !== activePeerId) {
+      await openPeerChat(reply.peerId);
+    }
+
+    await jumpTo(reply.mid);
+  }
+
   /* ---------- forward and copy ---------- */
 
   async function openForward(message: MessageItem) {
-    forwarding = message;
+    forwarding = [message];
     allDialogs = await loadDialogs(100, 0);
   }
 
-  async function doForward(toPeerId: number) {
-    const message = forwarding;
-    const mids = selecting && selected.size ? [...selected] : message ? [message.mid] : [];
-    forwarding = null;
+  async function doForward(targets: number[], options: ForwardOptions) {
+    const mids = forwarding.map((m) => m.mid);
+    const fromPeerId = activePeerId;
+    forwarding = [];
     selecting = false;
     selected = new Set();
-    if (!mids.length || activePeerId === null) return;
+    if (!mids.length || !targets.length || fromPeerId === null) return;
 
     try {
-      await forwardMessage(activePeerId, mids, toPeerId);
+      await forwardTo(fromPeerId, mids, targets, options);
     } catch (err: any) {
       error = errorOf(err, 'Forward failed');
     }
@@ -922,6 +1575,18 @@
     readByFor = {mid: message.mid, names};
   }
 
+  /**
+   * Music and voice play in the persistent bar rather than in the bubble, so
+   * playback survives leaving the chat. The bar is the single audio source:
+   * starting a track stops anything else the page is playing.
+   */
+  function openInPlayer(message: MessageItem) {
+    const kind = message.media?.kind;
+    if (kind !== 'audio' && kind !== 'voice') return;
+    if (message.media?.selfDestruct || activePeerId === null) return;
+    playAudioMessage(activePeerId, message.mid).catch(() => {});
+  }
+
   function openLightbox(message: MessageItem) {
     const index = mediaMessages.findIndex((m) => m.mid === message.mid);
     if (index >= 0) lightboxIndex = index;
@@ -933,37 +1598,50 @@
     }
   }
 
-  /* ---------- search ---------- */
+  /* ---------- global search ---------- */
 
-  async function runSearch() {
-    searching = true;
-    try {
-      dialogs = await searchDialogs(query);
-    } catch (err: any) {
-      error = errorOf(err, 'Search failed');
-    } finally {
-      searching = false;
+  /**
+   * The search pane owns its own results and debounce; the box here only holds
+   * the query and decides when the pane replaces the chat list.
+   */
+  function openSearch() {
+    searchOpen = true;
+  }
+
+  function closeSearch() {
+    searchOpen = false;
+    query = '';
+    searchBox?.blur();
+  }
+
+  function onQueryKey(e: KeyboardEvent) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      closeSearch();
     }
   }
 
-  function onQueryInput() {
-    clearTimeout(searchTimer);
-    searchTimer = setTimeout(runSearch, 250);
+  /** A search result opens like a chat-list row, dialog or not. */
+  async function openSearchPeer(peerId: number) {
+    try {
+      const target = await dialogTargetFor(peerId);
+      closeSearch();
+      await openChat(target);
+    } catch (err: any) {
+      error = errorOf(err, 'Could not open that chat');
+    }
   }
 
-  /**
-   * Enter opens the first result. The keystroke can beat the debounce, so run
-   * the pending search first rather than acting on the previous query's list.
-   */
-  async function onQueryKey(e: KeyboardEvent) {
-    if (e.key !== 'Enter' || e.isComposing || !query.trim()) return;
-    e.preventDefault();
-
-    clearTimeout(searchTimer);
-    await runSearch();
-
-    const first = dialogs[0];
-    if (first) openChat(first);
+  /** Open the chat a found message lives in, then jump to the message itself. */
+  async function openSearchMessage(peerId: number, mid: number) {
+    try {
+      const target = await dialogTargetFor(peerId);
+      closeSearch();
+      await openChat(target);
+      if (activePeerId === peerId) await jumpTo(mid);
+    } catch (err: any) {
+      error = errorOf(err, 'Could not open that message');
+    }
   }
 
   /* ---------- scrollback ---------- */
@@ -997,37 +1675,113 @@
 
   /* ---------- attachments ---------- */
 
+  let attachMenu = $state(false);
+  let locationSender = $state(false);
+  let pollComposer = $state(false);
+  /** Picking someone to share as a contact card, rather than to forward to. */
+  let contactPicking = $state(false);
+  let pollResults = $state<{mid: number; poll: PollPreview} | null>(null);
+
+  async function openContactPicker() {
+    attachMenu = false;
+    if (activePeerId === null) return;
+    allDialogs = await loadDialogs(100, 0);
+    contactPicking = true;
+  }
+
+  async function shareContact(contactPeerId: number) {
+    contactPicking = false;
+    if (activePeerId === null) return;
+
+    const replyToMsgId = replyTo?.mid;
+    replyTo = null;
+
+    try {
+      await sendContact(activePeerId, contactPeerId, {threadId: activeThreadId, replyToMsgId});
+    } catch (err: any) {
+      error = errorOf(err, 'Could not share the contact');
+    }
+  }
+
   /** Queue files for confirmation rather than sending them blind. */
   function attach(files: FileList | File[] | null) {
-    if (!files || activePeerId === null) return;
+    // Queuing a second batch over one that is mid-upload would strand the
+    // progress the dialog is showing; make the user finish or cancel first.
+    if (!files || activePeerId === null || upload) return;
     const list = Array.from(files);
     if (list.length) pendingFiles = list;
   }
 
-  async function confirmSend(files: File[], asPhoto: boolean, caption: string) {
-    pendingFiles = [];
-    if (activePeerId === null) return;
+  /**
+   * Upload the confirmed batch, keeping the dialog up while it runs so the
+   * progress bars and the cancel button have somewhere to live.
+   */
+  async function confirmSend(items: SendFileItem[], caption: string) {
+    if (activePeerId === null || upload) return;
 
     const replyToMsgId = replyTo?.mid;
     replyTo = null;
     draft = '';
 
+    uploadProgress = items.map(() => ({progress: 0, error: ''}));
+
+    const handle = sendFilesGrouped(activePeerId, items, {
+      caption,
+      threadId: activeThreadId,
+      replyToMsgId,
+      onprogress: (state) => (uploadProgress = state)
+    });
+    upload = handle;
+
     try {
-      await sendFiles(activePeerId, files, {
-        caption,
-        asPhoto,
-        threadId: activeThreadId,
-        replyToMsgId
-      });
+      await handle.promise;
     } catch (err: any) {
-      error = errorOf(err, 'Upload failed');
+      // A cancel rejects the same way a failure does; only a real failure is
+      // worth putting in front of the user.
+      if (upload === handle) error = errorOf(err, 'Upload failed');
+    } finally {
+      if (upload === handle) {
+        upload = null;
+        uploadProgress = null;
+        pendingFiles = [];
+      }
     }
+  }
+
+  /** Abort the batch in flight and put the dialog back to its editable state. */
+  function cancelUpload() {
+    upload?.cancel();
+    upload = null;
+    uploadProgress = null;
+    pendingFiles = [];
   }
 
   function onDrop(e: DragEvent) {
     e.preventDefault();
+    dragDepth = 0;
     dragging = false;
     attach(e.dataTransfer?.files ?? null);
+  }
+
+  /**
+   * `dragenter`/`dragleave` fire for every element the pointer crosses, so a
+   * bare `dragleave` handler flickers the overlay off over each child. Counting
+   * enters against leaves is what keeps it steady.
+   */
+  function onDragEnter(e: DragEvent) {
+    if (activePeerId === null || !hasFiles(e)) return;
+    dragDepth++;
+    dragging = true;
+  }
+
+  function onDragLeave() {
+    if (dragDepth > 0) dragDepth--;
+    if (!dragDepth) dragging = false;
+  }
+
+  /** Ignore drags of selected text or a link — only files open the dialog. */
+  function hasFiles(e: DragEvent) {
+    return Array.from(e.dataTransfer?.types ?? []).includes('Files');
   }
 
   /**
@@ -1070,15 +1824,88 @@
     composer?.focus();
   }
 
+  /**
+   * The text currently selected inside a message's bubble, as a quote. Telegram
+   * attaches the excerpt the user highlighted, so replying while text is
+   * selected quotes exactly that fragment instead of the whole message.
+   */
+  function quoteOf(message: MessageItem): ReplyQuote | null {
+    if (!message.text) return null;
+
+    // Clicking the button collapses the live selection, so the tracked one is
+    // what survives that far; the live read is the fallback for a keyboard path.
+    const remembered = trackedQuote(message.mid);
+    if (remembered) return remembered;
+
+    const bubble = scroller?.querySelector<HTMLElement>(`[data-mid="${message.mid}"]`);
+    return bubble ? quoteFromSelection(bubble, message.text) : null;
+  }
+
+  // Quoting needs the selection as it was made, not as it survives the click
+  // that acts on it, so it is captured while it happens.
+  $effect(() => trackQuoteSelection((mid) => messages.find((m) => m.mid === mid)?.text ?? ''));
+
   function replyToMessage(message: MessageItem) {
+    const quote = quoteOf(message);
+    clearTrackedQuote();
     replyTo = message;
+    replyContext = activePeerId === null ?
+      null :
+      {mid: message.mid, peerId: activePeerId, chatTitle: '', quote};
     focusComposer();
   }
+
+  /**
+   * "Reply in…" — keep this message as the reply target but write the answer in
+   * a different chat. The reply then carries `replyToPeerId`, and the bubble it
+   * produces renders as a cross-chat reply on both sides.
+   */
+  async function openReplyElsewhere(message: MessageItem) {
+    // The selection is read now: picking a chat takes several clicks, and none
+    // of them leaves it intact.
+    replyElsewhereQuote = quoteOf(message);
+    clearTrackedQuote();
+    replyingElsewhere = message;
+    allDialogs = await loadDialogs(100, 0);
+  }
+
+  async function doReplyElsewhere(toPeerId: number) {
+    const message = replyingElsewhere;
+    const sourcePeerId = activePeerId;
+    const sourceTitle = activeTitle;
+    const quote = replyElsewhereQuote;
+    replyElsewhereQuote = null;
+    replyingElsewhere = null;
+    if (!message || sourcePeerId === null) return;
+
+    // Opening the chat clears the pending reply, so the target is set after.
+    await openPeerChat(toPeerId);
+    replyTo = message;
+    replyContext = {mid: message.mid, peerId: sourcePeerId, chatTitle: sourceTitle, quote};
+    focusComposer();
+  }
+
+  function cancelReply() {
+    replyTo = null;
+    replyContext = null;
+  }
+
+  /** Drops the quote but keeps replying, like Telegram's "remove quote". */
+  function dropQuote() {
+    if (replyContext) replyContext = {...replyContext, quote: null};
+  }
+
+  /** The reply context, but only while it still describes the reply target. */
+  const activeReplyContext = $derived(
+    replyTo && replyContext?.mid === replyTo.mid ? replyContext : null
+  );
 
   function startEdit(message: MessageItem) {
     editing = message;
     replyTo = null;
-    draft = message.text;
+    // Markers back in, so the formatting the message already carries survives
+    // the round trip instead of being flattened by the save.
+    draft = message.parts?.length ? partsToMarkdown(message.parts) : message.text;
     focusComposer();
   }
 
@@ -1162,6 +1989,13 @@
    * ordinary link.
    */
   function openLink(url: string): boolean {
+    // A t.me/addstickers link opens the pack in place instead of the browser.
+    const stickerSet = parseStickerSetLink(url);
+    if (stickerSet) {
+      packSheet = {setKey: stickerSet, docId: ''};
+      return true;
+    }
+
     const link = parseMiniAppLink(url);
     if (link) {
       const peerId = activePeerId;
@@ -1217,12 +2051,13 @@
         break;
 
       case 'stickerSet':
-        // No in-app sticker-set viewer yet — hand it to the official client.
-        window.open(
-          `https://t.me/${action.isEmoji ? 'addemoji' : 'addstickers'}/${action.set}`,
-          '_blank',
-          'noopener,noreferrer'
-        );
+        // Sticker packs open in place; an emoji pack has no in-app viewer yet,
+        // so it still goes out to the official client.
+        if (action.isEmoji) {
+          window.open(`https://t.me/addemoji/${action.set}`, '_blank', 'noopener,noreferrer');
+        } else {
+          packSheet = {setKey: action.set, docId: ''};
+        }
         break;
 
       case 'webApp':
@@ -1281,6 +2116,52 @@
     };
   }
 
+  /**
+   * A bot can label a link button anything, so anywhere outside Telegram's own
+   * domains gets a confirmation carrying the real destination.
+   */
+  function openBotLink(url: string) {
+    if (!url) return;
+    if (!needsUrlConfirmation(url)) {
+      followLink(url);
+      return;
+    }
+
+    linkPrompt = {
+      text: `Open ${hostOf(url) || url}? This link was sent by a bot.`,
+      confirm: 'Open link',
+      onconfirm: () => followLink(url)
+    };
+  }
+
+  /** `keyboardButtonUrlAuth`: ask the server, then the user, then log in. */
+  async function pressLoginButton(message: MessageItem, button: MessageButton) {
+    if (activePeerId === null) return;
+    const peerId = activePeerId;
+
+    const prompt = await requestUrlAuth(peerId, message.mid, button.buttonId, button.url);
+    if (prompt.kind === 'open') {
+      openBotLink(prompt.url);
+      return;
+    }
+
+    const who = prompt.botTitle ? ` and let ${prompt.botTitle} know who you are` : '';
+    linkPrompt = {
+      text: `Log in to ${hostOf(button.url) || button.url}${who}?`,
+      confirm: 'Log in',
+      onconfirm: async () => {
+        const url = await acceptUrlAuth(
+          peerId,
+          message.mid,
+          button.buttonId,
+          button.url,
+          prompt.requestWriteAccess
+        );
+        followLink(url);
+      }
+    };
+  }
+
   async function pressButton(message: MessageItem, button: MessageButton) {
     if (activePeerId === null) return;
     // Keyboards belong to the bot that sent the message.
@@ -1288,7 +2169,42 @@
 
     switch (button.kind) {
       case 'url':
-        if (button.url) followLink(button.url);
+        openBotLink(button.url);
+        break;
+
+      case 'loginUrl':
+        await pressLoginButton(message, button);
+        break;
+
+      case 'userProfile':
+        if (button.userId) profilePeerId = button.userId;
+        break;
+
+      case 'buy':
+        error = 'Payments are not supported in this client yet.';
+        break;
+
+      case 'game':
+      case 'requestPhone':
+      case 'requestGeo':
+      case 'requestPoll':
+        try {
+          callbackBusyKey = `${button.row}:${button.column}`;
+          const answer = await pressCallbackButton(
+            activePeerId,
+            message.mid,
+            button.row,
+            button.column,
+            button.kind === 'game'
+          );
+          if (answer.url) openBotLink(answer.url);
+          else if (answer.message) error = answer.message;
+          else if (button.kind !== 'game') error = 'This button is not supported yet.';
+        } catch (err: any) {
+          error = errorOf(err, 'This button is not supported yet.');
+        } finally {
+          callbackBusyKey = '';
+        }
         break;
 
       case 'webview':
@@ -1314,11 +2230,18 @@
 
       case 'callback':
         try {
+          // The bot can take a moment to answer, so the pressed button says so.
+          callbackBusyKey = `${button.row}:${button.column}`;
           const answer = await pressCallbackButton(activePeerId, message.mid, button.row, button.column);
-          if (answer.url) followLink(answer.url);
-          else if (answer.message) error = answer.message;
+          if (answer.url) openBotLink(answer.url);
+          // An alert is a modal the user must dismiss; a plain answer is a toast.
+          else if (answer.message && answer.alert) {
+            linkPrompt = {text: answer.message, confirm: 'OK', onconfirm: () => {}};
+          } else if (answer.message) error = answer.message;
         } catch (err: any) {
           error = errorOf(err, 'The bot did not answer');
+        } finally {
+          callbackBusyKey = '';
         }
         break;
 
@@ -1351,6 +2274,317 @@
     return peer?.username ?? '';
   }
 
+  /* ---------- reply keyboards ---------- */
+
+  /**
+   * Pull the keyboard tweb has merged for this chat. A `forceReply` arms the
+   * reply bar once — re-arming it on every refresh would fight the user
+   * cancelling it.
+   */
+  async function refreshReplyKeyboard(peerId: number) {
+    const state = await getReplyKeyboard(peerId);
+    if (activePeerId !== peerId) return;
+
+    replyKeyboard = state;
+    if (state.kind !== 'markup') replyKeyboardOpen = false;
+
+    if (state.kind === 'forceReply' && state.mid && forcedReplyMid !== state.mid) {
+      forcedReplyMid = state.mid;
+      const target = messages.find((m) => m.mid === state.mid);
+      if (target) replyTo = target;
+      focusComposer();
+    }
+  }
+
+  $effect(() => {
+    const peerId = activePeerId;
+    replyKeyboard = null;
+    replyKeyboardOpen = false;
+    forcedReplyMid = 0;
+    if (peerId === null) return;
+
+    let cancelled = false;
+    refreshReplyKeyboard(peerId).catch(() => {});
+
+    const off = onReplyKeyboardChange((changed) => {
+      if (!cancelled && changed === activePeerId) refreshReplyKeyboard(changed).catch(() => {});
+    });
+
+    return () => {
+      cancelled = true;
+      off.then((stop) => stop()).catch(() => {});
+    };
+  });
+
+  async function pressReplyKeyboardButton(button: ReplyKeyboardButton) {
+    if (activePeerId === null) return;
+
+    // `single_use` keyboards fold away as soon as one button is pressed.
+    if (replyKeyboard?.singleUse) replyKeyboardOpen = false;
+
+    switch (button.kind) {
+      case 'webview':
+      case 'simpleWebView':
+        miniApp = {
+          botId: activePeerId,
+          peerId: activePeerId,
+          url: button.url,
+          buttonText: button.text,
+          title: button.text,
+          isSimpleWebView: button.kind === 'simpleWebView'
+        };
+        return;
+
+      case 'text':
+        try {
+          await sendMessage(activePeerId, button.text, {threadId: activeThreadId});
+          await scrollToBottom();
+        } catch (err: any) {
+          error = errorOf(err, 'Send failed');
+        }
+        return;
+
+      default:
+        // Contact, location and poll requests need input this client cannot
+        // collect yet; say so rather than sending the label as a message.
+        error = 'This button is not supported in this client yet.';
+    }
+  }
+
+  /* ---------- bot chats: start, stop, clear ---------- */
+
+  $effect(() => {
+    const peerId = activePeerId;
+    botState = null;
+    botCommands = [];
+    if (peerId === null || peerId < 0) return;
+
+    let cancelled = false;
+    const hasMessages = untrack(() => messages.some((m) => !m.service));
+    getBotChatState(peerId, hasMessages).then((state) => {
+      if (!cancelled && activePeerId === peerId) botState = state;
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  });
+
+  async function runBotAction(action: () => Promise<void>) {
+    if (botBusy) return;
+    botBusy = true;
+    try {
+      await action();
+    } catch (err: any) {
+      error = errorOf(err, 'The bot did not respond');
+    } finally {
+      botBusy = false;
+    }
+  }
+
+  function startBotChat() {
+    const peerId = activePeerId;
+    if (peerId === null) return;
+
+    runBotAction(async () => {
+      await startBot(peerId);
+      if (activePeerId === peerId && botState) botState = {...botState, blocked: false, fresh: false};
+    });
+  }
+
+  function stopBotChat() {
+    const peerId = activePeerId;
+    if (peerId === null) return;
+
+    runBotAction(async () => {
+      await setBotBlocked(peerId, true);
+      if (activePeerId === peerId && botState) botState = {...botState, blocked: true};
+    });
+  }
+
+  function clearBotChat() {
+    const peerId = activePeerId;
+    if (peerId === null) return;
+
+    runBotAction(async () => {
+      await clearBotHistory(peerId);
+      if (activePeerId !== peerId) return;
+      messages = [];
+      if (botState) botState = {...botState, fresh: true};
+    });
+  }
+
+  /* ---------- `/`, `@` and `#` autocomplete ---------- */
+
+  /** Text each suggestion drops into the draft, parallel to `suggestItems`. */
+  let suggestValues: string[] = [];
+
+  function closeSuggestions() {
+    suggestKind = null;
+    suggestItems = [];
+    suggestValues = [];
+    suggestIndex = 0;
+  }
+
+  /**
+   * Reads the token the caret sits in and fills the suggestion strip from it.
+   * Only one strip is ever open, so it cannot fight the inline-bot results for
+   * Enter or the arrow keys.
+   */
+  async function updateSuggestions() {
+    const peerId = activePeerId;
+    if (peerId === null || editing) {
+      closeSuggestions();
+      return;
+    }
+
+    const caret = composer?.selectionStart ?? draft.length;
+    const before = draft.slice(0, caret);
+    const match = /(?:^|\s)([@#/])([^\s@#/]*)$/.exec(before);
+    if (!match) {
+      closeSuggestions();
+      return;
+    }
+
+    const [, trigger, query] = match;
+    const from = caret - query.length - 1;
+
+    // A command is only a command at the very start of a message, and a leading
+    // "@bot " is the inline-bot syntax, which owns its own result list.
+    if (trigger === '/' && from !== 0) {
+      closeSuggestions();
+      return;
+    }
+    if (trigger === '@' && from === 0 && inlineBot) {
+      closeSuggestions();
+      return;
+    }
+
+    const token = ++suggestToken;
+    let items: SuggestionItem[] = [];
+    let values: string[] = [];
+
+    if (trigger === '/') {
+      if (!botCommands.length) botCommands = await loadBotCommands(peerId);
+      const found = filterBotCommands(botCommands, query);
+      items = found.map((command) => ({
+        key: `${command.botId}:${command.command}`,
+        title: '/' + command.command + command.suffix,
+        subtitle: command.description
+      }));
+      values = found.map((command) => `/${command.command}${command.suffix} `);
+    } else if (trigger === '@') {
+      const mentions = (await searchMentions(peerId, query, activeThreadId))
+      .filter((mention) => mention.username);
+      items = mentions.map((mention) => ({
+        key: String(mention.peerId),
+        title: '@' + mention.username,
+        subtitle: mention.title
+      }));
+      values = mentions.map((mention) => `@${mention.username} `);
+    } else {
+      const tags = searchHashtags(query, messages.map((m) => m.text));
+      items = tags.map((tag) => ({key: tag, title: '#' + tag, subtitle: ''}));
+      values = tags.map((tag) => `#${tag} `);
+    }
+
+    if (token !== suggestToken || activePeerId !== peerId) return;
+
+    if (!items.length) {
+      closeSuggestions();
+      return;
+    }
+
+    suggestKind = trigger === '/' ? 'command' : trigger === '@' ? 'mention' : 'hashtag';
+    suggestItems = items;
+    suggestValues = values;
+    suggestIndex = 0;
+    suggestFrom = from;
+    suggestTo = caret;
+  }
+
+  /** The commands button next to the composer: the whole list, unfiltered. */
+  async function openCommandList() {
+    if (activePeerId === null) return;
+    if (suggestKind === 'command') {
+      closeSuggestions();
+      return;
+    }
+
+    if (!botCommands.length) botCommands = await loadBotCommands(activePeerId);
+    if (!botCommands.length) return;
+
+    const caret = composer?.selectionStart ?? draft.length;
+    suggestKind = 'command';
+    suggestItems = botCommands.map((command) => ({
+      key: `${command.botId}:${command.command}`,
+      title: '/' + command.command + command.suffix,
+      subtitle: command.description
+    }));
+    suggestValues = botCommands.map((command) => `/${command.command}${command.suffix} `);
+    suggestIndex = 0;
+    // Picking from the button inserts at the caret rather than replacing a token.
+    suggestFrom = caret;
+    suggestTo = caret;
+    composer?.focus();
+  }
+
+  async function applySuggestion(index: number) {
+    const value = suggestValues[index];
+    if (value === undefined) return;
+
+    const wasCommand = suggestKind === 'command';
+    const before = draft.slice(0, suggestFrom);
+    const after = draft.slice(suggestTo);
+    draft = before + value + after;
+    closeSuggestions();
+
+    // A command picked on its own is what the user meant to send, the way the
+    // other clients treat the command list.
+    if (wasCommand && !before.trim() && !after.trim()) {
+      await submit(new Event('submit'));
+      return;
+    }
+
+    await tick();
+    const caret = (before + value).length;
+    composer?.focus();
+    composer?.setSelectionRange(caret, caret);
+    onDraftInput();
+  }
+
+  /** Arrow keys, Enter and Tab belong to the strip while it is open. */
+  function onSuggestionKey(e: KeyboardEvent): boolean {
+    if (!suggestKind || !suggestItems.length || e.isComposing) return false;
+
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      // Ctrl+Arrow is reply navigation and Alt/Meta are the OS's — only a bare
+      // arrow moves the highlight.
+      if (e.ctrlKey || e.metaKey || e.altKey) return false;
+      e.preventDefault();
+      const step = e.key === 'ArrowDown' ? 1 : -1;
+      suggestIndex = (suggestIndex + step + suggestItems.length) % suggestItems.length;
+      return true;
+    }
+
+    if (e.key === 'Enter' || e.key === 'Tab') {
+      if (e.shiftKey || e.ctrlKey || e.metaKey) return false;
+      e.preventDefault();
+      applySuggestion(suggestIndex);
+      return true;
+    }
+
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      // The window handler would otherwise close the chat behind the strip.
+      e.stopPropagation();
+      closeSuggestions();
+      return true;
+    }
+
+    return false;
+  }
+
   /**
    * Whether this chat's bot pins a web app next to the composer. Fetched after
    * the chat has rendered so it never delays opening one.
@@ -1375,6 +2609,9 @@
    * the desktop client. Ctrl+Up from nothing selects the newest message.
    */
   function onComposerKey(e: KeyboardEvent) {
+    // An open suggestion strip owns the arrows and Enter first.
+    if (onSuggestionKey(e)) return;
+
     // Enter sends; Shift+Enter (or Ctrl/Cmd+Enter) inserts a newline. isComposing
     // guards IME candidate selection, which also arrives as Enter.
     if (e.key === 'Enter' && !e.isComposing) {
@@ -1446,9 +2683,11 @@
       showAccounts ||
       linkSheet ||
       folderEditorOpen ||
+      topicEditor ||
       newChatOpen ||
       editingFolder ||
-      forwarding ||
+      forwarding.length ||
+      replyingElsewhere ||
       profilePeerId !== null ||
       showInfo ||
       document.querySelector('.viewer')
@@ -1456,9 +2695,12 @@
       return;
     }
 
-    if (messageMenu) messageMenu = null;
+    if (packSheet) packSheet = null;
+    else if (messageMenu) messageMenu = null;
     else if (menuFor) menuFor = null;
-    else if (reactingTo !== null) reactingTo = null;
+    else if (topicMenuFor !== null) topicMenuFor = null;
+    else if (starReactionFor !== null) starReactionFor = null;
+    else if (reactionPickerFor) reactionPickerFor = null;
     else if (readByFor) readByFor = null;
     else if (selecting) {
       selecting = false;
@@ -1496,6 +2738,7 @@
   function onDraftInput() {
     resizeComposer();
     onInlineInput();
+    updateSuggestions().catch(() => {});
     if (activePeerId === null || editing) return;
 
     // The server expires a typing status after ~6s, so keep re-sending while
@@ -1544,19 +2787,110 @@
     sponsored = null;
 
     topicOpen = false;
+    topicMenuFor = null;
+    threadKind = '';
+    threadCommentCount = 0;
+    commentsOrigin = null;
+    savedDialogs = [];
+    savedTag = '';
 
     if (activeRestriction) return;
 
-    if (dialog.isForum) {
-      try {
-        topics = await loadTopics(dialog.peerId);
-      } catch (err: any) {
-        error = errorOf(err, 'Failed to load topics');
+    // Saved Messages can be split per original sender. The preference is local,
+    // so the split list is only fetched when it is actually the active view.
+    if (dialog.isSelf) {
+      savedAsChats = isSavedViewedAsChats();
+      if (savedAsChats) {
+        await refreshSavedDialogs();
+        return;
       }
+    }
+
+    if (dialog.isForum) {
+      forumAsMessages = await isViewingForumAsMessages(dialog.peerId);
+      if (forumAsMessages) {
+        // "View as messages": one flat timeline, no topic list in between.
+        topicOpen = true;
+        await openHistory(dialog.peerId, undefined, dialog.unread, dialog.readMaxId);
+        return;
+      }
+
+      canManageForum = await canCreateTopic(dialog.peerId);
+      await refreshTopics();
       return;
     }
 
     await openHistory(dialog.peerId, undefined, dialog.unread, dialog.readMaxId);
+  }
+
+  /* ---------- forum topics ---------- */
+
+  async function refreshTopics() {
+    if (activePeerId === null) return;
+    const peerId = activePeerId;
+    try {
+      const loaded = await loadTopics(peerId);
+      if (activePeerId !== peerId) return;
+      // Pinned topics sit above the rest, hidden ones drop out entirely — the
+      // General topic is hidden rather than deleted.
+      topics = loaded
+        .filter((topic) => !topic.hidden)
+        .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.date - a.date);
+    } catch (err: any) {
+      error = errorOf(err, 'Failed to load topics');
+    }
+  }
+
+  async function runTopicAction(action: () => Promise<unknown>) {
+    topicMenuFor = null;
+    try {
+      await action();
+      await refreshTopics();
+    } catch (err: any) {
+      error = errorOf(err, 'Topic action failed');
+    }
+  }
+
+  async function removeTopic(topic: TopicItem) {
+    if (!confirm(`Delete the topic "${topic.title}" and all its messages?`)) return;
+    await runTopicAction(() => deleteTopic(activePeerId!, topic.threadId));
+    if (activeThreadId === topic.threadId) backToChats();
+  }
+
+  async function onTopicSaved(threadId: number) {
+    const creating = !topicEditor?.topic;
+    topicEditor = null;
+    await refreshTopics();
+    if (creating) {
+      const created = topics.find((topic) => topic.threadId === threadId);
+      if (created) await openTopic(created);
+    }
+  }
+
+  async function toggleForumAsMessages() {
+    if (activePeerId === null) return;
+    const peerId = activePeerId;
+    const next = !forumAsMessages;
+    try {
+      await setViewForumAsMessages(peerId, next);
+      forumAsMessages = next;
+      const dialog = dialogs.find((d) => d.peerId === peerId);
+      if (next) {
+        topicOpen = true;
+        activeThreadId = undefined;
+        activeTitle = dialog?.title ?? activeTitle;
+        threadKind = '';
+        await openHistory(peerId, undefined, dialog?.unread ?? 0, dialog?.readMaxId ?? 0);
+      } else {
+        topicOpen = false;
+        activeThreadId = undefined;
+        messages = [];
+        canManageForum = await canCreateTopic(peerId);
+        await refreshTopics();
+      }
+    } catch (err: any) {
+      error = errorOf(err, 'Could not switch the forum view');
+    }
   }
 
   async function openTopic(topic: TopicItem) {
@@ -1565,10 +2899,88 @@
     // anything posted outside a topic unreachable.
     const threadId = topic.threadId || undefined;
     topicOpen = true;
+    topicMenuFor = null;
+    threadKind = threadId === undefined ? '' : 'topic';
     activeThreadId = threadId;
     activeTitle = threadId === undefined ? (dialogs.find((d) => d.peerId === activePeerId)?.title ?? 'All messages') : topic.title;
     replyTo = null;
     await openHistory(activePeerId!, threadId, topic.unread, 0);
+  }
+
+  /* ---------- Saved Messages sub-dialogs ---------- */
+
+  async function refreshSavedDialogs() {
+    const peerId = activePeerId;
+    try {
+      const loaded = await loadSavedDialogs();
+      if (activePeerId !== peerId) return;
+      savedDialogs = loaded.sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.date - a.date);
+    } catch (err: any) {
+      error = errorOf(err, 'Failed to load saved chats');
+    }
+  }
+
+  async function toggleSavedAsChats() {
+    const next = !savedAsChats;
+    savedAsChats = next;
+    setSavedViewedAsChats(next);
+    savedTag = '';
+    if (next) {
+      topicOpen = false;
+      threadKind = '';
+      activeThreadId = undefined;
+      messages = [];
+      await refreshSavedDialogs();
+    } else {
+      savedDialogs = [];
+      await openSavedTimeline();
+    }
+  }
+
+  /** All of Saved Messages as one timeline, the default view. */
+  async function openSavedTimeline() {
+    if (activePeerId === null) return;
+    topicOpen = true;
+    threadKind = '';
+    activeThreadId = undefined;
+    activeTitle = 'Saved Messages';
+    replyTo = null;
+    await openHistory(activePeerId, undefined, 0, 0);
+  }
+
+  /**
+   * One sender's saved messages. Their peer id doubles as the thread id the
+   * saved timeline is filtered by.
+   */
+  async function openSavedDialog(saved: SavedDialogItem) {
+    if (activePeerId === null) return;
+    showSidebarOnMobile = false;
+    topicOpen = true;
+    threadKind = 'saved';
+    savedTag = '';
+    activeThreadId = saved.savedPeerId;
+    activeTitle = saved.title;
+    replyTo = null;
+    await openHistory(activePeerId, saved.savedPeerId, 0, 0);
+  }
+
+  /** Reload the open Saved view with a tag filter applied (or cleared). */
+  async function applySavedTag(emoticon: string) {
+    savedTag = emoticon;
+    if (activePeerId === null) return;
+    loadingHistory = true;
+    try {
+      messages = await loadHistory(activePeerId, {
+        threadId: activeThreadId,
+        savedReaction: emoticon || undefined
+      });
+      await tick();
+      await scrollToBottom();
+    } catch (err: any) {
+      error = errorOf(err, 'Could not filter by tag');
+    } finally {
+      loadingHistory = false;
+    }
   }
 
   async function openHistory(peerId: number, threadId?: number, unread = 0, readMaxId = 0) {
@@ -1709,16 +3121,43 @@
 
   function backToChats() {
     showSidebarOnMobile = true;
-    if (topicOpen) {
+
+    // A comment thread lives in a different peer than the post it belongs to,
+    // so leaving it is a navigation, not just a thread reset.
+    if (threadKind === 'comments') {
+      leaveCommentThread();
+      return;
+    }
+
+    // "View as messages" has no list to fall back to: the forum's timeline is
+    // the whole view, so backing out leaves the chat entirely.
+    if (topicOpen && !(activeIsForum && forumAsMessages) && !(activeIsSelf && !savedAsChats)) {
       topicOpen = false;
+      threadKind = '';
+      threadCommentCount = 0;
+      savedTag = '';
       activeThreadId = undefined;
       messages = [];
       const dialog = dialogs.find((d) => d.peerId === activePeerId);
       activeTitle = dialog?.title ?? '';
       return;
     }
+
+    exitSublist();
+  }
+
+  /** Drop the forum/saved sublist and whatever thread was open inside it. */
+  function exitSublist() {
     activePeerId = null;
     topics = [];
+    savedDialogs = [];
+    topicOpen = false;
+    threadKind = '';
+    threadCommentCount = 0;
+    savedTag = '';
+    activeThreadId = undefined;
+    messages = [];
+    activeTitle = '';
   }
 
   function isScrolledToBottom() {
@@ -1805,10 +3244,184 @@
     maybeLoadOlder();
   }
 
+  /* ---------- send options: schedule, silent, effects, slow mode, send-as ---------- */
+
+  let sendOptionsOpen = $state(false);
+  let scheduledOpen = $state(false);
+  let effectPickerOpen = $state(false);
+  let sendAsPickerOpen = $state(false);
+
+  /** Effect armed for the next message, '' for none. */
+  let sendEffect = $state('');
+  /** Emoticon of the armed effect, for the button label. */
+  let sendEffectEmoticon = $state('');
+  /** Per-chat "send without sound" preference. */
+  let silentDefault = $state(false);
+  /** Identity we post as here, null when posting as ourselves. */
+  let sendAsPeerId = $state<number | null>(null);
+  let slowMode = $state<SlowMode | null>(null);
+  let scheduledCount = $state(0);
+  /** Ticks once a second, but only while a slow-mode cooldown is running. */
+  let nowSeconds = $state(Math.floor(Date.now() / 1000));
+  /** Long-press timer on the send button, for touch devices. */
+  let sendHoldTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Set when a long press opened the sheet, so the release does not also send. */
+  let sendHeld = false;
+
+  const slowModeLeft = $derived(
+    slowMode?.nextSendDate ? Math.max(0, slowMode.nextSendDate - nowSeconds) : 0
+  );
+
+  function slowModeLabel(seconds: number) {
+    const minutes = Math.floor(seconds / 60);
+    return minutes ? `${minutes}:${`${seconds % 60}`.padStart(2, '0')}` : `${seconds}`;
+  }
+
+  /**
+   * Refresh slow mode and send-as from **cached** full-chat state only. Both
+   * readers are cache-only by design, so this never adds a request to the
+   * chat-open path; the real values land later through `chat_full_update`.
+   */
+  function refreshChatSendState(peer: number) {
+    getSlowMode(peer)
+    .then((state) => {
+      if (peer === activePeerId) slowMode = state;
+    })
+    .catch(() => {});
+
+    getCurrentSendAs(peer)
+    .then((id) => {
+      if (peer === activePeerId) sendAsPeerId = id;
+    })
+    .catch(() => {});
+  }
+
+  function refreshScheduledCount(peer: number) {
+    countScheduled(peer)
+    .then((count) => {
+      if (peer === activePeerId) scheduledCount = count;
+    })
+    .catch(() => {});
+  }
+
+  $effect(() => {
+    const peer = activePeerId;
+
+    sendOptionsOpen = false;
+    scheduledOpen = false;
+    effectPickerOpen = false;
+    sendAsPickerOpen = false;
+    sendEffect = '';
+    sendEffectEmoticon = '';
+    slowMode = null;
+    sendAsPeerId = null;
+    scheduledCount = 0;
+
+    if (peer === null) {
+      silentDefault = false;
+      return;
+    }
+
+    silentDefault = isSilentByDefault(peer);
+    refreshChatSendState(peer);
+    refreshScheduledCount(peer);
+  });
+
+  $effect(() => {
+    let unsubscribe: (() => void) | undefined;
+    let cancelled = false;
+
+    onChatFullUpdate((peer) => {
+      if (!cancelled && peer === activePeerId) refreshChatSendState(peer);
+    }).then((off) => {
+      if (cancelled) off();
+      else unsubscribe = off;
+    });
+
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
+  });
+
+  $effect(() => {
+    let unsubscribe: (() => void) | undefined;
+    let cancelled = false;
+
+    onScheduledUpdate((peer) => {
+      if (!cancelled && peer === activePeerId) refreshScheduledCount(peer);
+    }).then((off) => {
+      if (cancelled) off();
+      else unsubscribe = off;
+    });
+
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
+  });
+
+  // Only run a clock while there is a cooldown to count down.
+  $effect(() => {
+    if (!slowMode?.nextSendDate) return;
+    nowSeconds = Math.floor(Date.now() / 1000);
+    const timer = setInterval(() => (nowSeconds = Math.floor(Date.now() / 1000)), 1000);
+    return () => clearInterval(timer);
+  });
+
+  /** Right-click / long-press on the send button opens the options sheet. */
+  function openSendOptions(e: Event) {
+    e.preventDefault();
+    if (activePeerId === null || editing) return;
+    sendOptionsOpen = true;
+  }
+
+  function onSendPointerDown() {
+    if (activePeerId === null || editing) return;
+    clearTimeout(sendHoldTimer);
+    sendHeld = false;
+    sendHoldTimer = setTimeout(() => {
+      sendHeld = true;
+      sendOptionsOpen = true;
+    }, 450);
+  }
+
+  function cancelSendHold() {
+    clearTimeout(sendHoldTimer);
+  }
+
+  function pickEffect(effectId: string, emoticon: string) {
+    sendEffect = effectId;
+    sendEffectEmoticon = emoticon;
+    effectPickerOpen = false;
+  }
+
   async function submit(e: Event) {
     e.preventDefault();
-    const text = draft.trim();
-    if (!text || activePeerId === null) return;
+    // The release of a long press must not send as well as open the sheet.
+    if (sendHeld) {
+      sendHeld = false;
+      return;
+    }
+    await deliver();
+  }
+
+  async function deliver(options: {scheduleDate?: number; silent?: boolean} = {}) {
+    const typed = draft.trim();
+    if (!typed || activePeerId === null) return;
+    // Slow mode blocks sending now, but never blocks scheduling for later.
+    if (!editing && !options.scheduleDate && slowModeLeft > 0) return;
+
+    // Markdown markers become entities here; what goes to the API is the text
+    // with the markers stripped.
+    const {text, entities: markupEntities} = parseComposerText(typed);
+    if (!text) return;
+
+    // Custom emoji only exist as entities over the alt text already in `text`.
+    const entities = [...markupEntities, ...customEmojiEntities(text, pendingCustomEmoji)].sort(
+      (a, b) => a.offset - b.offset
+    );
+    pendingCustomEmoji = [];
 
     // The debounced draft save is still pending with the text being sent; let
     // it fire and it writes the message back as a draft right after sendText
@@ -1820,7 +3433,7 @@
       editing = null;
       draft = '';
       try {
-        await editMessage(activePeerId, target.mid, text);
+        await editMessage(activePeerId, target.mid, text, entities);
         const updated = await getMessage(activePeerId, target.mid);
         if (updated) messages = messages.map((m) => (m.mid === target.mid ? updated : m));
       } catch (err: any) {
@@ -1829,16 +3442,58 @@
       return;
     }
 
-    const replyToMsgId = replyTo?.mid;
+    const context = activeReplyContext;
+    const reply = replyTo ?
+      replySendOptions(
+        {
+          mid: replyTo.mid,
+          peerId: context?.peerId ?? activePeerId,
+          title: replyTo.fromTitle,
+          text: replyTo.text,
+          chatTitle: context?.chatTitle ?? '',
+          quote: context?.quote ?? null
+        },
+        activePeerId
+      ) :
+      {};
+    const peer = activePeerId;
+    const scheduleDate = options.scheduleDate;
+    const effect = sendEffect;
     draft = '';
-    replyTo = null;
+    cancelReply();
+    sendEffect = '';
+    sendEffectEmoticon = '';
+    closeSuggestions();
+    // The composer keeps its own recent-hashtag list; this is where it grows.
+    rememberHashtags(text);
+    if (botState?.fresh) botState = {...botState, fresh: false};
 
     try {
-      await sendMessage(activePeerId, text, {replyToMsgId, threadId: activeThreadId});
+      await sendMessageWithOptions(peer, text, {
+        ...reply,
+        threadId: activeThreadId,
+        entities,
+        scheduleDate,
+        silent: options.silent ?? silentDefault,
+        effect: effect || undefined,
+        sendAsPeerId: sendAsPeerId ?? undefined
+      });
       lastTypingSent = 0;
-      sendTyping(activePeerId, activeThreadId, 'cancel').catch(() => {});
-      // The outgoing message arrives back through history_multiappend.
-      await scrollToBottom();
+      sendTyping(peer, activeThreadId, 'cancel').catch(() => {});
+
+      if (scheduleDate) {
+        // A scheduled message never joins the timeline — it joins the queue.
+        refreshScheduledCount(peer);
+      } else {
+        // Start the next cooldown immediately; the server-side value arrives
+        // with the next chat_full_update and overwrites this.
+        if (slowMode?.seconds) {
+          nowSeconds = Math.floor(Date.now() / 1000);
+          slowMode = {...slowMode, nextSendDate: nowSeconds + slowMode.seconds};
+        }
+        // The outgoing message arrives back through history_multiappend.
+        await scrollToBottom();
+      }
     } catch (err: any) {
       error = errorOf(err, 'Failed to send');
     }
@@ -1858,9 +3513,34 @@
   <aside>
     <header>
       <button class="icon-button settings-open" onclick={() => (showSettings = true)} aria-label="Settings"><Glyph name="settings" /></button>
-      {#if activeIsForum && activePeerId !== null}
-        <button class="back" onclick={backToChats} aria-label="Back">←</button>
+      {#if sublistOpen}
+        <!-- Leaving the sublist leaves the peer entirely, so the open thread has
+             to be torn down too — not just the list beside it. -->
+        <button class="back" onclick={exitSublist} aria-label="Back">←</button>
         <span>{dialogs.find((d) => d.peerId === activePeerId)?.title ?? 'Topics'}</span>
+        {#if topicListOpen}
+          {#if canManageForum}
+            <button
+              class="icon-button"
+              onclick={() => (topicEditor = {topic: null})}
+              aria-label="New topic"
+              title="New topic">＋</button
+            >
+          {/if}
+          <button
+            class="icon-button"
+            onclick={toggleForumAsMessages}
+            aria-label="View as messages"
+            title="View as messages">≡</button
+          >
+        {:else}
+          <button
+            class="icon-button"
+            onclick={toggleSavedAsChats}
+            aria-label="View as messages"
+            title="View as messages">≡</button
+          >
+        {/if}
       {:else}
         <span>Chats</span>
         <button class="icon-button new-chat" onclick={openNewChat} aria-label="New group or channel" title="New group or channel"><Glyph name="edit" /></button>
@@ -1875,17 +3555,20 @@
 
     <ConnectionStatus />
 
-    {#if !(activeIsForum && activePeerId !== null)}
+    {#if !sublistOpen}
       <div class="search">
         <input
           bind:this={searchBox}
-          placeholder="Search chats"
+          placeholder="Search chats, channels and messages"
           bind:value={query}
-          oninput={onQueryInput}
+          onfocus={openSearch}
           onkeydown={onQueryKey}
         />
+        {#if searchOpen}
+          <button class="search-cancel" onclick={closeSearch} aria-label="Close search">✕</button>
+        {/if}
       </div>
-      <Stories />
+      <Stories {dialogs} />
       {#if folders.length > 1}
         <div class="folders">
           {#each folders as folder (folder.id)}
@@ -1905,43 +3588,171 @@
       {/if}
     {/if}
 
+    {#if searchOpen}
+      <GlobalSearch {query} onOpenPeer={openSearchPeer} onOpenMessage={openSearchMessage} />
+    {:else}
     <div class="list">
-      {#if loadingChats || searching}
+      {#if loadingChats}
         <p class="muted">Loading chats…</p>
-      {:else if activeIsForum && activePeerId !== null}
-        {#each [{threadId: 0, title: 'All messages', preview: 'Everything in this chat', date: 0, unread: 0}, ...topics] as topic (topic.threadId)}
+      {:else if topicListOpen}
+        <button
+          class="row-button"
+          class:active={activeThreadId === undefined && topicOpen}
+          onclick={() => openTopic(allMessagesRow)}
+        >
+          <span class="topic-glyph">≡</span>
+          <span class="meta">
+            <span class="row"><span class="title">All messages</span></span>
+            <span class="row"><span class="preview">Everything in this chat</span></span>
+          </span>
+        </button>
+
+        {#each topics as topic (topic.threadId)}
+          <button
+            class="row-button"
+            class:active={topic.threadId === activeThreadId}
+            onclick={() => openTopic(topic)}
+            oncontextmenu={(e) => {
+              e.preventDefault();
+              topicMenuFor = topicMenuFor === topic.threadId ? null : topic.threadId;
+            }}
+          >
+            <TopicIcon
+              iconEmojiId={topic.iconEmojiId}
+              iconColor={topic.iconColor}
+              title={topic.title}
+              isGeneral={topic.isGeneral}
+            />
+            <span class="meta">
+              <span class="row">
+                <span class="title">
+                  {#if topic.pinned}
+                    <span class="flag" title="Pinned"><Glyph name="pin" size={13} /></span>
+                  {/if}
+                  {#if topic.closed}<span class="flag" title="Closed">🔒</span>{/if}
+                  {topic.title}
+                </span>
+                <span class="time">{timeOf(topic.date)}</span>
+              </span>
+              <span class="row">
+                <span class="preview">{topic.preview}</span>
+                {#if topic.unread}<span class="badge">{topic.unread}</span>{/if}
+              </span>
+            </span>
+          </button>
+
+          {#if topicMenuFor === topic.threadId && topic.canManage}
+            <div class="menu">
+              <button onclick={() => (topicEditor = {topic})}>Edit</button>
+              <button onclick={() => runTopicAction(() => toggleTopicPin(activePeerId!, topic.threadId))}>
+                {topic.pinned ? 'Unpin' : 'Pin'}
+              </button>
+              <button
+                onclick={() =>
+                  runTopicAction(() => setTopicClosed(activePeerId!, topic.threadId, !topic.closed))}
+              >
+                {topic.closed ? 'Reopen' : 'Close'}
+              </button>
+              {#if topic.isGeneral}
+                <!-- General cannot be deleted, only folded away. -->
+                <button onclick={() => runTopicAction(() => setTopicHidden(activePeerId!, topic.threadId, true))}>
+                  Hide
+                </button>
+              {:else}
+                <button class="danger" onclick={() => removeTopic(topic)}>Delete</button>
+              {/if}
+            </div>
+          {/if}
+        {/each}
+      {:else if savedListOpen}
+        {#if !savedDialogs.length}
+          <p class="muted">Nothing saved yet.</p>
+        {:else}
+          {#each savedDialogs as saved (saved.savedPeerId)}
             <button
               class="row-button"
-              class:active={(topic.threadId || undefined) === activeThreadId}
-              onclick={() => openTopic(topic)}
+              class:active={saved.savedPeerId === activeThreadId}
+              onclick={() => openSavedDialog(saved)}
             >
-              <span class="topic-glyph">{topic.threadId ? '#' : '≡'}</span>
+              <Avatar peerId={saved.savedPeerId} title={saved.title} />
               <span class="meta">
                 <span class="row">
-                  <span class="title">{topic.title}</span>
-                  <span class="time">{timeOf(topic.date)}</span>
+                  <span class="title">
+                    {#if saved.pinned}
+                      <span class="flag" title="Pinned"><Glyph name="pin" size={13} /></span>
+                    {/if}
+                    {saved.title}
+                  </span>
+                  <span class="time">{timeOf(saved.date)}</span>
                 </span>
-                <span class="row">
-                  <span class="preview">{topic.preview}</span>
-                  {#if topic.unread}<span class="badge">{topic.unread}</span>{/if}
-                </span>
+                <span class="row"><span class="preview">{saved.preview}</span></span>
               </span>
             </button>
-        {/each}
-      {:else if !dialogs.length}
-        <p class="muted">No chats yet.</p>
+          {/each}
+        {/if}
+      {:else if archiveOpen && loadingArchive}
+        <p class="muted">Loading archive…</p>
+      {:else if !listedDialogs.length}
+        {#if archiveOpen}
+          <button class="row-button archive-row" onclick={closeArchive}>
+            <span class="topic-glyph">←</span>
+            <span class="meta"><span class="title">Back to chats</span></span>
+          </button>
+        {/if}
+        <p class="muted">{archiveOpen ? 'The archive is empty.' : 'No chats yet.'}</p>
       {:else}
-        {#each dialogs as dialog (dialog.peerId)}
+        {#if archiveOpen}
+          <button class="row-button archive-row" onclick={closeArchive}>
+            <span class="topic-glyph">←</span>
+            <span class="meta">
+              <span class="row">
+                <span class="title">Archived chats</span>
+              </span>
+              <span class="row">
+                <span class="preview">Back to chats</span>
+              </span>
+            </span>
+          </button>
+        {:else if archiveSummary.total && !query && activeFolder === 0}
+          <button class="row-button archive-row" onclick={openArchive}>
+            <span class="topic-glyph"><Glyph name="archive" size={18} /></span>
+            <span class="meta">
+              <span class="row">
+                <span class="title">Archived chats</span>
+              </span>
+              <span class="row">
+                <span class="preview">
+                  {archiveSummary.total} chat{archiveSummary.total === 1 ? '' : 's'}
+                </span>
+                {#if archiveSummary.unread}<span class="badge">{archiveSummary.unread}</span>{/if}
+              </span>
+            </span>
+          </button>
+        {/if}
+
+        {#each listedDialogs as dialog (dialog.peerId)}
           <button
             class="row-button"
             class:active={dialog.peerId === activePeerId}
+            class:drag-over={dragOverPeerId === dialog.peerId}
+            draggable={dialog.pinned}
+            ondragstart={(e) => onRowDragStart(e, dialog)}
+            ondragover={(e) => onRowDragOver(e, dialog)}
+            ondragend={onRowDragEnd}
+            ondrop={(e) => onRowDrop(e, dialog)}
             onclick={() => openChat(dialog)}
             oncontextmenu={(e) => {
               e.preventDefault();
+              folderMenuFor = null;
               menuFor = menuFor?.peerId === dialog.peerId ? null : dialog;
             }}
           >
-            <Avatar peerId={dialog.peerId} title={dialog.title} />
+            <span class="avatar-wrap">
+              <Avatar peerId={dialog.peerId} title={dialog.title} />
+              {#if dialog.isUser && !dialog.isSelf && onlinePeerIds.includes(dialog.peerId)}
+                <span class="online-dot" title="Online"></span>
+              {/if}
+            </span>
             <span class="meta">
               <span class="row">
                 <span class="title">
@@ -1956,7 +3767,11 @@
                 <span class="time">{timeOf(dialog.date)}</span>
               </span>
               <span class="row">
-                <span class="preview">{dialog.preview}</span>
+                {#if typingTextFor(dialog.peerId)}
+                  <span class="preview typing">{typingTextFor(dialog.peerId)}</span>
+                {:else}
+                  <span class="preview">{dialog.preview}</span>
+                {/if}
                 {#if dialog.unread}<span class="badge">{dialog.unread}</span>{/if}
               </span>
             </span>
@@ -1964,7 +3779,12 @@
 
           {#if menuFor?.peerId === dialog.peerId}
             <div class="menu">
-              <button onclick={() => runDialogAction(() => togglePin(dialog.peerId, activeFolder))}>
+              <button
+                onclick={() =>
+                  runDialogAction(() =>
+                    togglePin(dialog.peerId, archiveOpen ? FOLDER_ID_ARCHIVE : activeFolder)
+                  )}
+              >
                 {dialog.pinned ? 'Unpin' : 'Pin'}
               </button>
               <button onclick={() => runDialogAction(() => toggleMute(dialog.peerId, !dialog.muted))}>
@@ -1978,6 +3798,60 @@
               >
                 {dialog.unread ? 'Mark as read' : 'Mark as unread'}
               </button>
+              <button onclick={() => runDialogAction(() => setDialogArchived(dialog.peerId, !archiveOpen))}>
+                {archiveOpen ? 'Unarchive' : 'Archive'}
+              </button>
+              <button class="submenu-trigger" onclick={() => openFolderMenu(dialog)}>
+                Add to folder
+                <span class="chevron">{folderMenuFor === dialog.peerId ? '▾' : '▸'}</span>
+              </button>
+              {#if folderMenuFor === dialog.peerId}
+                {#if !folderMemberships.length}
+                  <span class="submenu-empty">No folders yet</span>
+                {:else}
+                  {#each folderMemberships as membership (membership.folderId)}
+                    <button
+                      class="submenu-item"
+                      onclick={() =>
+                        runDialogAction(() =>
+                          toggleFolderMembership(membership.folderId, dialog.peerId, !membership.included)
+                        )}
+                    >
+                      <span class="check">{membership.included ? '✓' : ''}</span>
+                      {membership.emoticon}
+                      {membership.title}
+                    </button>
+                  {/each}
+                {/if}
+              {/if}
+              {#if dialog.isSelf}
+                <button
+                  onclick={() => {
+                    menuFor = null;
+                    // Toggling the open chat has to redraw it; toggling a chat
+                    // that is not open only needs the stored preference.
+                    if (activePeerId === dialog.peerId) toggleSavedAsChats();
+                    else setSavedViewedAsChats(!isSavedViewedAsChats());
+                  }}
+                >
+                  {(activePeerId === dialog.peerId ? savedAsChats : isSavedViewedAsChats())
+                    ? 'View as messages'
+                    : 'View as chats'}
+                </button>
+              {/if}
+              {#if dialog.isForum}
+                <button
+                  onclick={() => {
+                    menuFor = null;
+                    if (activePeerId === dialog.peerId) toggleForumAsMessages();
+                    else openChat(dialog).then(toggleForumAsMessages);
+                  }}
+                >
+                  {forumAsMessages && activePeerId === dialog.peerId
+                    ? 'View as topics'
+                    : 'View as messages'}
+                </button>
+              {/if}
               <button class="danger" onclick={() => runDialogAction(() => leaveOrDelete(dialog.peerId))}>
                 Delete / Leave
               </button>
@@ -1986,21 +3860,35 @@
         {/each}
       {/if}
     </div>
+    {/if}
   </aside>
 
   <section
     class:dragging
+    ondragenter={onDragEnter}
     ondragover={(e) => {
-      e.preventDefault();
-      dragging = activePeerId !== null;
+      // Without preventDefault the browser refuses the drop and navigates to
+      // the file instead.
+      if (activePeerId !== null && hasFiles(e)) e.preventDefault();
     }}
-    ondragleave={() => (dragging = false)}
+    ondragleave={onDragLeave}
     ondrop={onDrop}
     aria-label="Conversation"
   >
-    {#if activePeerId === null || (activeIsForum && !topicOpen)}
+    {#if dragging}
+      <div class="drop-overlay">
+        <div class="drop-card">
+          <Glyph name="attach" size={28} />
+          <strong>Drop to send</strong>
+          <span class="muted">Photos and videos go as an album, anything else as a file</span>
+        </div>
+      </div>
+    {/if}
+    {#if activePeerId === null || (sublistOpen && !topicOpen)}
       <div class="empty">
-        <p class="muted">{activeIsForum ? 'Select a topic' : 'Select a chat'}</p>
+        <p class="muted">
+          {topicListOpen ? 'Select a topic' : savedListOpen ? 'Select a saved chat' : 'Select a chat'}
+        </p>
         <!-- Same disclosure the sign-in card carries; required for a
              third-party client by https://core.telegram.org/api/terms. -->
         <p class="disclosure">
@@ -2021,8 +3909,19 @@
     {:else}
       <header>
         <button class="back-mobile" onclick={() => (showSidebarOnMobile = true)} aria-label="Back">←</button>
-        <button class="title-button" onclick={() => (showInfo = !showInfo)}>{activeTitle}</button>
-        {#if activeThreadId !== undefined}<span class="thread-tag">topic</span>{/if}
+        <button class="title-button" onclick={() => (showInfo = !showInfo)}
+        >{activeTitle}{#if activePeerId !== null}<EmojiStatus peerId={activePeerId} size={16} />{/if}</button>
+        {#if threadKind === 'comments'}
+          <button class="thread-tag thread-back" onclick={leaveCommentThread} title="Back to the post">
+            {threadCommentCount
+              ? `${threadCommentCount} ${threadCommentCount === 1 ? 'comment' : 'comments'}`
+              : 'comments'}
+          </button>
+        {:else if threadKind === 'topic'}
+          <span class="thread-tag">topic</span>
+        {:else if threadKind === 'saved'}
+          <span class="thread-tag">saved</span>
+        {/if}
         <span class="presence">
           {typingNames.length
             ? `${typingNames.join(', ')} ${typingNames.length > 1 ? 'are' : 'is'} typing…`
@@ -2034,22 +3933,111 @@
         <button class="icon-button" onclick={() => (chatSearchOpen = !chatSearchOpen)} aria-label="Search messages"><Glyph name="search" /></button>
       </header>
 
+      {#if activeIsSelf}
+        <SavedTags
+          savedPeerId={threadKind === 'saved' ? activeThreadId : undefined}
+          active={savedTag}
+          onselect={applySavedTag}
+        />
+      {/if}
+
       {#if chatSearchOpen}
         <div class="chat-search">
           <input placeholder="Search in chat" bind:value={chatQuery} oninput={onChatQueryInput} />
+          {#if chatResults?.length}
+            <span class="result-counter">
+              {chatResultIndex + 1} of {Math.max(chatResultCount, chatResults.length)}
+            </span>
+            <button
+              class="step"
+              onclick={() => stepResult(1)}
+              disabled={chatResultIndex + 1 >= chatResults.length && chatResultsEnd}
+              aria-label="Older result"
+            >↓</button>
+            <button
+              class="step"
+              onclick={() => stepResult(-1)}
+              disabled={chatResultIndex <= 0}
+              aria-label="Newer result"
+            >↑</button>
+          {/if}
+          <button
+            class="filters-toggle"
+            class:on={chatFiltersOpen || chatFilter !== 'all' || !!chatFrom || !!chatDate}
+            onclick={() => (chatFiltersOpen = !chatFiltersOpen)}
+          >Filters</button>
           <button onclick={closeChatSearch} aria-label="Close search">✕</button>
         </div>
+
+        {#if chatFiltersOpen}
+          <div class="chat-filters">
+            <div class="filter-chips">
+              {#each MEDIA_FILTERS as option (option.value)}
+                <button
+                  class="chip"
+                  class:on={chatFilter === option.value}
+                  onclick={() => applyChatFilter(option.value)}
+                >{option.label}</button>
+              {/each}
+            </div>
+
+            <div class="filter-row">
+              {#if canFilterBySender}
+                <button class="chip" class:on={!!chatFrom} onclick={openFromPicker}>
+                  {chatFrom ? `From: ${chatFrom.title}` : 'From sender'}
+                </button>
+                {#if chatFrom}
+                  <button class="chip" onclick={() => pickFrom(null)} aria-label="Clear sender">✕</button>
+                {/if}
+              {/if}
+              <label class="date-jump">
+                Jump to date
+                <input type="date" value={chatDate} onchange={(e) => jumpToDate(e.currentTarget.value)} />
+              </label>
+            </div>
+
+            {#if chatFromOpen}
+              <div class="from-picker">
+                <input
+                  placeholder="Search members"
+                  bind:value={chatFromQuery}
+                  oninput={onFromQueryInput}
+                />
+                {#if !chatMembers.length}
+                  <p class="muted">No members found.</p>
+                {:else}
+                  {#each chatMembers as member (member.peerId)}
+                    <button class="from-row" onclick={() => pickFrom(member)}>
+                      <Avatar peerId={member.peerId} title={member.title} size={28} />
+                      <span class="from-name">{member.title}</span>
+                    </button>
+                  {/each}
+                {/if}
+              </div>
+            {/if}
+          </div>
+        {/if}
+
         {#if chatResults}
           <div class="results">
             {#if !chatResults.length}
-              <p class="muted">Nothing found.</p>
+              <p class="muted">{chatSearching ? 'Searching…' : 'Nothing found.'}</p>
             {:else}
-              {#each chatResults as result (result.mid)}
-                <button class="result" onclick={() => { closeChatSearch(); jumpTo(result.mid); }}>
+              {#each chatResults as result, index (result.mid)}
+                <button
+                  class="result"
+                  class:current={index === chatResultIndex}
+                  onclick={() => selectResult(index)}
+                >
                   <span class="result-from">{result.fromTitle}</span>
                   <span class="result-text">{result.text || 'Media'}</span>
                 </button>
               {/each}
+              {#if !chatResultsEnd}
+                <button class="result more" onclick={loadMoreChatResults} disabled={chatSearching}>
+                  {chatSearching ? 'Loading…' : 'Load more'}
+                </button>
+              {/if}
             {/if}
           </div>
         {/if}
@@ -2121,13 +4109,23 @@
           {/if}
           {#each rendered as group, groupIndex (group.key)}
             {@const message = group.items[0]}
+            <!-- An album carries one caption for the whole group, and the server
+                 is free to hang it off any item — so the bubble shows whichever
+                 item actually has the text. -->
+            {@const captioned = group.items.find((item) => item.rich || item.parts.length) ?? message}
             {#if startsNewDay(groupIndex)}
               <p class="day-divider">{dayLabel(message.date)}</p>
             {/if}
             {#if message.mid === firstUnreadMid}
               <p class="unread-divider" data-mid={message.mid}>Unread messages</p>
             {/if}
-            {#if message.service}
+            {#if message.service && message.extra?.kind === 'gift'}
+              <!-- A gift arrives as a service message, but it is a card: the
+                   sticker, who sent it and what it is worth. -->
+              <div class="service-card" data-mid={message.mid}>
+                <GiftBubble gift={message.extra} fromTitle={message.fromTitle} />
+              </div>
+            {:else if message.service}
               <p
                 class="service"
                 class:highlighted={highlightedMid === message.mid}
@@ -2169,10 +4167,7 @@
                   class:selected={selected.has(message.mid)}
                   data-mid={message.mid}
                   use:observeForRead={message.mid}
-                  oncontextmenu={(e) => {
-                    e.preventDefault();
-                    messageMenu = {mid: message.mid, x: e.clientX, y: e.clientY};
-                  }}
+                  use:pressMenu={message.mid}
                   onclick={() => selecting && toggleSelected(message.mid)}
                   role="presentation"
                 >
@@ -2214,35 +4209,33 @@
                 class:selected={selected.has(message.mid)}
                 data-mid={message.mid}
                 use:observeForRead={message.mid}
-                oncontextmenu={(e) => {
-                  e.preventDefault();
-                  messageMenu = {mid: message.mid, x: e.clientX, y: e.clientY};
-                }}
-                onclick={() => selecting && toggleSelected(message.mid)}
+                use:pressMenu={message.mid}
+                onclick={() => (selecting ? toggleSelected(message.mid) : openInPlayer(message))}
+                ondblclick={() => quickReact(message)}
                 role="presentation"
               >
                 {#if !message.out && message.fromTitle}
                   <button class="author" onclick={() => (profilePeerId = message.fromId)}>
-                    {message.fromTitle}
+                    {message.fromTitle}<EmojiStatus peerId={message.fromId} size={14} />
                   </button>
                 {/if}
 
-                {#if message.forwardedFrom}
-                  <span class="forwarded">Forwarded from {message.forwardedFrom}</span>
+                {#if message.forward}
+                  <ForwardHeader forward={message.forward} onopenpeer={openPeerChat} />
                 {/if}
 
                 {#if message.reply}
-                  <button class="reply-quote jump" onclick={() => jumpTo(message.reply!.mid)}>
-                    <span class="reply-title">{message.reply.title}</span>
-                    <span class="reply-text">{message.reply.text}</span>
-                  </button>
+                  <ReplyHeader reply={message.reply} onjump={() => jumpToReply(message.reply!)} />
                 {/if}
 
                 {#if group.items.length > 1}
-                  <div class="album" style="--cols: {group.items.length > 2 ? 2 : group.items.length}">
-                    {#each group.items as item (item.mid)}
-                      <button class="album-item" onclick={() => openLightbox(item)}>
-                        <Media peerId={activePeerId} mid={item.mid} media={item.media!} />
+                  <!-- Album tiling, the way the official clients lay it out: a
+                       pair side by side, a hero plus a stack at three, a hero
+                       over a strip at four, an even grid beyond that. -->
+                  <div class="album" class:n2={group.items.length === 2} class:n3={group.items.length === 3} class:n4={group.items.length === 4} class:many={group.items.length > 4}>
+                    {#each group.items as item, tileIndex (item.mid)}
+                      <button class="album-item" class:first={tileIndex === 0} onclick={() => openLightbox(item)}>
+                        <Media peerId={activePeerId} mid={item.mid} media={item.media!} fill />
                       </button>
                     {/each}
                   </div>
@@ -2263,10 +4256,65 @@
                   {/if}
                 {/if}
 
-                {#if message.rich}
-                  <RichMessage blocks={message.rich} onmention={openMention} />
-                {:else if message.parts.length}
-                  <FormattedText parts={message.parts} onmention={openMention} onlink={openLink} />
+                {#if message.extra && activePeerId !== null}
+                  {#if message.extra.kind === 'geo' || message.extra.kind === 'geoLive' || message.extra.kind === 'venue'}
+                    <LocationBubble
+                      peerId={activePeerId}
+                      mid={message.mid}
+                      location={message.extra}
+                      onerror={(text) => (error = text)}
+                    />
+                  {:else if message.extra.kind === 'contact'}
+                    <ContactBubble
+                      contact={message.extra}
+                      onmessage={openPeerChat}
+                      onerror={(text) => (error = text)}
+                    />
+                  {:else if message.extra.kind === 'game'}
+                    <GameBubble
+                      peerId={activePeerId}
+                      mid={message.mid}
+                      game={message.extra}
+                      onerror={(text) => (error = text)}
+                    />
+                  {:else if message.extra.kind === 'invoice'}
+                    <InvoiceBubble
+                      peerId={activePeerId}
+                      mid={message.mid}
+                      invoice={message.extra}
+                      onerror={(text) => (error = text)}
+                    />
+                  {:else if message.extra.kind === 'checklist'}
+                    <ChecklistBubble
+                      peerId={activePeerId}
+                      mid={message.mid}
+                      checklist={message.extra}
+                      onerror={(text) => (error = text)}
+                    />
+                  {/if}
+                {/if}
+
+                {#if message.pending && message.media && uploadOverall !== null}
+                  <!-- The optimistic bubble shows the batch's progress; the
+                       cancel here is the same abort the dialog offers. -->
+                  <div class="upload-row">
+                    <div
+                      class="upload-bar"
+                      role="progressbar"
+                      aria-valuenow={Math.round(uploadOverall * 100)}
+                    >
+                      <div class="upload-fill" style="width: {Math.round(uploadOverall * 100)}%"></div>
+                    </div>
+                    <button class="upload-cancel" onclick={cancelUpload} aria-label="Cancel upload">
+                      <Glyph name="close" size={12} />
+                    </button>
+                  </div>
+                {/if}
+
+                {#if captioned.rich}
+                  <RichMessage blocks={captioned.rich} onmention={openMention} />
+                {:else if captioned.parts.length}
+                  <FormattedText parts={captioned.parts} onmention={openMention} onlink={openLink} />
                 {/if}
 
                 {#if message.webpage}
@@ -2309,60 +4357,43 @@
                     <span class="poll-total">
                       {message.poll.totalVoters} voters{message.poll.closed ? ' · closed' : ''}
                     </span>
+                    {#if message.poll.totalVoters}
+                      <button
+                        class="poll-results-btn"
+                        onclick={() => (pollResults = {mid: message.mid, poll: message.poll!})}
+                      >View results</button>
+                    {/if}
                   </div>
                 {/if}
 
-                {#if message.payment || starReactionsOn}
+                <!-- Invoices render through InvoiceBubble above, which carries the
+                     cover photo; everything else that costs money lands here. -->
+                {#if message.payment && message.payment.kind !== 'invoice' && activePeerId !== null}
                   <MessagePayment
                     peerId={activePeerId}
                     mid={message.mid}
                     payment={message.payment}
-                    paidReactions={starReactionsOn && !message.out}
                     onboost={() => (boostPeerId = activePeerId)}
                   />
                 {/if}
 
                 {#if message.buttons.length}
-                  <div class="keyboard">
-                    {#each message.buttons as row, rowIndex (rowIndex)}
-                      <div class="keyboard-row">
-                        {#each row as button (button.column)}
-                          <button
-                            class="keyboard-btn"
-                            disabled={button.kind === 'unsupported'}
-                            onclick={() => pressButton(message, button)}
-                          >
-                            {#if button.kind === 'webview' || button.kind === 'simpleWebView'}
-                              <span class="kb-icon">▸</span>
-                            {/if}
-                            {button.text}
-                          </button>
-                        {/each}
-                      </div>
-                    {/each}
-                  </div>
+                  <InlineKeyboard
+                    buttons={message.buttons}
+                    busyKey={callbackBusyKey}
+                    onpress={(button) => pressButton(message, button)}
+                  />
                 {/if}
 
-                {#if message.reactions.length}
-                  <span class="reactions">
-                    {#each message.reactions as reaction (reaction.emoticon)}
-                      <button
-                        class="chip"
-                        class:chosen={reaction.chosen}
-                        onclick={() => react(message, reaction.emoticon)}
-                        oncontextmenu={(event) => openReactionMenu(event, message, reaction.emoticon)}
-                        title="Right-click to see who reacted"
-                      >{reaction.emoticon} {reaction.count}</button>
-                    {/each}
-                  </span>
-                {/if}
-
-                {#if reactingTo === message.mid}
-                  <span class="palette">
-                    {#each reactionPalette as emoticon}
-                      <button onclick={() => react(message, emoticon)}>{emoticon}</button>
-                    {/each}
-                  </span>
+                {#if !message.service && activePeerId !== null}
+                  <ReactionBar
+                    peerId={activePeerId}
+                    mid={message.mid}
+                    count={message.reactions.length}
+                    revision={reactionRevisions[message.mid] ?? 0}
+                    onopenstars={() => (starReactionFor = message.mid)}
+                    onerror={(text) => (error = text)}
+                  />
                 {/if}
 
                 {#if readByFor?.mid === message.mid}
@@ -2373,16 +4404,22 @@
                   </span>
                 {/if}
 
+                {#if activeIsChannel && threadKind !== 'comments'}
+                  <!-- Channel posts get the full comments bar with the newest
+                       commenters' faces, the way the official clients show it. -->
+                  <CommentsButton
+                    count={message.repliesCount}
+                    commenters={message.commenters}
+                    onopen={() => openComments(message)}
+                  />
+                {/if}
+
                 <span class="stamp">
-                  {#if message.repliesCount}
+                  {#if message.repliesCount && !activeIsChannel}
                     <button class="reply-btn" onclick={() => openComments(message)}>
                       {message.repliesCount} 💬
                     </button>
                   {/if}
-                  <button
-                    class="reply-btn"
-                    onclick={() => (reactingTo = reactingTo === message.mid ? null : message.mid)}
-                  >React</button>
                   <button class="reply-btn" onclick={() => replyToMessage(message)}>Reply</button>
                   <button class="reply-btn" onclick={() => openForward(message)}>Forward</button>
                   {#if message.text}
@@ -2471,28 +4508,129 @@
         </div>
       {/if}
 
+      <!-- Exactly one suggestion strip is live at a time: the bot/mention/hashtag
+           strip owns the composer keys while it is open, so the sticker strip
+           stands down rather than fighting it for Enter and Tab. -->
+      {#if !editing && !suggestKind}
+        <StickerSuggest
+          {draft}
+          onpick={(docId) => {
+            draft = '';
+            pickDocument(docId);
+          }}
+        />
+      {/if}
+
       {#if replyTo || editing}
         <div class="reply-bar">
           <span class="reply-quote">
             <span class="reply-title">
-              {editing ? 'Editing message' : `Replying to ${replyTo?.fromTitle}`}
+              {#if editing}
+                Editing message
+              {:else}
+                {activeReplyContext?.quote ? 'Quoting' : 'Replying to'}
+                {replyTo?.fromTitle}
+                {#if activeReplyContext?.chatTitle}
+                  <!-- The original is in another chat; say which one. -->
+                  <span class="reply-in">in {activeReplyContext.chatTitle}</span>
+                {/if}
+              {/if}
             </span>
-            <span class="reply-text">{(editing ?? replyTo)?.text || 'Media'}</span>
+            <span class="reply-text">
+              {activeReplyContext?.quote?.text || (editing ?? replyTo)?.text || 'Media'}
+            </span>
           </span>
+          {#if activeReplyContext?.quote}
+            <button class="cancel" onclick={dropQuote} title="Reply without the quote">❝✕</button>
+          {/if}
           <button
             class="cancel"
-            onclick={() => (editing ? cancelEdit() : (replyTo = null))}
+            onclick={() => (editing ? cancelEdit() : cancelReply())}
             aria-label="Cancel"
           >✕</button>
         </div>
       {/if}
 
+      {#if suggestKind && suggestItems.length}
+        <Suggestions
+          items={suggestItems}
+          active={suggestIndex}
+          label={suggestKind === 'command' ? 'Bot commands' : suggestKind === 'mention' ? 'Members' : 'Hashtags'}
+          onpick={applySuggestion}
+        />
+      {/if}
+
+      {#if botState?.isBot}
+        <BotBar
+          bot={botState}
+          busy={botBusy}
+          onstart={startBotChat}
+          onstop={stopBotChat}
+          onrestart={startBotChat}
+          onclear={clearBotChat}
+        />
+      {/if}
+
+      {#if replyKeyboardOpen && replyKeyboard?.kind === 'markup'}
+        <ReplyKeyboard
+          keyboard={replyKeyboard}
+          onpress={pressReplyKeyboardButton}
+          onclose={() => (replyKeyboardOpen = false)}
+        />
+      {:else}
       <form onsubmit={submit}>
         {#if showPicker}
           <Picker
             onemoji={(emoji) => (draft += emoji)}
             ondocument={pickDocument}
+            oncustomemoji={(item) => {
+              draft += item.emoji;
+              pendingCustomEmoji = [...pendingCustomEmoji, item];
+            }}
           />
+        {/if}
+        {#if sendAsPickerOpen && activePeerId !== null}
+          <SendAsPicker
+            peerId={activePeerId}
+            current={sendAsPeerId}
+            onpick={(id) => (sendAsPeerId = id)}
+            onclose={() => (sendAsPickerOpen = false)}
+          />
+        {/if}
+        {#if effectPickerOpen}
+          <EffectPicker
+            selected={sendEffect}
+            onpick={pickEffect}
+            onclose={() => (effectPickerOpen = false)}
+          />
+        {/if}
+        {#if sendAsPeerId !== null}
+          <button
+            type="button"
+            class="attach send-as"
+            onclick={() => (sendAsPickerOpen = !sendAsPickerOpen)}
+            title="Send message as…"
+            aria-label="Send message as…"
+            disabled={!!editing}
+          ><Avatar peerId={sendAsPeerId} title="" size={22} /></button>
+        {/if}
+        {#if replyKeyboard?.kind === 'markup'}
+          <button
+            type="button"
+            class="attach"
+            onclick={() => (replyKeyboardOpen = true)}
+            title="Show the bot keyboard"
+            aria-label="Show the bot keyboard"
+          >⌨</button>
+        {/if}
+        {#if botState?.hasCommands}
+          <button
+            type="button"
+            class="attach bot-commands"
+            onclick={openCommandList}
+            title="Bot commands"
+            aria-label="Bot commands"
+          >/</button>
         {/if}
         {#if botMenuButton}
           <button
@@ -2510,13 +4648,24 @@
           aria-label="Emoji, stickers and GIFs"
           disabled={!!editing}
         ><Glyph name="emoji" size={20} /></button>
-        <button
-          type="button"
-          class="attach"
-          onclick={() => fileInput?.click()}
-          aria-label="Attach file"
-          disabled={!!editing}
-        ><Glyph name="attach" size={20} /></button>
+        <div class="attach-wrap">
+          <button
+            type="button"
+            class="attach"
+            onclick={() => (attachMenu = !attachMenu)}
+            aria-label="Attach"
+            disabled={!!editing}
+          ><Glyph name="attach" size={20} /></button>
+          {#if attachMenu}
+            <div class="attach-menu">
+              <button type="button" onclick={() => { attachMenu = false; mediaInput?.click(); }}>Photo or video</button>
+              <button type="button" onclick={() => { attachMenu = false; fileInput?.click(); }}>File</button>
+              <button type="button" onclick={() => { attachMenu = false; locationSender = true; }}>Location</button>
+              <button type="button" onclick={openContactPicker}>Contact</button>
+              <button type="button" onclick={() => { attachMenu = false; pollComposer = true; }}>Poll</button>
+            </div>
+          {/if}
+        </div>
         <input
           class="file"
           type="file"
@@ -2524,18 +4673,108 @@
           bind:this={fileInput}
           onchange={(e) => attach((e.currentTarget as HTMLInputElement).files)}
         />
+        <!-- Same queue as the file input; only the picker's filter differs, and
+             each item still gets its own photo/file choice in the dialog. -->
+        <input
+          class="file"
+          type="file"
+          multiple
+          accept="image/*,video/*"
+          bind:this={mediaInput}
+          onchange={(e) => attach((e.currentTarget as HTMLInputElement).files)}
+        />
         <textarea
-          placeholder="Message"
+          placeholder={replyKeyboard?.placeholder || 'Message'}
           rows="1"
           bind:this={composer}
           bind:value={draft}
           oninput={onDraftInput}
           onkeydown={onComposerKey}
+          onclick={() => updateSuggestions()}
         ></textarea>
-        <button type="submit" disabled={!draft.trim()} aria-label={editing ? 'Save' : 'Send'}>
-          <Glyph name={editing ? 'check' : 'send'} />
-        </button>
+        <FormatBar textarea={composer} />
+        {#if !editing}
+          <button
+            type="button"
+            class="attach effect-button"
+            class:armed={!!sendEffect}
+            onclick={() => (effectPickerOpen = !effectPickerOpen)}
+            title={sendEffect ? 'Message effect armed' : 'Add a message effect'}
+            aria-label="Add a message effect"
+          >{sendEffectEmoticon || '✨'}</button>
+        {/if}
+        {#if scheduledCount > 0 && !editing}
+          <button
+            type="button"
+            class="attach scheduled-button"
+            onclick={() => (scheduledOpen = true)}
+            title="Scheduled messages"
+            aria-label="Scheduled messages"
+          >🕑<span class="scheduled-count">{scheduledCount}</span></button>
+        {/if}
+        {#if !draft.trim() && !editing && activePeerId !== null}
+          <!-- Empty composer: the send button gives way to the recorder, the
+               same swap the official clients do. -->
+          <VoiceRecorder
+            peerId={activePeerId}
+            threadId={activeThreadId}
+            replyToMsgId={replyTo?.mid}
+            onsent={() => {
+              replyTo = null;
+              scrollToBottom();
+            }}
+            onerror={(message) => (error = message)}
+          />
+        {:else}
+          <button
+            type="submit"
+            class="send-button"
+            class:silent={silentDefault && !editing}
+            disabled={!draft.trim() || (!editing && slowModeLeft > 0)}
+            aria-label={editing ? 'Save' : 'Send'}
+            title={editing ?
+              'Save' :
+              slowModeLeft > 0 ?
+                `Slow mode — wait ${slowModeLabel(slowModeLeft)}` :
+                'Send. Right-click or hold for scheduled and silent send'}
+            oncontextmenu={openSendOptions}
+            onpointerdown={onSendPointerDown}
+            onpointerup={cancelSendHold}
+            onpointerleave={cancelSendHold}
+          >
+            {#if !editing && slowModeLeft > 0}
+              <span class="slowmode">{slowModeLabel(slowModeLeft)}</span>
+            {:else}
+              <Glyph name={editing ? 'check' : 'send'} />
+            {/if}
+          </button>
+        {/if}
       </form>
+      {/if}
+
+      {#if sendOptionsOpen && activePeerId !== null}
+        <SendOptionsSheet
+          peerId={activePeerId}
+          isUser={activeIsUser}
+          defaultSilent={silentDefault}
+          onsend={(options) => {
+            sendOptionsOpen = false;
+            silentDefault = isSilentByDefault(activePeerId!);
+            deliver(options);
+          }}
+          onclose={() => (sendOptionsOpen = false)}
+        />
+      {/if}
+
+      {#if scheduledOpen && activePeerId !== null}
+        <ScheduledMessages
+          peerId={activePeerId}
+          title={activeTitle}
+          onclose={() => (scheduledOpen = false)}
+        />
+      {/if}
+
+      <EffectOverlay peerId={activePeerId} />
     {/if}
   </section>
 
@@ -2574,6 +4813,7 @@
       onclose={() => (showInfo = false)}
       onpeer={(id) => (profilePeerId = id)}
       onmigrated={openPeerChat}
+      onjump={(mid) => { showInfo = false; jumpTo(mid); }}
     />
   {/if}
 </div>
@@ -2583,16 +4823,28 @@
     peerId={activePeerId}
     items={mediaMessages}
     bind:index={lightboxIndex}
+    threadId={activeThreadId}
     onclose={() => (lightboxIndex = null)}
+    onforward={openForward}
+    onjump={jumpTo}
   />
 {/if}
 
+<AudioPlayerBar />
+
+
 {#if pendingFiles.length}
-  <SendFiles
-    files={pendingFiles}
-    onsend={confirmSend}
-    onclose={() => (pendingFiles = [])}
-  />
+  <!-- Keyed on the batch: the dialog seeds its per-item choices once, so a new
+       batch has to arrive as a new component rather than a stale one. -->
+  {#key pendingFiles}
+    <SendFiles
+      files={pendingFiles}
+      progress={uploadProgress}
+      onsend={confirmSend}
+      oncancelupload={cancelUpload}
+      onclose={() => (pendingFiles = [])}
+    />
+  {/key}
 {/if}
 
 {#if miniApp}
@@ -2608,31 +4860,51 @@
   />
 {/if}
 
-{#if reactionMenu}
-  <div class="menu-backdrop" onclick={() => (reactionMenu = null)} role="presentation"></div>
-  <div class="context-menu" style="left: {reactionMenu.x}px; top: {reactionMenu.y}px">
-    <button onclick={showReactionParticipants}>See who reacted {reactionMenu.emoticon}</button>
-  </div>
+{#if reactionPickerFor && activePeerId !== null}
+  <ReactionPicker
+    peerId={activePeerId}
+    mid={reactionPickerFor.mid}
+    x={reactionPickerFor.x}
+    y={reactionPickerFor.y}
+    onpick={pickReaction}
+    onpaid={() => {
+      starReactionFor = reactionPickerFor?.mid ?? null;
+      reactionPickerFor = null;
+    }}
+    onclose={() => (reactionPickerFor = null)}
+  />
 {/if}
 
-{#if reactionParticipantsFor}
-  <div class="reactors-backdrop" onclick={() => (reactionParticipantsFor = null)} role="presentation">
-    <div class="reactors-dialog" onclick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="People who reacted">
-      <header>
-        <strong>Reactions {reactionParticipantsFor.emoticon}</strong>
-        <button onclick={() => (reactionParticipantsFor = null)} aria-label="Close">✕</button>
-      </header>
-      {#if reactionParticipantsFor.loading}
-        <p class="muted">Loading…</p>
-      {:else if reactionParticipantsFor.names.length}
-        <ul>
-          {#each reactionParticipantsFor.names as name}
-            <li>{name}</li>
-          {/each}
-        </ul>
-      {:else}
-        <p class="muted">The reaction list is unavailable for this message.</p>
-      {/if}
+{#if starReactionFor !== null && activePeerId !== null}
+  <StarReactionSheet
+    peerId={activePeerId}
+    mid={starReactionFor}
+    onsent={() => bumpReaction(starReactionFor!)}
+    onclose={() => (starReactionFor = null)}
+  />
+{/if}
+
+{#if linkPrompt}
+  <div class="reactors-backdrop" onclick={() => (linkPrompt = null)} role="presentation">
+    <div
+      class="reactors-dialog bot-prompt"
+      onclick={(event) => event.stopPropagation()}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Bot request"
+    >
+      <p class="bot-prompt-text">{linkPrompt.text}</p>
+      <div class="bot-prompt-actions">
+        <button class="bot-prompt-cancel" onclick={() => (linkPrompt = null)}>Cancel</button>
+        <button
+          class="bot-prompt-ok"
+          onclick={() => {
+            const prompt = linkPrompt;
+            linkPrompt = null;
+            prompt?.onconfirm();
+          }}
+        >{linkPrompt.confirm}</button>
+      </div>
     </div>
   </div>
 {/if}
@@ -2642,11 +4914,29 @@
   <div class="menu-backdrop" onclick={() => (messageMenu = null)} role="presentation"></div>
   <div class="context-menu" style="left: {messageMenu.x}px; top: {messageMenu.y}px">
     {#if menuMessage}
-      <button onclick={() => { replyToMessage(menuMessage); messageMenu = null; }}>Reply</button>
+      <button onclick={() => { replyToMessage(menuMessage); messageMenu = null; }}>
+        {trackedQuote(menuMessage.mid) ? 'Reply with quote' : 'Reply'}
+      </button>
+      <button onclick={() => { openReplyElsewhere(menuMessage); messageMenu = null; }}>
+        Reply in…
+      </button>
+      {#if !menuMessage.service}
+        <button
+          onclick={() => openReactionPicker(menuMessage.mid, messageMenu!.x, messageMenu!.y)}
+        >React…</button>
+      {/if}
       {#if menuMessage.text}
         <button onclick={() => { copyText(menuMessage); messageMenu = null; }}>Copy text</button>
       {/if}
       <button onclick={() => { openForward(menuMessage); messageMenu = null; }}>Forward</button>
+      {#if menuMessage.stickerDocId}
+        <button
+          onclick={() => { packSheet = {setKey: '', docId: menuMessage.stickerDocId}; messageMenu = null; }}
+        >View pack</button>
+      {/if}
+      {#if menuMessage.media?.kind === 'gif' && menuMessage.media.docId}
+        <GifSaveAction docId={menuMessage.media.docId} ondone={() => (messageMenu = null)} />
+      {/if}
       <button onclick={() => startSelecting(menuMessage.mid)}>Select</button>
       <!-- A sticker or a bare media message is editable in the API sense but
            has no text to edit; deleting it is still fair game. -->
@@ -2660,12 +4950,70 @@
   </div>
 {/if}
 
-{#if forwarding}
-  <PeerPicker
-    title="Forward to"
+{#if packSheet}
+  <StickerSetSheet
+    setKey={packSheet.setKey}
+    docId={packSheet.docId}
+    onsend={pickDocument}
+    onclose={() => (packSheet = null)}
+  />
+{/if}
+
+{#if forwarding.length}
+  <ForwardSheet
     dialogs={allDialogs}
-    onpick={doForward}
-    onclose={() => (forwarding = null)}
+    count={forwarding.length}
+    hasCaptions={forwarding.some((m) => m.media && m.text)}
+    onforward={doForward}
+    onclose={() => (forwarding = [])}
+  />
+{/if}
+
+{#if replyingElsewhere}
+  <PeerPicker
+    title="Reply in…"
+    dialogs={allDialogs}
+    onpick={doReplyElsewhere}
+    onclose={() => (replyingElsewhere = null)}
+  />
+{/if}
+
+{#if contactPicking}
+  <PeerPicker
+    title="Share a contact"
+    dialogs={allDialogs.filter((dialog) => dialog.isUser)}
+    onpick={shareContact}
+    onclose={() => (contactPicking = false)}
+  />
+{/if}
+
+{#if locationSender && activePeerId !== null}
+  <LocationSender
+    peerId={activePeerId}
+    threadId={activeThreadId}
+    replyToMsgId={replyTo?.mid}
+    onclose={() => { locationSender = false; replyTo = null; }}
+    onerror={(text) => (error = text)}
+  />
+{/if}
+
+{#if pollComposer && activePeerId !== null}
+  <PollComposer
+    peerId={activePeerId}
+    threadId={activeThreadId}
+    replyToMsgId={replyTo?.mid}
+    onclose={() => { pollComposer = false; replyTo = null; }}
+    onerror={(text) => (error = text)}
+  />
+{/if}
+
+{#if pollResults && activePeerId !== null}
+  <PollResults
+    peerId={activePeerId}
+    mid={pollResults.mid}
+    poll={pollResults.poll}
+    onclose={() => (pollResults = null)}
+    onpeer={(id) => { pollResults = null; profilePeerId = id; }}
   />
 {/if}
 
@@ -2692,6 +5040,15 @@
     dialogs={allDialogs}
     onclose={() => (folderEditorOpen = false)}
     onsaved={onFolderSaved}
+  />
+{/if}
+
+{#if topicEditor && activePeerId !== null}
+  <TopicEditor
+    peerId={activePeerId}
+    topic={topicEditor.topic}
+    onclose={() => (topicEditor = null)}
+    onsaved={onTopicSaved}
   />
 {/if}
 
@@ -2776,6 +5133,17 @@
     padding: 1px 8px;
   }
 
+  .thread-back {
+    background: none;
+    cursor: pointer;
+    font-family: inherit;
+  }
+
+  .thread-back:hover {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+
   .list {
     flex: 1;
     min-height: 0;
@@ -2783,13 +5151,26 @@
   }
 
   .search {
+    display: flex;
+    align-items: center;
+    gap: 6px;
     padding: 10px 14px;
     border-bottom: 1px solid var(--border);
     flex: none;
   }
 
+  .search-cancel {
+    background: none;
+    border: 0;
+    color: var(--text-dim);
+    cursor: pointer;
+    padding: 4px;
+    flex: none;
+  }
+
   .search input {
     width: 100%;
+    min-width: 0;
     padding: 9px 12px;
     border: 1px solid var(--border);
     border-radius: 999px;
@@ -2811,6 +5192,31 @@
   section.dragging {
     outline: 2px dashed var(--accent);
     outline-offset: -8px;
+  }
+
+  .drop-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 40;
+    display: grid;
+    place-items: center;
+    background: color-mix(in srgb, var(--bg-solid, var(--bg-elevated)) 82%, transparent);
+    /* The overlay must not eat the dragenter/dragleave pair it depends on. */
+    pointer-events: none;
+  }
+
+  .drop-card {
+    display: grid;
+    justify-items: center;
+    gap: 6px;
+    padding: 24px 32px;
+    border: 2px dashed var(--accent);
+    border-radius: 16px;
+    text-align: center;
+  }
+
+  .drop-card strong {
+    font-size: 17px;
   }
 
   .attach {
@@ -2921,6 +5327,64 @@
     flex: none;
   }
 
+  .menu .submenu-trigger {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .menu .submenu-item {
+    display: flex;
+    gap: 6px;
+    padding-left: 20px;
+  }
+
+  .menu .check {
+    width: 12px;
+    flex: none;
+    color: var(--accent);
+  }
+
+  .submenu-empty {
+    padding: 9px 12px 9px 20px;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  .chevron {
+    color: var(--text-dim);
+  }
+
+  .archive-row .topic-glyph {
+    color: var(--text-dim);
+  }
+
+  .avatar-wrap {
+    position: relative;
+    display: flex;
+    flex: none;
+  }
+
+  .online-dot {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    background: #4dcb5f;
+    border: 2px solid var(--bg);
+  }
+
+  .preview.typing {
+    color: var(--accent);
+  }
+
+  .row-button.drag-over {
+    border-left-color: var(--accent);
+    background: color-mix(in srgb, var(--text) 10%, transparent);
+  }
+
   .title-button {
     background: none;
     border: none;
@@ -2944,8 +5408,44 @@
 
   .album {
     display: grid;
-    grid-template-columns: repeat(var(--cols), 1fr);
-    gap: 3px;
+    gap: 2px;
+    width: 100%;
+    max-width: 320px;
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  .album.n2 {
+    grid-template-columns: 1fr 1fr;
+    aspect-ratio: 2 / 1;
+  }
+
+  .album.n3 {
+    grid-template-columns: 2fr 1fr;
+    grid-template-rows: 1fr 1fr;
+    aspect-ratio: 3 / 2;
+  }
+
+  .album.n3 .first {
+    grid-row: span 2;
+  }
+
+  .album.n4 {
+    grid-template-columns: repeat(3, 1fr);
+    grid-template-rows: 2fr 1fr;
+    aspect-ratio: 1 / 1;
+  }
+
+  .album.n4 .first {
+    grid-column: span 3;
+  }
+
+  .album.many {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .album.many .album-item {
+    aspect-ratio: 1;
   }
 
   .album-item,
@@ -2958,10 +5458,43 @@
     min-width: 0;
   }
 
-  .reactions {
+  .album-item {
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .upload-row {
     display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
+    align-items: center;
+    gap: 8px;
+    margin-top: 6px;
+  }
+
+  .upload-bar {
+    flex: 1;
+    height: 4px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--text) 15%, transparent);
+    overflow: hidden;
+  }
+
+  .upload-fill {
+    height: 100%;
+    background: var(--accent);
+    transition: width 0.15s linear;
+  }
+
+  .upload-cancel {
+    display: grid;
+    place-items: center;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--text) 10%, transparent);
+    color: inherit;
+    cursor: pointer;
   }
 
   .chip {
@@ -2972,28 +5505,6 @@
     font-size: 12px;
     color: inherit;
     cursor: pointer;
-  }
-
-  .chip.chosen {
-    background: var(--action);
-    color: var(--action-ink);
-  }
-
-  .palette {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 2px;
-    padding: 4px;
-    border-radius: 999px;
-    background: color-mix(in srgb, currentColor 10%, transparent);
-  }
-
-  .palette button {
-    background: none;
-    border: none;
-    font-size: 18px;
-    cursor: pointer;
-    padding: 2px;
   }
 
   form {
@@ -3319,41 +5830,43 @@
     font-weight: 600;
   }
 
-  .keyboard {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    margin-top: 6px;
+  .bot-commands {
+    font-weight: 700;
+    font-size: 18px;
+    line-height: 1;
   }
 
-  .keyboard-row {
-    display: flex;
-    gap: 4px;
+  .bot-prompt {
+    padding: 18px;
   }
 
-  .keyboard-btn {
-    flex: 1;
-    padding: 8px 10px;
+  .bot-prompt-text {
+    margin: 0 0 16px;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+  }
+
+  .bot-prompt-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  .bot-prompt-cancel,
+  .bot-prompt-ok {
+    padding: 8px 14px;
     border: 1px solid var(--border);
     border-radius: 10px;
     background: var(--bg-elevated);
     color: var(--text);
-    font-size: 13px;
+    font: inherit;
     cursor: pointer;
   }
 
-  .keyboard-btn:hover:not(:disabled) {
-    border-color: var(--accent);
-  }
-
-  .keyboard-btn:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
-
-  .kb-icon {
-    color: var(--accent);
-    margin-right: 4px;
+  .bot-prompt-ok {
+    border-color: transparent;
+    background: var(--accent);
+    color: #fff;
   }
 
   .inline-switch {
@@ -3506,6 +6019,133 @@
     white-space: nowrap;
   }
 
+  .result.current {
+    background: var(--row-active);
+  }
+
+  .result.more {
+    color: var(--accent);
+    font-size: 13px;
+    text-align: center;
+  }
+
+  .result-counter {
+    font-size: 12px;
+    color: var(--text-dim);
+    align-self: center;
+    white-space: nowrap;
+  }
+
+  .step:disabled {
+    opacity: 0.35;
+    cursor: default;
+  }
+
+  .filters-toggle {
+    font-size: 12px !important;
+    padding: 4px 10px !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 999px !important;
+  }
+
+  .filters-toggle.on {
+    border-color: var(--accent) !important;
+    color: var(--accent);
+  }
+
+  .chat-filters {
+    padding: 8px 18px 10px;
+    border-bottom: 1px solid var(--border);
+    flex: none;
+    display: grid;
+    gap: 8px;
+  }
+
+  .filter-chips,
+  .filter-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+  }
+
+  .chip {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 4px 10px;
+    font-size: 12px;
+    color: inherit;
+    cursor: pointer;
+  }
+
+  .chip.on {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .date-jump {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  .date-jump input {
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: inherit;
+    padding: 3px 6px;
+    font: inherit;
+    font-size: 12px;
+  }
+
+  .from-picker {
+    max-height: 220px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 6px;
+  }
+
+  .from-picker input {
+    width: 100%;
+    padding: 6px 10px;
+    margin-bottom: 4px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: transparent;
+    color: inherit;
+    outline: none;
+  }
+
+  .from-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 5px 6px;
+    background: none;
+    border: 0;
+    border-radius: 8px;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .from-row:hover {
+    background: var(--bg-elevated);
+  }
+
+  .from-name {
+    font-size: 13px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .selection-bar {
     display: flex;
     align-items: center;
@@ -3551,50 +6191,6 @@
     position: fixed;
     inset: 0;
     z-index: 60;
-  }
-
-  .reactors-backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 70;
-    display: grid;
-    place-items: center;
-    padding: 16px;
-    background: rgba(0, 0, 0, 0.55);
-  }
-
-  .reactors-dialog {
-    width: min(360px, 100%);
-    max-height: min(480px, calc(100dvh - 32px));
-    overflow: auto;
-    padding: 16px;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    border-radius: 14px;
-  }
-
-  .reactors-dialog header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 10px;
-  }
-
-  .reactors-dialog header button {
-    border: 0;
-    background: none;
-    color: inherit;
-    cursor: pointer;
-    font-size: 18px;
-  }
-
-  .reactors-dialog ul {
-    margin: 0;
-    padding-left: 20px;
-  }
-
-  .reactors-dialog li + li {
-    margin-top: 8px;
   }
 
   .context-menu {
@@ -3664,23 +6260,6 @@
     }
   }
 
-  .forwarded {
-    font-size: 12px;
-    font-style: italic;
-    opacity: 0.8;
-  }
-
-  button.reply-quote.jump {
-    background: none;
-    font: inherit;
-    color: inherit;
-    text-align: left;
-    cursor: pointer;
-    border-top: none;
-    border-right: none;
-    border-bottom: none;
-  }
-
   .webpage {
     display: grid;
     gap: 2px;
@@ -3743,6 +6322,57 @@
   .poll-total {
     font-size: 11px;
     opacity: 0.7;
+  }
+
+  .poll-results-btn {
+    align-self: flex-start;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--accent);
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .service-card {
+    align-self: center;
+    display: flex;
+    justify-content: center;
+    margin: 4px 0;
+  }
+
+  .attach-wrap {
+    position: relative;
+    display: flex;
+  }
+
+  .attach-menu {
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 0;
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    min-width: 140px;
+    padding: 6px;
+    border-radius: var(--pane-radius);
+    border: 1px solid var(--border);
+    background: var(--bg-solid);
+  }
+
+  .attach-menu button {
+    padding: 8px 10px;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text);
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .attach-menu button:hover {
+    background: var(--bubble-in);
   }
 
   .pinned-bar {
@@ -3967,7 +6597,13 @@
 
   .reply-bar .reply-quote {
     flex: 1;
+    min-width: 0;
     border-left-color: var(--accent);
+  }
+
+  .reply-in {
+    font-weight: 400;
+    color: var(--text-dim);
   }
 
   form {
@@ -4028,6 +6664,59 @@
 
   .attach:hover {
     opacity: 1;
+  }
+
+  /* ---------- send options ---------- */
+
+  .send-as {
+    display: grid;
+    place-items: center;
+    padding: 0;
+    opacity: 1;
+  }
+
+  .effect-button {
+    line-height: 1;
+  }
+
+  .effect-button.armed {
+    opacity: 1;
+    filter: drop-shadow(0 0 4px var(--accent));
+  }
+
+  .scheduled-button {
+    position: relative;
+    line-height: 1;
+  }
+
+  .scheduled-count {
+    position: absolute;
+    top: -2px;
+    right: -4px;
+    min-width: 14px;
+    padding: 0 3px;
+    border-radius: 999px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 9px;
+    line-height: 14px;
+    text-align: center;
+  }
+
+  .send-button.silent {
+    /* A muted send reads as a quieter button, the way the official clients
+       swap the icon for the crossed-out bell. */
+    background: color-mix(in srgb, var(--action) 55%, transparent);
+  }
+
+  .send-button:disabled {
+    cursor: default;
+    opacity: 0.55;
+  }
+
+  .slowmode {
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
   }
 
   form button:disabled {

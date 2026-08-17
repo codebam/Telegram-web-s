@@ -17,7 +17,6 @@
     /** Bumped by the chat when a reaction is sent from here. */
     revision = 0,
     canReact = true,
-    onopenpicker,
     onopenstars,
     onerror
   }: {
@@ -26,7 +25,6 @@
     count?: number;
     revision?: number;
     canReact?: boolean;
-    onopenpicker: (event: MouseEvent) => void;
     onopenstars: () => void;
     onerror?: (message: string) => void;
   } = $props();
@@ -152,11 +150,9 @@
     </button>
   {/each}
 
-  {#if canReact}
-    <button class="chip add" onclick={onopenpicker} aria-label="Add a reaction" title="Add a reaction">
-      ＋
-    </button>
-  {/if}
+  <!-- No "add a reaction" affordance here: like the official clients, reacting
+       is reached by right-clicking (or long-pressing) the message. Only the
+       chips for reactions that already exist live on the bubble. -->
 
   {#if burst}
     {#key burst.token}
@@ -205,16 +201,6 @@
 
   .chip.paid {
     background: color-mix(in srgb, #f0b53c 45%, transparent);
-  }
-
-  .chip.add {
-    opacity: 0.5;
-    font-size: 13px;
-    line-height: 1;
-  }
-
-  .chip.add:hover {
-    opacity: 1;
   }
 
   .plain {
