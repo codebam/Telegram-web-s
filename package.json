@@ -9,7 +9,7 @@
     "start:svelte": "cd svelte && vite dev",
     "build:svelte": "cd svelte && vite build",
     "preview:svelte": "cd svelte && vite preview",
-    "deploy:svelte": "pnpm run build:svelte && wrangler pages deploy svelte/build --project-name tweb-svelte",
+    "deploy:svelte": "pnpm run build:svelte && npx wrangler pages deploy svelte/build --project-name telegram-web-s",
     "start-in-docker": "vite --host",
     "serve": "pnpm run build && node server.js --dist",
     "build": "pnpm run typecheck && pnpm run generate-changelog && vite build && pnpm run check-bundle",
