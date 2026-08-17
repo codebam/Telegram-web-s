@@ -13,7 +13,7 @@ import cleanUsername from '@helpers/cleanUsername';
 import tsNow from '@helpers/tsNow';
 import isObject from '@helpers/object/isObject';
 import safeReplaceObject from '@helpers/object/safeReplaceObject';
-import {AccountEmojiStatuses, Chat, ContactsResolvedPeer, EmojiStatus, InputContact, InputGeoPoint, InputMedia, InputPeer, InputUser, User as MTUser, RequirementToContact, UserProfilePhoto, UserStatus} from '@layer';
+import {AccountEmojiStatuses, Chat, ContactsResolvedPeer, EmojiStatus, InputContact, InputGeoPoint, InputMedia, InputPeer, InputUser, User as MTUser, PeerColor, RequirementToContact, UserProfilePhoto, UserStatus} from '@layer';
 import parseEntities from '@lib/richTextProcessor/parseEntities';
 import wrapUrl from '@lib/richTextProcessor/wrapUrl';
 import SearchIndex from '@lib/searchIndex';
@@ -1263,6 +1263,21 @@ export class AppUsersManager extends AppManager {
         emoji_status: emojiStatus
       });
     });
+  }
+
+  /**
+   * Own name colour and the custom-emoji pattern drawn behind it. Premium-only
+   * on the server; omitting `color` resets to the id-derived palette entry.
+   * The server sends no update for it, so refetch self — every palette lookup
+   * reads `user.color`.
+   */
+  public updateColor(color?: PeerColor, forProfile?: boolean) {
+    return this.apiManager.invokeApi('account.updateColor', {
+      for_profile: forProfile,
+      color
+    }).then(() => {
+      return this.getApiUsers([this.userId]);
+    }).then(() => {});
   }
 
   public getDefaultEmojiStatuses() {

@@ -356,6 +356,16 @@ export class AppEmojiManager extends AppManager {
     });
   }
 
+  /**
+   * Custom emoji offered as the background pattern behind a peer's name colour.
+   * Cacheable: the set only changes with the app config.
+   */
+  public getDefaultBackgroundEmojis() {
+    return this.apiManager.invokeApiCacheable('account.getDefaultBackgroundEmojis', {hash: 0}).then((emojiList) => {
+      return (emojiList as EmojiList.emojiList).document_id ?? [];
+    }, () => [] as DocId[]);
+  }
+
   public getCachedCustomEmojiDocuments(docIds: DocId[]) {
     return docIds.map((docId) => this.appDocsManager.getDoc(docId));
   }

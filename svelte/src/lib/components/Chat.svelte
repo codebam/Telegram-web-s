@@ -143,6 +143,7 @@
   } from '$lib/telegram/search';
   import {applyAccent, applyDensity, applyTheme} from '$lib/telegram/theme';
   import {playAudioMessage} from '$lib/telegram/player';
+  import {applyAppearance} from '$lib/telegram/appearance';
   import {
     getBusinessBot,
     onPeerSettings,
@@ -616,6 +617,9 @@
     applyTheme();
     applyAccent();
     applyDensity();
+    // Wallpaper, text size, bubble spacing and the power-saving flags — all of
+    // them land as CSS variables on <html>.
+    applyAppearance();
 
     (async () => {
       try {
