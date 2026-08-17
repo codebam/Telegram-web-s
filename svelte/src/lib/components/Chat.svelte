@@ -4,15 +4,6 @@
   import Avatar from './Avatar.svelte';
   import Glyph from './Glyph.svelte';
   import ChatInfo from './ChatInfo.svelte';
-  import ChecklistBubble from './ChecklistBubble.svelte';
-  import ContactBubble from './ContactBubble.svelte';
-  import GameBubble from './GameBubble.svelte';
-  import GiftBubble from './GiftBubble.svelte';
-  import InvoiceBubble from './InvoiceBubble.svelte';
-  import LocationBubble from './LocationBubble.svelte';
-  import LocationSender from './LocationSender.svelte';
-  import PollComposer from './PollComposer.svelte';
-  import PollResults from './PollResults.svelte';
   import FolderEditor from './FolderEditor.svelte';
   import FormattedText from './FormattedText.svelte';
   import InlinePreview from './InlinePreview.svelte';
@@ -28,10 +19,10 @@
   import Picker from './Picker.svelte';
   import RichMessage from './RichMessage.svelte';
   import Sticker from './Sticker.svelte';
-  import StickerSetSheet from './StickerSetSheet.svelte';
-  import StickerSuggest from './StickerSuggest.svelte';
-  import GifSaveAction from './GifSaveAction.svelte';
-  import {parseStickerSetLink} from '$lib/telegram/stickers';
+  import CommentsButton from './CommentsButton.svelte';
+  import SavedTags from './SavedTags.svelte';
+  import TopicEditor from './TopicEditor.svelte';
+  import TopicIcon from './TopicIcon.svelte';
   import {GIT_COMMIT, GIT_COMMIT_SHORT, GIT_COMMIT_URL} from '$lib/buildInfo';
   import {
     availableReactions,
@@ -54,7 +45,6 @@
     loadSponsored,
     hidePinnedMessage,
     loadOlder,
-    loadTopics,
     markDialogRead,
     markDialogUnread,
     onDialogsUpdate,
@@ -69,7 +59,6 @@
     reactionParticipants,
     onTyping,
     onUserUpdate,
-    openDiscussion,
     pressCallbackButton,
     readUpTo,
     resolveUsername,
@@ -90,11 +79,25 @@
     type FolderItem,
     type MessageButton,
     type MessageItem,
-    type PollPreview,
-    type SponsoredItem,
-    type TopicItem
+    type SponsoredItem
   } from '$lib/telegram/chats';
-  import {sendContact} from '$lib/telegram/messageTypes';
+  import {
+    canCreateTopic,
+    deleteTopic,
+    isSavedViewedAsChats,
+    isViewingForumAsMessages,
+    loadSavedDialogs,
+    loadTopics,
+    openCommentThread,
+    setSavedViewedAsChats,
+    setTopicClosed,
+    setTopicHidden,
+    setViewForumAsMessages,
+    toggleSavedTag,
+    toggleTopicPin,
+    type SavedDialogItem,
+    type TopicItem
+  } from '$lib/telegram/topics';
   import {
     getBotMenuButton,
     openBotAppLink,
@@ -110,7 +113,6 @@
   } from '$lib/telegram/notifications';
   import {queryInlineBot, sendInlineResult, type InlineQueryAnswer, type InlineResultItem} from '$lib/telegram/settings';
   import {applyAccent, applyDensity, applyTheme} from '$lib/telegram/theme';
-  import {applyAppearance} from '$lib/telegram/appearance';
   import {
     getBusinessBot,
     onPeerSettings,
@@ -134,6 +136,46 @@
    * timeline" from "nothing picked yet".
    */
   let topicOpen = $state(false);
+  /**
+   * The synthetic "All messages" row above a forum's topics — thread id 0 means
+   * the chat's own timeline, which `openTopic` maps back to no thread at all.
+   */
+  const allMessagesRow: TopicItem = {
+    threadId: 0,
+    title: 'All messages',
+    preview: '',
+    date: 0,
+    unread: 0,
+    closed: false,
+    hidden: false,
+    pinned: false,
+    isGeneral: false,
+    iconColor: 0,
+    iconEmojiId: '',
+    canManage: false
+  };
+  /** Right-clicked topic row, keyed by thread id. */
+  let topicMenuFor = $state<number | null>(null);
+  /** Open topic editor: `{topic: null}` creates, `{topic}` edits. */
+  let topicEditor = $state<{topic: TopicItem | null} | null>(null);
+  let canManageForum = $state(false);
+  /** Forum shown as one flat timeline instead of a topic list. */
+  let forumAsMessages = $state(false);
+  /**
+   * What the open thread actually is. A thread id alone cannot tell a forum
+   * topic from a comment thread from a saved sub-chat, and the header, the
+   * back button and the composer all behave differently for each.
+   */
+  let threadKind = $state<'' | 'topic' | 'comments' | 'saved'>('');
+  /** Comments already on the channel post whose thread is open. */
+  let threadCommentCount = $state(0);
+  /** Where a comment thread was entered from, for the back button. */
+  let commentsOrigin = $state<{peerId: number; title: string} | null>(null);
+  /** Saved Messages split per original sender instead of one timeline. */
+  let savedAsChats = $state(false);
+  let savedDialogs = $state<SavedDialogItem[]>([]);
+  /** Tag currently filtering Saved Messages, '' for no filter. */
+  let savedTag = $state('');
   /** Calls are one-to-one only, and never to Saved Messages. */
   let activeIsUser = $state(false);
   let activeIsSelf = $state(false);
@@ -144,6 +186,14 @@
    */
   let readOutboxMaxId = $state(0);
   let activeIsChannel = $state(false);
+  /**
+   * The sidebar shows a sub-list instead of the chat list: a forum's topics, or
+   * Saved Messages split per sender. Both replace the search box and folders
+   * with a back button to the chat list.
+   */
+  let topicListOpen = $derived(activeIsForum && activePeerId !== null && !forumAsMessages);
+  let savedListOpen = $derived(activeIsSelf && activePeerId !== null && savedAsChats);
+  let sublistOpen = $derived(topicListOpen || savedListOpen);
   /** Names of the people who have read a message, fetched on demand. */
   let readByFor = $state<{mid: number; names: string[]} | null>(null);
   let reactionMenu = $state<{mid: number; emoticon: string; x: number; y: number} | null>(null);
@@ -194,8 +244,6 @@
   /** Profile being viewed from a message sender or member list, if any. */
   let profilePeerId = $state<number | null>(null);
   let showPicker = $state(false);
-  /** Sticker-pack preview, opened from an addstickers link or "View pack". */
-  let packSheet = $state<{setKey: string; docId: string} | null>(null);
   let reactionPalette = $state<string[]>([]);
   let reactingTo = $state<number | null>(null);
   let lightboxIndex = $state<number | null>(null);
@@ -350,9 +398,6 @@
     applyTheme();
     applyAccent();
     applyDensity();
-    // Wallpaper, text size, bubble spacing and the power-saving flags — all of
-    // them land as CSS variables on <html>.
-    applyAppearance();
 
     (async () => {
       try {
@@ -722,22 +767,62 @@
     }
   }
 
+  /**
+   * A channel post's comments live in the linked discussion group, so opening
+   * them swaps the peer as well as the thread. The channel is remembered so the
+   * back button returns to the post instead of the chat list.
+   */
   async function openComments(message: MessageItem) {
     if (activePeerId === null) return;
     try {
-      const discussion = await openDiscussion(activePeerId, message.mid);
-      if (!discussion) {
+      const thread = await openCommentThread(activePeerId, message.mid);
+      if (!thread) {
         error = 'No discussion for this post';
         return;
       }
-      activePeerId = discussion.peerId;
-      activeThreadId = discussion.threadId;
+
+      commentsOrigin = {peerId: activePeerId, title: activeTitle};
+      activePeerId = thread.peerId;
+      activeThreadId = thread.threadId;
       activeTitle = 'Comments';
+      threadKind = 'comments';
+      threadCommentCount = thread.count || message.repliesCount;
       activeIsForum = false;
-      await openHistory(discussion.peerId, discussion.threadId);
+      // The discussion group is a megagroup: ticks, not view counts, and the
+      // composer must be live so a comment can actually be posted.
+      activeIsChannel = false;
+      activeIsUser = false;
+      activeIsSelf = false;
+      activeRestriction = '';
+      topicOpen = true;
+      replyTo = null;
+      await openHistory(thread.peerId, thread.threadId, thread.count, thread.readMaxId);
     } catch (err: any) {
       error = errorOf(err, 'Could not open comments');
     }
+  }
+
+  /** Back out of a comment thread to the channel post it belongs to. */
+  async function leaveCommentThread() {
+    const origin = commentsOrigin;
+    commentsOrigin = null;
+    threadKind = '';
+    threadCommentCount = 0;
+    activeThreadId = undefined;
+    if (!origin) {
+      activePeerId = null;
+      return;
+    }
+
+    const dialog = dialogs.find((d) => d.peerId === origin.peerId);
+    if (dialog) {
+      await openChat(dialog);
+      return;
+    }
+
+    activePeerId = origin.peerId;
+    activeTitle = origin.title;
+    await openHistory(origin.peerId);
   }
 
   /* ---------- jumping to a message ---------- */
@@ -983,34 +1068,6 @@
 
   /* ---------- attachments ---------- */
 
-  let attachMenu = $state(false);
-  let locationSender = $state(false);
-  let pollComposer = $state(false);
-  /** Picking someone to share as a contact card, rather than to forward to. */
-  let contactPicking = $state(false);
-  let pollResults = $state<{mid: number; poll: PollPreview} | null>(null);
-
-  async function openContactPicker() {
-    attachMenu = false;
-    if (activePeerId === null) return;
-    allDialogs = await loadDialogs(100, 0);
-    contactPicking = true;
-  }
-
-  async function shareContact(contactPeerId: number) {
-    contactPicking = false;
-    if (activePeerId === null) return;
-
-    const replyToMsgId = replyTo?.mid;
-    replyTo = null;
-
-    try {
-      await sendContact(activePeerId, contactPeerId, {threadId: activeThreadId, replyToMsgId});
-    } catch (err: any) {
-      error = errorOf(err, 'Could not share the contact');
-    }
-  }
-
   /** Queue files for confirmation rather than sending them blind. */
   function attach(files: FileList | File[] | null) {
     if (!files || activePeerId === null) return;
@@ -1176,13 +1233,6 @@
    * ordinary link.
    */
   function openLink(url: string): boolean {
-    // A t.me/addstickers link opens the pack in place instead of the browser.
-    const stickerSet = parseStickerSetLink(url);
-    if (stickerSet) {
-      packSheet = {setKey: stickerSet, docId: ''};
-      return true;
-    }
-
     const link = parseMiniAppLink(url);
     if (!link) return false;
 
@@ -1401,6 +1451,7 @@
       miniApp ||
       showSettings ||
       folderEditorOpen ||
+      topicEditor ||
       newChatOpen ||
       editingFolder ||
       forwarding ||
@@ -1411,9 +1462,9 @@
       return;
     }
 
-    if (packSheet) packSheet = null;
-    else if (messageMenu) messageMenu = null;
+    if (messageMenu) messageMenu = null;
     else if (menuFor) menuFor = null;
+    else if (topicMenuFor !== null) topicMenuFor = null;
     else if (reactingTo !== null) reactingTo = null;
     else if (readByFor) readByFor = null;
     else if (selecting) {
@@ -1500,19 +1551,110 @@
     sponsored = null;
 
     topicOpen = false;
+    topicMenuFor = null;
+    threadKind = '';
+    threadCommentCount = 0;
+    commentsOrigin = null;
+    savedDialogs = [];
+    savedTag = '';
 
     if (activeRestriction) return;
 
-    if (dialog.isForum) {
-      try {
-        topics = await loadTopics(dialog.peerId);
-      } catch (err: any) {
-        error = errorOf(err, 'Failed to load topics');
+    // Saved Messages can be split per original sender. The preference is local,
+    // so the split list is only fetched when it is actually the active view.
+    if (dialog.isSelf) {
+      savedAsChats = isSavedViewedAsChats();
+      if (savedAsChats) {
+        await refreshSavedDialogs();
+        return;
       }
+    }
+
+    if (dialog.isForum) {
+      forumAsMessages = await isViewingForumAsMessages(dialog.peerId);
+      if (forumAsMessages) {
+        // "View as messages": one flat timeline, no topic list in between.
+        topicOpen = true;
+        await openHistory(dialog.peerId, undefined, dialog.unread, dialog.readMaxId);
+        return;
+      }
+
+      canManageForum = await canCreateTopic(dialog.peerId);
+      await refreshTopics();
       return;
     }
 
     await openHistory(dialog.peerId, undefined, dialog.unread, dialog.readMaxId);
+  }
+
+  /* ---------- forum topics ---------- */
+
+  async function refreshTopics() {
+    if (activePeerId === null) return;
+    const peerId = activePeerId;
+    try {
+      const loaded = await loadTopics(peerId);
+      if (activePeerId !== peerId) return;
+      // Pinned topics sit above the rest, hidden ones drop out entirely — the
+      // General topic is hidden rather than deleted.
+      topics = loaded
+        .filter((topic) => !topic.hidden)
+        .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.date - a.date);
+    } catch (err: any) {
+      error = errorOf(err, 'Failed to load topics');
+    }
+  }
+
+  async function runTopicAction(action: () => Promise<unknown>) {
+    topicMenuFor = null;
+    try {
+      await action();
+      await refreshTopics();
+    } catch (err: any) {
+      error = errorOf(err, 'Topic action failed');
+    }
+  }
+
+  async function removeTopic(topic: TopicItem) {
+    if (!confirm(`Delete the topic "${topic.title}" and all its messages?`)) return;
+    await runTopicAction(() => deleteTopic(activePeerId!, topic.threadId));
+    if (activeThreadId === topic.threadId) backToChats();
+  }
+
+  async function onTopicSaved(threadId: number) {
+    const creating = !topicEditor?.topic;
+    topicEditor = null;
+    await refreshTopics();
+    if (creating) {
+      const created = topics.find((topic) => topic.threadId === threadId);
+      if (created) await openTopic(created);
+    }
+  }
+
+  async function toggleForumAsMessages() {
+    if (activePeerId === null) return;
+    const peerId = activePeerId;
+    const next = !forumAsMessages;
+    try {
+      await setViewForumAsMessages(peerId, next);
+      forumAsMessages = next;
+      const dialog = dialogs.find((d) => d.peerId === peerId);
+      if (next) {
+        topicOpen = true;
+        activeThreadId = undefined;
+        activeTitle = dialog?.title ?? activeTitle;
+        threadKind = '';
+        await openHistory(peerId, undefined, dialog?.unread ?? 0, dialog?.readMaxId ?? 0);
+      } else {
+        topicOpen = false;
+        activeThreadId = undefined;
+        messages = [];
+        canManageForum = await canCreateTopic(peerId);
+        await refreshTopics();
+      }
+    } catch (err: any) {
+      error = errorOf(err, 'Could not switch the forum view');
+    }
   }
 
   async function openTopic(topic: TopicItem) {
@@ -1521,10 +1663,100 @@
     // anything posted outside a topic unreachable.
     const threadId = topic.threadId || undefined;
     topicOpen = true;
+    topicMenuFor = null;
+    threadKind = threadId === undefined ? '' : 'topic';
     activeThreadId = threadId;
     activeTitle = threadId === undefined ? (dialogs.find((d) => d.peerId === activePeerId)?.title ?? 'All messages') : topic.title;
     replyTo = null;
     await openHistory(activePeerId!, threadId, topic.unread, 0);
+  }
+
+  /* ---------- Saved Messages sub-dialogs ---------- */
+
+  async function refreshSavedDialogs() {
+    const peerId = activePeerId;
+    try {
+      const loaded = await loadSavedDialogs();
+      if (activePeerId !== peerId) return;
+      savedDialogs = loaded.sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.date - a.date);
+    } catch (err: any) {
+      error = errorOf(err, 'Failed to load saved chats');
+    }
+  }
+
+  async function toggleSavedAsChats() {
+    const next = !savedAsChats;
+    savedAsChats = next;
+    setSavedViewedAsChats(next);
+    savedTag = '';
+    if (next) {
+      topicOpen = false;
+      threadKind = '';
+      activeThreadId = undefined;
+      messages = [];
+      await refreshSavedDialogs();
+    } else {
+      savedDialogs = [];
+      await openSavedTimeline();
+    }
+  }
+
+  /** All of Saved Messages as one timeline, the default view. */
+  async function openSavedTimeline() {
+    if (activePeerId === null) return;
+    topicOpen = true;
+    threadKind = '';
+    activeThreadId = undefined;
+    activeTitle = 'Saved Messages';
+    replyTo = null;
+    await openHistory(activePeerId, undefined, 0, 0);
+  }
+
+  /**
+   * One sender's saved messages. Their peer id doubles as the thread id the
+   * saved timeline is filtered by.
+   */
+  async function openSavedDialog(saved: SavedDialogItem) {
+    if (activePeerId === null) return;
+    showSidebarOnMobile = false;
+    topicOpen = true;
+    threadKind = 'saved';
+    savedTag = '';
+    activeThreadId = saved.savedPeerId;
+    activeTitle = saved.title;
+    replyTo = null;
+    await openHistory(activePeerId, saved.savedPeerId, 0, 0);
+  }
+
+  /** Reload the open Saved view with a tag filter applied (or cleared). */
+  async function applySavedTag(emoticon: string) {
+    savedTag = emoticon;
+    if (activePeerId === null) return;
+    loadingHistory = true;
+    try {
+      messages = await loadHistory(activePeerId, {
+        threadId: activeThreadId,
+        savedReaction: emoticon || undefined
+      });
+      await tick();
+      await scrollToBottom();
+    } catch (err: any) {
+      error = errorOf(err, 'Could not filter by tag');
+    } finally {
+      loadingHistory = false;
+    }
+  }
+
+  /** A saved tag is a reaction on your own message — same toggle semantics. */
+  async function tagMessage(message: MessageItem, emoticon: string) {
+    reactingTo = null;
+    try {
+      await toggleSavedTag(message.mid, emoticon);
+      const updated = await getMessage(activePeerId!, message.mid);
+      if (updated) messages = messages.map((m) => (m.mid === message.mid ? updated : m));
+    } catch (err: any) {
+      error = errorOf(err, 'Could not tag the message');
+    }
   }
 
   async function openHistory(peerId: number, threadId?: number, unread = 0, readMaxId = 0) {
@@ -1665,16 +1897,34 @@
 
   function backToChats() {
     showSidebarOnMobile = true;
-    if (topicOpen) {
+
+    // A comment thread lives in a different peer than the post it belongs to,
+    // so leaving it is a navigation, not just a thread reset.
+    if (threadKind === 'comments') {
+      leaveCommentThread();
+      return;
+    }
+
+    // "View as messages" has no list to fall back to: the forum's timeline is
+    // the whole view, so backing out leaves the chat entirely.
+    if (topicOpen && !(activeIsForum && forumAsMessages) && !(activeIsSelf && !savedAsChats)) {
       topicOpen = false;
+      threadKind = '';
+      threadCommentCount = 0;
+      savedTag = '';
       activeThreadId = undefined;
       messages = [];
       const dialog = dialogs.find((d) => d.peerId === activePeerId);
       activeTitle = dialog?.title ?? '';
       return;
     }
+
     activePeerId = null;
     topics = [];
+    savedDialogs = [];
+    topicOpen = false;
+    threadKind = '';
+    savedTag = '';
   }
 
   function isScrolledToBottom() {
@@ -1814,16 +2064,47 @@
   <aside>
     <header>
       <button class="icon-button settings-open" onclick={() => (showSettings = true)} aria-label="Settings"><Glyph name="settings" /></button>
-      {#if activeIsForum && activePeerId !== null}
-        <button class="back" onclick={backToChats} aria-label="Back">←</button>
+      {#if sublistOpen}
+        <button
+          class="back"
+          onclick={() => {
+            activePeerId = null;
+            topics = [];
+            savedDialogs = [];
+          }}
+          aria-label="Back">←</button
+        >
         <span>{dialogs.find((d) => d.peerId === activePeerId)?.title ?? 'Topics'}</span>
+        {#if topicListOpen}
+          {#if canManageForum}
+            <button
+              class="icon-button"
+              onclick={() => (topicEditor = {topic: null})}
+              aria-label="New topic"
+              title="New topic">＋</button
+            >
+          {/if}
+          <button
+            class="icon-button"
+            onclick={toggleForumAsMessages}
+            aria-label="View as messages"
+            title="View as messages">≡</button
+          >
+        {:else}
+          <button
+            class="icon-button"
+            onclick={toggleSavedAsChats}
+            aria-label="View as messages"
+            title="View as messages">≡</button
+          >
+        {/if}
       {:else}
         <span>Chats</span>
         <button class="icon-button new-chat" onclick={openNewChat} aria-label="New group or channel" title="New group or channel"><Glyph name="edit" /></button>
       {/if}
     </header>
 
-    {#if !(activeIsForum && activePeerId !== null)}
+    {#if !sublistOpen}
       <div class="search">
         <input
           bind:this={searchBox}
@@ -1833,7 +2114,7 @@
           onkeydown={onQueryKey}
         />
       </div>
-      <Stories {dialogs} />
+      <Stories />
       {#if folders.length > 1}
         <div class="folders">
           {#each folders as folder (folder.id)}
@@ -1856,26 +2137,102 @@
     <div class="list">
       {#if loadingChats || searching}
         <p class="muted">Loading chats…</p>
-      {:else if activeIsForum && activePeerId !== null}
-        {#each [{threadId: 0, title: 'All messages', preview: 'Everything in this chat', date: 0, unread: 0}, ...topics] as topic (topic.threadId)}
+      {:else if topicListOpen}
+        <button
+          class="row-button"
+          class:active={activeThreadId === undefined && topicOpen}
+          onclick={() => openTopic(allMessagesRow)}
+        >
+          <span class="topic-glyph">≡</span>
+          <span class="meta">
+            <span class="row"><span class="title">All messages</span></span>
+            <span class="row"><span class="preview">Everything in this chat</span></span>
+          </span>
+        </button>
+
+        {#each topics as topic (topic.threadId)}
+          <button
+            class="row-button"
+            class:active={topic.threadId === activeThreadId}
+            onclick={() => openTopic(topic)}
+            oncontextmenu={(e) => {
+              e.preventDefault();
+              topicMenuFor = topicMenuFor === topic.threadId ? null : topic.threadId;
+            }}
+          >
+            <TopicIcon
+              iconEmojiId={topic.iconEmojiId}
+              iconColor={topic.iconColor}
+              title={topic.title}
+              isGeneral={topic.isGeneral}
+            />
+            <span class="meta">
+              <span class="row">
+                <span class="title">
+                  {#if topic.pinned}
+                    <span class="flag" title="Pinned"><Glyph name="pin" size={13} /></span>
+                  {/if}
+                  {#if topic.closed}<span class="flag" title="Closed">🔒</span>{/if}
+                  {topic.title}
+                </span>
+                <span class="time">{timeOf(topic.date)}</span>
+              </span>
+              <span class="row">
+                <span class="preview">{topic.preview}</span>
+                {#if topic.unread}<span class="badge">{topic.unread}</span>{/if}
+              </span>
+            </span>
+          </button>
+
+          {#if topicMenuFor === topic.threadId && topic.canManage}
+            <div class="menu">
+              <button onclick={() => (topicEditor = {topic})}>Edit</button>
+              <button onclick={() => runTopicAction(() => toggleTopicPin(activePeerId!, topic.threadId))}>
+                {topic.pinned ? 'Unpin' : 'Pin'}
+              </button>
+              <button
+                onclick={() =>
+                  runTopicAction(() => setTopicClosed(activePeerId!, topic.threadId, !topic.closed))}
+              >
+                {topic.closed ? 'Reopen' : 'Close'}
+              </button>
+              {#if topic.isGeneral}
+                <!-- General cannot be deleted, only folded away. -->
+                <button onclick={() => runTopicAction(() => setTopicHidden(activePeerId!, topic.threadId, true))}>
+                  Hide
+                </button>
+              {:else}
+                <button class="danger" onclick={() => removeTopic(topic)}>Delete</button>
+              {/if}
+            </div>
+          {/if}
+        {/each}
+      {:else if savedListOpen}
+        {#if !savedDialogs.length}
+          <p class="muted">Nothing saved yet.</p>
+        {:else}
+          {#each savedDialogs as saved (saved.savedPeerId)}
             <button
               class="row-button"
-              class:active={(topic.threadId || undefined) === activeThreadId}
-              onclick={() => openTopic(topic)}
+              class:active={saved.savedPeerId === activeThreadId}
+              onclick={() => openSavedDialog(saved)}
             >
-              <span class="topic-glyph">{topic.threadId ? '#' : '≡'}</span>
+              <Avatar peerId={saved.savedPeerId} title={saved.title} />
               <span class="meta">
                 <span class="row">
-                  <span class="title">{topic.title}</span>
-                  <span class="time">{timeOf(topic.date)}</span>
+                  <span class="title">
+                    {#if saved.pinned}
+                      <span class="flag" title="Pinned"><Glyph name="pin" size={13} /></span>
+                    {/if}
+                    {saved.title}
+                  </span>
+                  <span class="time">{timeOf(saved.date)}</span>
                 </span>
-                <span class="row">
-                  <span class="preview">{topic.preview}</span>
-                  {#if topic.unread}<span class="badge">{topic.unread}</span>{/if}
-                </span>
+                <span class="row"><span class="preview">{saved.preview}</span></span>
               </span>
             </button>
-        {/each}
+          {/each}
+        {/if}
       {:else if !dialogs.length}
         <p class="muted">No chats yet.</p>
       {:else}
@@ -1926,6 +2283,34 @@
               >
                 {dialog.unread ? 'Mark as read' : 'Mark as unread'}
               </button>
+              {#if dialog.isSelf}
+                <button
+                  onclick={() => {
+                    menuFor = null;
+                    // Toggling the open chat has to redraw it; toggling a chat
+                    // that is not open only needs the stored preference.
+                    if (activePeerId === dialog.peerId) toggleSavedAsChats();
+                    else setSavedViewedAsChats(!isSavedViewedAsChats());
+                  }}
+                >
+                  {(activePeerId === dialog.peerId ? savedAsChats : isSavedViewedAsChats())
+                    ? 'View as messages'
+                    : 'View as chats'}
+                </button>
+              {/if}
+              {#if dialog.isForum}
+                <button
+                  onclick={() => {
+                    menuFor = null;
+                    if (activePeerId === dialog.peerId) toggleForumAsMessages();
+                    else openChat(dialog).then(toggleForumAsMessages);
+                  }}
+                >
+                  {forumAsMessages && activePeerId === dialog.peerId
+                    ? 'View as topics'
+                    : 'View as messages'}
+                </button>
+              {/if}
               <button class="danger" onclick={() => runDialogAction(() => leaveOrDelete(dialog.peerId))}>
                 Delete / Leave
               </button>
@@ -1946,9 +2331,11 @@
     ondrop={onDrop}
     aria-label="Conversation"
   >
-    {#if activePeerId === null || (activeIsForum && !topicOpen)}
+    {#if activePeerId === null || (sublistOpen && !topicOpen)}
       <div class="empty">
-        <p class="muted">{activeIsForum ? 'Select a topic' : 'Select a chat'}</p>
+        <p class="muted">
+          {topicListOpen ? 'Select a topic' : savedListOpen ? 'Select a saved chat' : 'Select a chat'}
+        </p>
         <!-- Same disclosure the sign-in card carries; required for a
              third-party client by https://core.telegram.org/api/terms. -->
         <p class="disclosure">
@@ -1968,9 +2355,19 @@
       </div>
     {:else}
       <header>
-        <button class="back-mobile" onclick={() => (showSidebarOnMobile = true)} aria-label="Back">←</button>
+        <button class="back-mobile" onclick={backToChats} aria-label="Back">←</button>
         <button class="title-button" onclick={() => (showInfo = !showInfo)}>{activeTitle}</button>
-        {#if activeThreadId !== undefined}<span class="thread-tag">topic</span>{/if}
+        {#if threadKind === 'comments'}
+          <button class="thread-tag thread-back" onclick={leaveCommentThread} title="Back to the post">
+            {threadCommentCount
+              ? `${threadCommentCount} ${threadCommentCount === 1 ? 'comment' : 'comments'}`
+              : 'comments'}
+          </button>
+        {:else if threadKind === 'topic'}
+          <span class="thread-tag">topic</span>
+        {:else if threadKind === 'saved'}
+          <span class="thread-tag">saved</span>
+        {/if}
         <span class="presence">
           {typingNames.length
             ? `${typingNames.join(', ')} ${typingNames.length > 1 ? 'are' : 'is'} typing…`
@@ -1981,6 +2378,14 @@
         {/if}
         <button class="icon-button" onclick={() => (chatSearchOpen = !chatSearchOpen)} aria-label="Search messages"><Glyph name="search" /></button>
       </header>
+
+      {#if activeIsSelf}
+        <SavedTags
+          savedPeerId={threadKind === 'saved' ? activeThreadId : undefined}
+          active={savedTag}
+          onselect={applySavedTag}
+        />
+      {/if}
 
       {#if chatSearchOpen}
         <div class="chat-search">
@@ -2075,13 +2480,7 @@
             {#if message.mid === firstUnreadMid}
               <p class="unread-divider" data-mid={message.mid}>Unread messages</p>
             {/if}
-            {#if message.service && message.extra?.kind === 'gift'}
-              <!-- A gift arrives as a service message, but it is a card: the
-                   sticker, who sent it and what it is worth. -->
-              <div class="service-card" data-mid={message.mid}>
-                <GiftBubble gift={message.extra} fromTitle={message.fromTitle} />
-              </div>
-            {:else if message.service}
+            {#if message.service}
               <p
                 class="service"
                 class:highlighted={highlightedMid === message.mid}
@@ -2217,52 +2616,6 @@
                   {/if}
                 {/if}
 
-                {#if message.extra && activePeerId !== null}
-                  {#if message.extra.kind === 'geo' || message.extra.kind === 'geoLive' || message.extra.kind === 'venue'}
-                    <LocationBubble
-                      peerId={activePeerId}
-                      mid={message.mid}
-                      location={message.extra}
-                      onerror={(text) => (error = text)}
-                    />
-                  {:else if message.extra.kind === 'contact'}
-                    <ContactBubble
-                      contact={message.extra}
-                      onmessage={openPeerChat}
-                      onerror={(text) => (error = text)}
-                    />
-                  {:else if message.extra.kind === 'game'}
-                    <GameBubble
-                      peerId={activePeerId}
-                      mid={message.mid}
-                      game={message.extra}
-                      onerror={(text) => (error = text)}
-                    />
-                  {:else if message.extra.kind === 'invoice'}
-                    <InvoiceBubble
-                      peerId={activePeerId}
-                      mid={message.mid}
-                      invoice={message.extra}
-                      onerror={(text) => (error = text)}
-                    />
-                  {:else if message.extra.kind === 'checklist'}
-                    <ChecklistBubble
-                      peerId={activePeerId}
-                      mid={message.mid}
-                      checklist={message.extra}
-                      onerror={(text) => (error = text)}
-                    />
-                  {:else if message.extra.kind === 'paidMedia'}
-                    <!-- Paid media stays locked here: unlocking it is a Stars
-                         purchase, and this client has no checkout. -->
-                    <span class="paid-media">
-                      🔒 {message.extra.count} paid item{message.extra.count === 1 ? '' : 's'} ·
-                      {message.extra.stars} ⭐
-                      {message.extra.unlocked ? '' : '— unlock in an official Telegram app'}
-                    </span>
-                  {/if}
-                {/if}
-
                 {#if message.rich}
                   <RichMessage blocks={message.rich} onmention={openMention} />
                 {:else if message.parts.length}
@@ -2309,12 +2662,6 @@
                     <span class="poll-total">
                       {message.poll.totalVoters} voters{message.poll.closed ? ' · closed' : ''}
                     </span>
-                    {#if message.poll.totalVoters}
-                      <button
-                        class="poll-results-btn"
-                        onclick={() => (pollResults = {mid: message.mid, poll: message.poll!})}
-                      >View results</button>
-                    {/if}
                   </div>
                 {/if}
 
@@ -2356,7 +2703,12 @@
                 {#if reactingTo === message.mid}
                   <span class="palette">
                     {#each reactionPalette as emoticon}
-                      <button onclick={() => react(message, emoticon)}>{emoticon}</button>
+                      <!-- In Saved Messages a reaction is a tag, not a reaction:
+                           same call, but it feeds the tag filter above. -->
+                      <button
+                        onclick={() =>
+                          activeIsSelf ? tagMessage(message, emoticon) : react(message, emoticon)}
+                      >{emoticon}</button>
                     {/each}
                   </span>
                 {/if}
@@ -2369,8 +2721,18 @@
                   </span>
                 {/if}
 
+                {#if activeIsChannel && threadKind !== 'comments'}
+                  <!-- Channel posts get the full comments bar with the newest
+                       commenters' faces, the way the official clients show it. -->
+                  <CommentsButton
+                    count={message.repliesCount}
+                    commenters={message.commenters}
+                    onopen={() => openComments(message)}
+                  />
+                {/if}
+
                 <span class="stamp">
-                  {#if message.repliesCount}
+                  {#if message.repliesCount && !activeIsChannel}
                     <button class="reply-btn" onclick={() => openComments(message)}>
                       {message.repliesCount} 💬
                     </button>
@@ -2467,16 +2829,6 @@
         </div>
       {/if}
 
-      {#if !editing}
-        <StickerSuggest
-          {draft}
-          onpick={(docId) => {
-            draft = '';
-            pickDocument(docId);
-          }}
-        />
-      {/if}
-
       {#if replyTo || editing}
         <div class="reply-bar">
           <span class="reply-quote">
@@ -2516,23 +2868,13 @@
           aria-label="Emoji, stickers and GIFs"
           disabled={!!editing}
         ><Glyph name="emoji" size={20} /></button>
-        <div class="attach-wrap">
-          <button
-            type="button"
-            class="attach"
-            onclick={() => (attachMenu = !attachMenu)}
-            aria-label="Attach"
-            disabled={!!editing}
-          ><Glyph name="attach" size={20} /></button>
-          {#if attachMenu}
-            <div class="attach-menu">
-              <button type="button" onclick={() => { attachMenu = false; fileInput?.click(); }}>File</button>
-              <button type="button" onclick={() => { attachMenu = false; locationSender = true; }}>Location</button>
-              <button type="button" onclick={openContactPicker}>Contact</button>
-              <button type="button" onclick={() => { attachMenu = false; pollComposer = true; }}>Poll</button>
-            </div>
-          {/if}
-        </div>
+        <button
+          type="button"
+          class="attach"
+          onclick={() => fileInput?.click()}
+          aria-label="Attach file"
+          disabled={!!editing}
+        ><Glyph name="attach" size={20} /></button>
         <input
           class="file"
           type="file"
@@ -2651,14 +2993,6 @@
         <button onclick={() => { copyText(menuMessage); messageMenu = null; }}>Copy text</button>
       {/if}
       <button onclick={() => { openForward(menuMessage); messageMenu = null; }}>Forward</button>
-      {#if menuMessage.stickerDocId}
-        <button
-          onclick={() => { packSheet = {setKey: '', docId: menuMessage.stickerDocId}; messageMenu = null; }}
-        >View pack</button>
-      {/if}
-      {#if menuMessage.media?.kind === 'gif' && menuMessage.media.docId}
-        <GifSaveAction docId={menuMessage.media.docId} ondone={() => (messageMenu = null)} />
-      {/if}
       <button onclick={() => startSelecting(menuMessage.mid)}>Select</button>
       <!-- A sticker or a bare media message is editable in the API sense but
            has no text to edit; deleting it is still fair game. -->
@@ -2672,60 +3006,12 @@
   </div>
 {/if}
 
-{#if packSheet}
-  <StickerSetSheet
-    setKey={packSheet.setKey}
-    docId={packSheet.docId}
-    onsend={pickDocument}
-    onclose={() => (packSheet = null)}
-  />
-{/if}
-
 {#if forwarding}
   <PeerPicker
     title="Forward to"
     dialogs={allDialogs}
     onpick={doForward}
     onclose={() => (forwarding = null)}
-  />
-{/if}
-
-{#if contactPicking}
-  <PeerPicker
-    title="Share a contact"
-    dialogs={allDialogs.filter((dialog) => dialog.isUser)}
-    onpick={shareContact}
-    onclose={() => (contactPicking = false)}
-  />
-{/if}
-
-{#if locationSender && activePeerId !== null}
-  <LocationSender
-    peerId={activePeerId}
-    threadId={activeThreadId}
-    replyToMsgId={replyTo?.mid}
-    onclose={() => { locationSender = false; replyTo = null; }}
-    onerror={(text) => (error = text)}
-  />
-{/if}
-
-{#if pollComposer && activePeerId !== null}
-  <PollComposer
-    peerId={activePeerId}
-    threadId={activeThreadId}
-    replyToMsgId={replyTo?.mid}
-    onclose={() => { pollComposer = false; replyTo = null; }}
-    onerror={(text) => (error = text)}
-  />
-{/if}
-
-{#if pollResults && activePeerId !== null}
-  <PollResults
-    peerId={activePeerId}
-    mid={pollResults.mid}
-    poll={pollResults.poll}
-    onclose={() => (pollResults = null)}
-    onpeer={(id) => { pollResults = null; profilePeerId = id; }}
   />
 {/if}
 
@@ -2743,6 +3029,15 @@
     dialogs={allDialogs}
     onclose={() => (folderEditorOpen = false)}
     onsaved={onFolderSaved}
+  />
+{/if}
+
+{#if topicEditor && activePeerId !== null}
+  <TopicEditor
+    peerId={activePeerId}
+    topic={topicEditor.topic}
+    onclose={() => (topicEditor = null)}
+    onsaved={onTopicSaved}
   />
 {/if}
 
@@ -2825,6 +3120,17 @@
     border: 1px solid var(--border);
     border-radius: 999px;
     padding: 1px 8px;
+  }
+
+  .thread-back {
+    background: none;
+    cursor: pointer;
+    font-family: inherit;
+  }
+
+  .thread-back:hover {
+    color: var(--accent);
+    border-color: var(--accent);
   }
 
   .list {
@@ -3789,63 +4095,6 @@
   .poll-total {
     font-size: 11px;
     opacity: 0.7;
-  }
-
-  .poll-results-btn {
-    align-self: flex-start;
-    padding: 0;
-    border: none;
-    background: transparent;
-    color: var(--accent);
-    font-size: 12px;
-    cursor: pointer;
-  }
-
-  .paid-media {
-    display: block;
-    font-size: 13px;
-    color: var(--text-dim);
-  }
-
-  .service-card {
-    align-self: center;
-    display: flex;
-    justify-content: center;
-    margin: 4px 0;
-  }
-
-  .attach-wrap {
-    position: relative;
-    display: flex;
-  }
-
-  .attach-menu {
-    position: absolute;
-    bottom: calc(100% + 6px);
-    left: 0;
-    z-index: 20;
-    display: flex;
-    flex-direction: column;
-    min-width: 140px;
-    padding: 6px;
-    border-radius: var(--pane-radius);
-    border: 1px solid var(--border);
-    background: var(--bg-solid);
-  }
-
-  .attach-menu button {
-    padding: 8px 10px;
-    border: none;
-    border-radius: 8px;
-    background: transparent;
-    color: var(--text);
-    font-size: 13px;
-    text-align: left;
-    cursor: pointer;
-  }
-
-  .attach-menu button:hover {
-    background: var(--bubble-in);
   }
 
   .pinned-bar {
