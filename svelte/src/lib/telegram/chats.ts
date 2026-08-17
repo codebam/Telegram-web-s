@@ -1,6 +1,6 @@
 import {bootTelegram} from './client';
+import {buildForwardInfo, buildReplyInfo, type ForwardInfo, type ReplyInfo} from './reply';
 import {peerRestrictionText, restrictionTextOf} from './restrictions';
-import type {MessageEntity} from '@layer';
 
 /**
  * Data layer between tweb's worker-side managers and the Svelte UI.
@@ -45,18 +45,13 @@ export type TopicItem = {
 };
 
 export type MediaItem = {
-  kind: 'photo' | 'video' | 'gif' | 'sticker' | 'voice' | 'audio' | 'round' | 'file';
+  kind: 'photo' | 'video' | 'gif' | 'sticker' | 'voice' | 'audio' | 'file';
   /** Renderable thumbnail/full URL, resolved lazily via `loadMediaUrl`. */
   width: number;
   height: number;
   name: string;
   size: number;
   duration: number;
-  /**
-   * Packed waveform bytes of a voice note (100 five-bit samples). Decoded for
-   * drawing by `decodeWaveform` in `$lib/telegram/voice`.
-   */
-  waveform?: Uint8Array;
   /**
    * Self-destructing media (`ttl_seconds`) or a one-time voice/video note. The
    * UI must never render it as ordinary media: keeping a copy on screen after
@@ -70,18 +65,13 @@ export type MediaItem = {
    * sender is entitled to that receipt.
    */
   unread: boolean;
-  /**
-   * The sender hid this media behind a spoiler. It has to render covered until
-   * the viewer asks to see it — that is the whole point of the flag.
-   */
-  spoiler: boolean;
 };
 
-export type ReplyPreview = {
-  mid: number;
-  title: string;
-  text: string;
-};
+/**
+ * Reply headers carry more than an id — a quote, a cross-chat target, a media
+ * thumbnail — so their shape lives with the rest of the reply logic.
+ */
+export type ReplyPreview = ReplyInfo;
 
 export type TextPart = {
   text: string;
@@ -101,8 +91,6 @@ export type TextPart = {
    * which are searchable rather than clickable to a profile.
    */
   mentionKind?: 'username' | 'userId' | 'tag';
-  /** Document id of the custom emoji this run renders as, when it is one. */
-  customEmojiDocId?: string;
 };
 
 export type RichBlock =
@@ -143,6 +131,8 @@ export type MessageItem = {
   views: number;
   /** Original author when the message was forwarded, '' otherwise. */
   forwardedFrom: string;
+  /** Full forward header — source peer, post link, hidden-sender handling. */
+  forward: ForwardInfo | null;
   webpage: WebPagePreview | null;
   poll: PollPreview | null;
   /**
@@ -256,8 +246,7 @@ function mediaOf(message: any): MediaItem | null {
       size: media.photo.size ?? 0,
       duration: 0,
       selfDestruct: !!media.ttl_seconds,
-      unread: !!message.pFlags?.media_unread,
-      spoiler: !!media.pFlags?.spoiler
+      unread: !!message.pFlags?.media_unread
     };
   }
 
@@ -276,7 +265,6 @@ function mediaOf(message: any): MediaItem | null {
 
     const kind: MediaItem['kind'] = sticker ? 'sticker' :
       animated || document.type === 'gif' ? 'gif' :
-      video?.pFlags?.round_message ? 'round' :
       video ? 'video' :
       audio ? (audio.pFlags?.voice ? 'voice' : 'audio') :
       document.mime_type?.startsWith('image/') ? 'photo' :
@@ -289,12 +277,10 @@ function mediaOf(message: any): MediaItem | null {
       name: filename?.file_name ?? '',
       size: document.size ?? 0,
       duration: video?.duration ?? audio?.duration ?? 0,
-      waveform: audio?.waveform,
       // A one-time voice message or video note carries the same flag as a
       // self-destructing photo, plus `round_message` / `voice` once-flags.
       selfDestruct: !!media.ttl_seconds,
-      unread: !!message.pFlags?.media_unread,
-      spoiler: !!media.pFlags?.spoiler
+      unread: !!message.pFlags?.media_unread
     };
   }
 
@@ -340,7 +326,6 @@ function textParts(text: string, entities: any[] = []): TextPart[] {
         case 'messageEntityPre': part.pre = true; break;
         case 'messageEntitySpoiler': part.spoiler = true; break;
         case 'messageEntityBlockquote': part.blockquote = true; break;
-        case 'messageEntityCustomEmoji': part.customEmojiDocId = '' + entity.document_id; break;
         case 'messageEntityTextUrl': part.url = entity.url; break;
         case 'messageEntityUrl': part.url = part.text; break;
         case 'messageEntityEmail': part.url = `mailto:${part.text}`; break;
@@ -526,7 +511,6 @@ async function messagePreview(message: any): Promise<string> {
     case 'gif': return '🎞 GIF';
     case 'sticker': return '🖼 Sticker';
     case 'voice': return '🎤 Voice message';
-    case 'round': return '📹 Video message';
     case 'audio': return '🎵 Audio';
     default: return `📎 ${media.name || 'File'}`;
   }
@@ -686,6 +670,8 @@ async function toItem(message: any, peerId: number, selfId: number): Promise<Mes
   // channel posts), so fall back to comparing the sender with ourselves.
   const out = !!message.pFlags?.out || fromId === selfId;
 
+  const forward = await buildForwardInfo(message, selfId);
+
   return {
     mid: message.mid,
     text,
@@ -698,7 +684,7 @@ async function toItem(message: any, peerId: number, selfId: number): Promise<Mes
     fromId,
     service: message._ === 'messageService',
     media: mediaOf(message),
-    reply: await replyOf(message, peerId, selfId),
+    reply: await buildReplyInfo(message, peerId, selfId),
     repliesCount: message.replies?.replies ?? 0,
     reactions: reactionsOf(message),
     groupedId: message.grouped_id ? '' + message.grouped_id : '',
@@ -706,7 +692,8 @@ async function toItem(message: any, peerId: number, selfId: number): Promise<Mes
     stickerKind: isStickerMessage(message) ? stickerKind(message.media.document) : '',
     pending: !!message.pFlags?.is_outgoing,
     views: message.views ?? 0,
-    forwardedFrom: await forwardedTitle(message, selfId),
+    forwardedFrom: forward?.title ?? '',
+    forward,
     webpage: webpageOf(message),
     poll: pollOf(message),
     rich: richBlocksOf(message),
@@ -779,16 +766,6 @@ export async function pressCallbackButton(
   };
 }
 
-async function forwardedTitle(message: any, selfId: number): Promise<string> {
-  const header = message?.fwd_from;
-  if(!header) return '';
-
-  if(header.from_name) return header.from_name;
-  const fromId = Number(message.fwdFromId ?? header.from_id?.user_id ?? header.from_id?.channel_id ?? 0);
-  if(!fromId) return 'Unknown';
-  return peerTitle(await getPeer(fromId), selfId);
-}
-
 function webpageOf(message: any): WebPagePreview | null {
   const webpage = message?.media?.webpage;
   if(!webpage || webpage._ !== 'webPage') return null;
@@ -823,25 +800,6 @@ function pollOf(message: any): PollPreview | null {
         percent: totalVoters ? Math.round((voters / totalVoters) * 100) : 0
       };
     })
-  };
-}
-
-async function replyOf(message: any, peerId: number, selfId: number): Promise<ReplyPreview | null> {
-  const replyToMid = message.reply_to_mid;
-  if(!replyToMid) return null;
-
-  const {managers} = await bootTelegram();
-  const replyPeerId = Number(message.reply_to?.reply_to_peer_id?.user_id ?? peerId) || peerId;
-  const replied = await managers.appMessagesManager.getMessageByPeer(replyPeerId, replyToMid);
-  if(!replied) return {mid: replyToMid, title: '', text: 'Message'};
-
-  const fromId = Number(replied.fromId ?? replyPeerId);
-  const fromPeer = fromId === selfId ? null : await getPeer(fromId);
-
-  return {
-    mid: replyToMid,
-    title: fromId === selfId ? 'You' : peerTitle(fromPeer, selfId),
-    text: await messagePreview(replied)
   };
 }
 
@@ -909,17 +867,25 @@ export async function getMessage(peerId: number, mid: number): Promise<MessageIt
 export async function sendMessage(
   peerId: number,
   text: string,
-  options: {replyToMsgId?: number; threadId?: number; entities?: MessageEntity[]} = {}
+  options: {
+    replyToMsgId?: number;
+    threadId?: number;
+    /** Set only when replying to a message in a different chat. */
+    replyToPeerId?: number;
+    /** Excerpt of the original the reply quotes, with its offset into it. */
+    replyToQuote?: {text: string; offset: number};
+  } = {}
 ): Promise<void> {
   const {managers} = await bootTelegram();
   await managers.appMessagesManager.sendText({
     peerId,
     text,
-    entities: options.entities,
     clearDraft: true,
     replyToMsgId: options.replyToMsgId ?? options.threadId,
-    threadId: options.threadId
-  });
+    threadId: options.threadId,
+    replyToPeerId: options.replyToPeerId,
+    replyToQuote: options.replyToQuote
+  } as any);
 }
 
 /** Older page of history, for scrollback. `offsetId` is the oldest loaded mid. */
@@ -1086,17 +1052,12 @@ export async function hidePinnedMessage(peerId: number): Promise<void> {
   await managers.appMessagesManager.hidePinnedMessages(peerId);
 }
 
-export async function editMessage(
-  peerId: number,
-  mid: number,
-  text: string,
-  entities?: MessageEntity[]
-): Promise<void> {
+export async function editMessage(peerId: number, mid: number, text: string): Promise<void> {
   const {managers} = await bootTelegram();
   const message = rawMessages.get(messageKey(peerId, mid)) ??
     await managers.appMessagesManager.getMessageByPeer(peerId, mid);
   if(!message) throw new Error('Message not found');
-  await managers.appMessagesManager.editMessage(message, text, {entities});
+  await managers.appMessagesManager.editMessage(message, text);
 }
 
 export async function deleteMessage(peerId: number, mid: number, revoke = true): Promise<void> {
@@ -2281,14 +2242,3 @@ export async function clickSponsored(key: string): Promise<void> {
   const {managers} = await bootTelegram();
   await managers.appMessagesManager.clickSponsoredMessage(randomId);
 }
-
-/* ------------------------------------------------------------------ */
-/* Shared internals                                                    */
-/* ------------------------------------------------------------------ */
-
-/**
- * Re-exported for `./search.ts`, which builds the same plain items out of
- * search results and must format peers and messages identically. Not part of
- * the surface the components use.
- */
-export {getSelfId, getPeer, peerTitle, toItem};

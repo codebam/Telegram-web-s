@@ -13,27 +13,21 @@
   import MiniApp from './MiniApp.svelte';
   import NewChat from './NewChat.svelte';
   import PeerPicker from './PeerPicker.svelte';
+  import ForwardSheet from './ForwardSheet.svelte';
+  import ForwardHeader from './ForwardHeader.svelte';
+  import ReplyHeader from './ReplyHeader.svelte';
   import SendFiles from './SendFiles.svelte';
-  import {sendFilesGrouped, type SendFileItem, type UploadHandle, type UploadProgress} from '$lib/telegram/upload';
   import Settings from './Settings.svelte';
   import Stories from './Stories.svelte';
   import Picker from './Picker.svelte';
-  import EmojiStatus from './EmojiStatus.svelte';
-  import {
-    customEmojiEntities,
-    sendMessageWithEntities,
-    type PendingCustomEmoji
-  } from '$lib/telegram/emoji';
   import RichMessage from './RichMessage.svelte';
   import Sticker from './Sticker.svelte';
-  import VoiceRecorder from './VoiceRecorder.svelte';
   import {GIT_COMMIT, GIT_COMMIT_SHORT, GIT_COMMIT_URL} from '$lib/buildInfo';
   import {
     availableReactions,
     clickSponsored,
     deleteMessage,
     deleteMessages,
-    forwardMessage,
     getDraftText,
     editMessage,
     getMessage,
@@ -73,6 +67,7 @@
     setOwnOnline,
     searchDialogs,
     sendDocument,
+    sendFiles,
     sendMessage,
     sendTyping,
     toggleMute,
@@ -87,6 +82,16 @@
     type SponsoredItem,
     type TopicItem
   } from '$lib/telegram/chats';
+  import {
+    clearTrackedQuote,
+    forwardTo,
+    quoteFromSelection,
+    replySendOptions,
+    trackQuoteSelection,
+    trackedQuote,
+    type ForwardOptions,
+    type ReplyQuote
+  } from '$lib/telegram/reply';
   import {
     getBotMenuButton,
     openBotAppLink,
@@ -149,6 +154,23 @@
   let loadingHistory = $state(false);
   let draft = $state('');
   let replyTo = $state<MessageItem | null>(null);
+  /**
+   * Everything about the pending reply that a `MessageItem` cannot carry: the
+   * quoted excerpt and, for a reply into another chat, where the original
+   * lives. Kept beside `replyTo` rather than inside it because the reply target
+   * is cleared from a dozen places; `mid` is what ties the two together, so a
+   * stale context is simply ignored instead of attaching to the wrong message.
+   */
+  let replyContext = $state<{
+    mid: number;
+    peerId: number;
+    chatTitle: string;
+    quote: ReplyQuote | null;
+  } | null>(null);
+  /** The message a "Reply in…" pick is about to carry into another chat. */
+  let replyingElsewhere = $state<MessageItem | null>(null);
+  /** Its quote, captured before the picker took the selection away. */
+  let replyElsewhereQuote: ReplyQuote | null = null;
   let error = $state('');
   let scroller: HTMLDivElement | undefined = $state();
   /** First unread message id, used for the divider and the open position. */
@@ -185,11 +207,6 @@
   /** Profile being viewed from a message sender or member list, if any. */
   let profilePeerId = $state<number | null>(null);
   let showPicker = $state(false);
-  /**
-   * Custom emoji sitting in the draft as their plain alt text; on send they
-   * become messageEntityCustomEmoji entities over those characters.
-   */
-  let pendingCustomEmoji = $state<PendingCustomEmoji[]>([]);
   let reactionPalette = $state<string[]>([]);
   let reactingTo = $state<number | null>(null);
   let lightboxIndex = $state<number | null>(null);
@@ -209,7 +226,8 @@
   let activeRestriction = $state('');
   let businessBot = $state<BusinessBot | null>(null);
   let businessBotBusy = $state(false);
-  let forwarding = $state<MessageItem | null>(null);
+  /** Messages queued for the forward sheet, empty when it is closed. */
+  let forwarding = $state<MessageItem[]>([]);
   let atBottom = $state(true);
   let chatQuery = $state('');
   let chatResults = $state<MessageItem[] | null>(null);
@@ -231,18 +249,6 @@
   let botMenuButton = $state<{text: string; url: string} | null>(null);
   /** Files queued by paste, drop or the attach button, pending confirmation. */
   let pendingFiles = $state<File[]>([]);
-  /** The batch currently uploading, null when nothing is in flight. */
-  let upload = $state<UploadHandle | null>(null);
-  let uploadProgress = $state<UploadProgress[] | null>(null);
-  /** Nesting depth of the drag currently over the pane — see onDragEnter. */
-  let dragDepth = 0;
-
-  /** Batch progress as one number, for the bar on the pending bubble. */
-  const uploadOverall = $derived(
-    uploadProgress?.length ?
-      uploadProgress.reduce((sum, item) => sum + item.progress, 0) / uploadProgress.length :
-      null
-  );
 
   /** Media messages in order — the lightbox pages through these. */
   const mediaMessages = $derived(
@@ -708,7 +714,9 @@
 
   async function forwardSelected() {
     if (!selected.size) return;
-    forwarding = messages.find((m) => selected.has(m.mid)) ?? null;
+    // Oldest first, so the batch lands in the target chat in the order it was
+    // written rather than the order it happened to be clicked in.
+    forwarding = messages.filter((m) => selected.has(m.mid)).sort((a, b) => a.mid - b.mid);
     allDialogs = await loadDialogs(100, 0);
   }
 
@@ -778,23 +786,37 @@
     }, 1600);
   }
 
+  /**
+   * Jump from a reply header to the message it answers. A cross-chat reply
+   * points into another conversation, so that one is opened first.
+   */
+  async function jumpToReply(reply: NonNullable<MessageItem['reply']>) {
+    if (reply.deleted) return;
+
+    if (reply.peerId !== activePeerId) {
+      await openPeerChat(reply.peerId);
+    }
+
+    await jumpTo(reply.mid);
+  }
+
   /* ---------- forward and copy ---------- */
 
   async function openForward(message: MessageItem) {
-    forwarding = message;
+    forwarding = [message];
     allDialogs = await loadDialogs(100, 0);
   }
 
-  async function doForward(toPeerId: number) {
-    const message = forwarding;
-    const mids = selecting && selected.size ? [...selected] : message ? [message.mid] : [];
-    forwarding = null;
+  async function doForward(targets: number[], options: ForwardOptions) {
+    const mids = forwarding.map((m) => m.mid);
+    const fromPeerId = activePeerId;
+    forwarding = [];
     selecting = false;
     selected = new Set();
-    if (!mids.length || activePeerId === null) return;
+    if (!mids.length || !targets.length || fromPeerId === null) return;
 
     try {
-      await forwardMessage(activePeerId, mids, toPeerId);
+      await forwardTo(fromPeerId, mids, targets, options);
     } catch (err: any) {
       error = errorOf(err, 'Forward failed');
     }
@@ -988,83 +1010,35 @@
 
   /** Queue files for confirmation rather than sending them blind. */
   function attach(files: FileList | File[] | null) {
-    // Queuing a second batch over one that is mid-upload would strand the
-    // progress the dialog is showing; make the user finish or cancel first.
-    if (!files || activePeerId === null || upload) return;
+    if (!files || activePeerId === null) return;
     const list = Array.from(files);
     if (list.length) pendingFiles = list;
   }
 
-  /**
-   * Upload the confirmed batch, keeping the dialog up while it runs so the
-   * progress bars and the cancel button have somewhere to live.
-   */
-  async function confirmSend(items: SendFileItem[], caption: string) {
-    if (activePeerId === null || upload) return;
+  async function confirmSend(files: File[], asPhoto: boolean, caption: string) {
+    pendingFiles = [];
+    if (activePeerId === null) return;
 
     const replyToMsgId = replyTo?.mid;
     replyTo = null;
     draft = '';
 
-    uploadProgress = items.map(() => ({progress: 0, error: ''}));
-
-    const handle = sendFilesGrouped(activePeerId, items, {
-      caption,
-      threadId: activeThreadId,
-      replyToMsgId,
-      onprogress: (state) => (uploadProgress = state)
-    });
-    upload = handle;
-
     try {
-      await handle.promise;
+      await sendFiles(activePeerId, files, {
+        caption,
+        asPhoto,
+        threadId: activeThreadId,
+        replyToMsgId
+      });
     } catch (err: any) {
-      // A cancel rejects the same way a failure does; only a real failure is
-      // worth putting in front of the user.
-      if (upload === handle) error = errorOf(err, 'Upload failed');
-    } finally {
-      if (upload === handle) {
-        upload = null;
-        uploadProgress = null;
-        pendingFiles = [];
-      }
+      error = errorOf(err, 'Upload failed');
     }
-  }
-
-  /** Abort the batch in flight and put the dialog back to its editable state. */
-  function cancelUpload() {
-    upload?.cancel();
-    upload = null;
-    uploadProgress = null;
-    pendingFiles = [];
   }
 
   function onDrop(e: DragEvent) {
     e.preventDefault();
-    dragDepth = 0;
     dragging = false;
     attach(e.dataTransfer?.files ?? null);
-  }
-
-  /**
-   * `dragenter`/`dragleave` fire for every element the pointer crosses, so a
-   * bare `dragleave` handler flickers the overlay off over each child. Counting
-   * enters against leaves is what keeps it steady.
-   */
-  function onDragEnter(e: DragEvent) {
-    if (activePeerId === null || !hasFiles(e)) return;
-    dragDepth++;
-    dragging = true;
-  }
-
-  function onDragLeave() {
-    if (dragDepth > 0) dragDepth--;
-    if (!dragDepth) dragging = false;
-  }
-
-  /** Ignore drags of selected text or a link — only files open the dialog. */
-  function hasFiles(e: DragEvent) {
-    return Array.from(e.dataTransfer?.types ?? []).includes('Files');
   }
 
   /**
@@ -1107,10 +1081,81 @@
     composer?.focus();
   }
 
+  /**
+   * The text currently selected inside a message's bubble, as a quote. Telegram
+   * attaches the excerpt the user highlighted, so replying while text is
+   * selected quotes exactly that fragment instead of the whole message.
+   */
+  function quoteOf(message: MessageItem): ReplyQuote | null {
+    if (!message.text) return null;
+
+    // Clicking the button collapses the live selection, so the tracked one is
+    // what survives that far; the live read is the fallback for a keyboard path.
+    const remembered = trackedQuote(message.mid);
+    if (remembered) return remembered;
+
+    const bubble = scroller?.querySelector<HTMLElement>(`[data-mid="${message.mid}"]`);
+    return bubble ? quoteFromSelection(bubble, message.text) : null;
+  }
+
+  // Quoting needs the selection as it was made, not as it survives the click
+  // that acts on it, so it is captured while it happens.
+  $effect(() => trackQuoteSelection((mid) => messages.find((m) => m.mid === mid)?.text ?? ''));
+
   function replyToMessage(message: MessageItem) {
+    const quote = quoteOf(message);
+    clearTrackedQuote();
     replyTo = message;
+    replyContext = activePeerId === null ?
+      null :
+      {mid: message.mid, peerId: activePeerId, chatTitle: '', quote};
     focusComposer();
   }
+
+  /**
+   * "Reply in…" — keep this message as the reply target but write the answer in
+   * a different chat. The reply then carries `replyToPeerId`, and the bubble it
+   * produces renders as a cross-chat reply on both sides.
+   */
+  async function openReplyElsewhere(message: MessageItem) {
+    // The selection is read now: picking a chat takes several clicks, and none
+    // of them leaves it intact.
+    replyElsewhereQuote = quoteOf(message);
+    clearTrackedQuote();
+    replyingElsewhere = message;
+    allDialogs = await loadDialogs(100, 0);
+  }
+
+  async function doReplyElsewhere(toPeerId: number) {
+    const message = replyingElsewhere;
+    const sourcePeerId = activePeerId;
+    const sourceTitle = activeTitle;
+    const quote = replyElsewhereQuote;
+    replyElsewhereQuote = null;
+    replyingElsewhere = null;
+    if (!message || sourcePeerId === null) return;
+
+    // Opening the chat clears the pending reply, so the target is set after.
+    await openPeerChat(toPeerId);
+    replyTo = message;
+    replyContext = {mid: message.mid, peerId: sourcePeerId, chatTitle: sourceTitle, quote};
+    focusComposer();
+  }
+
+  function cancelReply() {
+    replyTo = null;
+    replyContext = null;
+  }
+
+  /** Drops the quote but keeps replying, like Telegram's "remove quote". */
+  function dropQuote() {
+    if (replyContext) replyContext = {...replyContext, quote: null};
+  }
+
+  /** The reply context, but only while it still describes the reply target. */
+  const activeReplyContext = $derived(
+    replyTo && replyContext?.mid === replyTo.mid ? replyContext : null
+  );
 
   function startEdit(message: MessageItem) {
     editing = message;
@@ -1419,7 +1464,8 @@
       folderEditorOpen ||
       newChatOpen ||
       editingFolder ||
-      forwarding ||
+      forwarding.length ||
+      replyingElsewhere ||
       profilePeerId !== null ||
       showInfo ||
       document.querySelector('.viewer')
@@ -1800,17 +1846,25 @@
       return;
     }
 
-    const replyToMsgId = replyTo?.mid;
-    // Custom emoji only exist as entities over the alt text already in `text`.
-    const entities = customEmojiEntities(text, pendingCustomEmoji);
-    pendingCustomEmoji = [];
+    const context = activeReplyContext;
+    const reply = replyTo ?
+      replySendOptions(
+        {
+          mid: replyTo.mid,
+          peerId: context?.peerId ?? activePeerId,
+          title: replyTo.fromTitle,
+          text: replyTo.text,
+          chatTitle: context?.chatTitle ?? '',
+          quote: context?.quote ?? null
+        },
+        activePeerId
+      ) :
+      {};
     draft = '';
-    replyTo = null;
+    cancelReply();
 
     try {
-      await (entities.length
-        ? sendMessageWithEntities(activePeerId, text, entities, {replyToMsgId, threadId: activeThreadId})
-        : sendMessage(activePeerId, text, {replyToMsgId, threadId: activeThreadId}));
+      await sendMessage(activePeerId, text, {...reply, threadId: activeThreadId});
       lastTypingSent = 0;
       sendTyping(activePeerId, activeThreadId, 'cancel').catch(() => {});
       // The outgoing message arrives back through history_multiappend.
@@ -1958,25 +2012,14 @@
 
   <section
     class:dragging
-    ondragenter={onDragEnter}
     ondragover={(e) => {
-      // Without preventDefault the browser refuses the drop and navigates to
-      // the file instead.
-      if (activePeerId !== null && hasFiles(e)) e.preventDefault();
+      e.preventDefault();
+      dragging = activePeerId !== null;
     }}
-    ondragleave={onDragLeave}
+    ondragleave={() => (dragging = false)}
     ondrop={onDrop}
     aria-label="Conversation"
   >
-    {#if dragging}
-      <div class="drop-overlay">
-        <div class="drop-card">
-          <Glyph name="attach" size={28} />
-          <strong>Drop to send</strong>
-          <span class="muted">Photos and videos go as an album, anything else as a file</span>
-        </div>
-      </div>
-    {/if}
     {#if activePeerId === null || (activeIsForum && !topicOpen)}
       <div class="empty">
         <p class="muted">{activeIsForum ? 'Select a topic' : 'Select a chat'}</p>
@@ -2000,8 +2043,7 @@
     {:else}
       <header>
         <button class="back-mobile" onclick={() => (showSidebarOnMobile = true)} aria-label="Back">←</button>
-        <button class="title-button" onclick={() => (showInfo = !showInfo)}
-        >{activeTitle}{#if activePeerId !== null}<EmojiStatus peerId={activePeerId} size={16} />{/if}</button>
+        <button class="title-button" onclick={() => (showInfo = !showInfo)}>{activeTitle}</button>
         {#if activeThreadId !== undefined}<span class="thread-tag">topic</span>{/if}
         <span class="presence">
           {typingNames.length
@@ -2101,10 +2143,6 @@
           {/if}
           {#each rendered as group, groupIndex (group.key)}
             {@const message = group.items[0]}
-            <!-- An album carries one caption for the whole group, and the server
-                 is free to hang it off any item — so the bubble shows whichever
-                 item actually has the text. -->
-            {@const captioned = group.items.find((item) => item.rich || item.parts.length) ?? message}
             {#if startsNewDay(groupIndex)}
               <p class="day-divider">{dayLabel(message.date)}</p>
             {/if}
@@ -2207,29 +2245,23 @@
               >
                 {#if !message.out && message.fromTitle}
                   <button class="author" onclick={() => (profilePeerId = message.fromId)}>
-                    {message.fromTitle}<EmojiStatus peerId={message.fromId} size={14} />
+                    {message.fromTitle}
                   </button>
                 {/if}
 
-                {#if message.forwardedFrom}
-                  <span class="forwarded">Forwarded from {message.forwardedFrom}</span>
+                {#if message.forward}
+                  <ForwardHeader forward={message.forward} onopenpeer={openPeerChat} />
                 {/if}
 
                 {#if message.reply}
-                  <button class="reply-quote jump" onclick={() => jumpTo(message.reply!.mid)}>
-                    <span class="reply-title">{message.reply.title}</span>
-                    <span class="reply-text">{message.reply.text}</span>
-                  </button>
+                  <ReplyHeader reply={message.reply} onjump={() => jumpToReply(message.reply!)} />
                 {/if}
 
                 {#if group.items.length > 1}
-                  <!-- Album tiling, the way the official clients lay it out: a
-                       pair side by side, a hero plus a stack at three, a hero
-                       over a strip at four, an even grid beyond that. -->
-                  <div class="album" class:n2={group.items.length === 2} class:n3={group.items.length === 3} class:n4={group.items.length === 4} class:many={group.items.length > 4}>
-                    {#each group.items as item, tileIndex (item.mid)}
-                      <button class="album-item" class:first={tileIndex === 0} onclick={() => openLightbox(item)}>
-                        <Media peerId={activePeerId} mid={item.mid} media={item.media!} fill />
+                  <div class="album" style="--cols: {group.items.length > 2 ? 2 : group.items.length}">
+                    {#each group.items as item (item.mid)}
+                      <button class="album-item" onclick={() => openLightbox(item)}>
+                        <Media peerId={activePeerId} mid={item.mid} media={item.media!} />
                       </button>
                     {/each}
                   </div>
@@ -2250,27 +2282,10 @@
                   {/if}
                 {/if}
 
-                {#if message.pending && message.media && uploadOverall !== null}
-                  <!-- The optimistic bubble shows the batch's progress; the
-                       cancel here is the same abort the dialog offers. -->
-                  <div class="upload-row">
-                    <div
-                      class="upload-bar"
-                      role="progressbar"
-                      aria-valuenow={Math.round(uploadOverall * 100)}
-                    >
-                      <div class="upload-fill" style="width: {Math.round(uploadOverall * 100)}%"></div>
-                    </div>
-                    <button class="upload-cancel" onclick={cancelUpload} aria-label="Cancel upload">
-                      <Glyph name="close" size={12} />
-                    </button>
-                  </div>
-                {/if}
-
-                {#if captioned.rich}
-                  <RichMessage blocks={captioned.rich} onmention={openMention} />
-                {:else if captioned.parts.length}
-                  <FormattedText parts={captioned.parts} onmention={openMention} onlink={openLink} />
+                {#if message.rich}
+                  <RichMessage blocks={message.rich} onmention={openMention} />
+                {:else if message.parts.length}
+                  <FormattedText parts={message.parts} onmention={openMention} onlink={openLink} />
                 {/if}
 
                 {#if message.webpage}
@@ -2469,13 +2484,27 @@
         <div class="reply-bar">
           <span class="reply-quote">
             <span class="reply-title">
-              {editing ? 'Editing message' : `Replying to ${replyTo?.fromTitle}`}
+              {#if editing}
+                Editing message
+              {:else}
+                {activeReplyContext?.quote ? 'Quoting' : 'Replying to'}
+                {replyTo?.fromTitle}
+                {#if activeReplyContext?.chatTitle}
+                  <!-- The original is in another chat; say which one. -->
+                  <span class="reply-in">in {activeReplyContext.chatTitle}</span>
+                {/if}
+              {/if}
             </span>
-            <span class="reply-text">{(editing ?? replyTo)?.text || 'Media'}</span>
+            <span class="reply-text">
+              {activeReplyContext?.quote?.text || (editing ?? replyTo)?.text || 'Media'}
+            </span>
           </span>
+          {#if activeReplyContext?.quote}
+            <button class="cancel" onclick={dropQuote} title="Reply without the quote">❝✕</button>
+          {/if}
           <button
             class="cancel"
-            onclick={() => (editing ? cancelEdit() : (replyTo = null))}
+            onclick={() => (editing ? cancelEdit() : cancelReply())}
             aria-label="Cancel"
           >✕</button>
         </div>
@@ -2486,10 +2515,6 @@
           <Picker
             onemoji={(emoji) => (draft += emoji)}
             ondocument={pickDocument}
-            oncustomemoji={(item) => {
-              draft += item.emoji;
-              pendingCustomEmoji = [...pendingCustomEmoji, item];
-            }}
           />
         {/if}
         {#if botMenuButton}
@@ -2530,24 +2555,9 @@
           oninput={onDraftInput}
           onkeydown={onComposerKey}
         ></textarea>
-        {#if !draft.trim() && !editing && activePeerId !== null}
-          <!-- Empty composer: the send button gives way to the recorder, the
-               same swap the official clients do. -->
-          <VoiceRecorder
-            peerId={activePeerId}
-            threadId={activeThreadId}
-            replyToMsgId={replyTo?.mid}
-            onsent={() => {
-              replyTo = null;
-              scrollToBottom();
-            }}
-            onerror={(message) => (error = message)}
-          />
-        {:else}
-          <button type="submit" disabled={!draft.trim()} aria-label={editing ? 'Save' : 'Send'}>
-            <Glyph name={editing ? 'check' : 'send'} />
-          </button>
-        {/if}
+        <button type="submit" disabled={!draft.trim()} aria-label={editing ? 'Save' : 'Send'}>
+          <Glyph name={editing ? 'check' : 'send'} />
+        </button>
       </form>
     {/if}
   </section>
@@ -2589,17 +2599,11 @@
 {/if}
 
 {#if pendingFiles.length}
-  <!-- Keyed on the batch: the dialog seeds its per-item choices once, so a new
-       batch has to arrive as a new component rather than a stale one. -->
-  {#key pendingFiles}
-    <SendFiles
-      files={pendingFiles}
-      progress={uploadProgress}
-      onsend={confirmSend}
-      oncancelupload={cancelUpload}
-      onclose={() => (pendingFiles = [])}
-    />
-  {/key}
+  <SendFiles
+    files={pendingFiles}
+    onsend={confirmSend}
+    onclose={() => (pendingFiles = [])}
+  />
 {/if}
 
 {#if miniApp}
@@ -2649,7 +2653,12 @@
   <div class="menu-backdrop" onclick={() => (messageMenu = null)} role="presentation"></div>
   <div class="context-menu" style="left: {messageMenu.x}px; top: {messageMenu.y}px">
     {#if menuMessage}
-      <button onclick={() => { replyToMessage(menuMessage); messageMenu = null; }}>Reply</button>
+      <button onclick={() => { replyToMessage(menuMessage); messageMenu = null; }}>
+        {trackedQuote(menuMessage.mid) ? 'Reply with quote' : 'Reply'}
+      </button>
+      <button onclick={() => { openReplyElsewhere(menuMessage); messageMenu = null; }}>
+        Reply in…
+      </button>
       {#if menuMessage.text}
         <button onclick={() => { copyText(menuMessage); messageMenu = null; }}>Copy text</button>
       {/if}
@@ -2667,12 +2676,22 @@
   </div>
 {/if}
 
-{#if forwarding}
-  <PeerPicker
-    title="Forward to"
+{#if forwarding.length}
+  <ForwardSheet
     dialogs={allDialogs}
-    onpick={doForward}
-    onclose={() => (forwarding = null)}
+    count={forwarding.length}
+    hasCaptions={forwarding.some((m) => m.media && m.text)}
+    onforward={doForward}
+    onclose={() => (forwarding = [])}
+  />
+{/if}
+
+{#if replyingElsewhere}
+  <PeerPicker
+    title="Reply in…"
+    dialogs={allDialogs}
+    onpick={doReplyElsewhere}
+    onclose={() => (replyingElsewhere = null)}
   />
 {/if}
 
@@ -2811,31 +2830,6 @@
     outline-offset: -8px;
   }
 
-  .drop-overlay {
-    position: absolute;
-    inset: 0;
-    z-index: 40;
-    display: grid;
-    place-items: center;
-    background: color-mix(in srgb, var(--bg-solid, var(--bg-elevated)) 82%, transparent);
-    /* The overlay must not eat the dragenter/dragleave pair it depends on. */
-    pointer-events: none;
-  }
-
-  .drop-card {
-    display: grid;
-    justify-items: center;
-    gap: 6px;
-    padding: 24px 32px;
-    border: 2px dashed var(--accent);
-    border-radius: 16px;
-    text-align: center;
-  }
-
-  .drop-card strong {
-    font-size: 17px;
-  }
-
   .attach {
     background: none;
     border: none;
@@ -2967,44 +2961,8 @@
 
   .album {
     display: grid;
-    gap: 2px;
-    width: 100%;
-    max-width: 320px;
-    border-radius: 10px;
-    overflow: hidden;
-  }
-
-  .album.n2 {
-    grid-template-columns: 1fr 1fr;
-    aspect-ratio: 2 / 1;
-  }
-
-  .album.n3 {
-    grid-template-columns: 2fr 1fr;
-    grid-template-rows: 1fr 1fr;
-    aspect-ratio: 3 / 2;
-  }
-
-  .album.n3 .first {
-    grid-row: span 2;
-  }
-
-  .album.n4 {
-    grid-template-columns: repeat(3, 1fr);
-    grid-template-rows: 2fr 1fr;
-    aspect-ratio: 1 / 1;
-  }
-
-  .album.n4 .first {
-    grid-column: span 3;
-  }
-
-  .album.many {
-    grid-template-columns: repeat(3, 1fr);
-  }
-
-  .album.many .album-item {
-    aspect-ratio: 1;
+    grid-template-columns: repeat(var(--cols), 1fr);
+    gap: 3px;
   }
 
   .album-item,
@@ -3015,45 +2973,6 @@
     cursor: zoom-in;
     display: block;
     min-width: 0;
-  }
-
-  .album-item {
-    min-height: 0;
-    overflow: hidden;
-  }
-
-  .upload-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-top: 6px;
-  }
-
-  .upload-bar {
-    flex: 1;
-    height: 4px;
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--text) 15%, transparent);
-    overflow: hidden;
-  }
-
-  .upload-fill {
-    height: 100%;
-    background: var(--accent);
-    transition: width 0.15s linear;
-  }
-
-  .upload-cancel {
-    display: grid;
-    place-items: center;
-    width: 20px;
-    height: 20px;
-    padding: 0;
-    border: none;
-    border-radius: 50%;
-    background: color-mix(in srgb, var(--text) 10%, transparent);
-    color: inherit;
-    cursor: pointer;
   }
 
   .reactions {
@@ -3757,23 +3676,6 @@
     }
   }
 
-  .forwarded {
-    font-size: 12px;
-    font-style: italic;
-    opacity: 0.8;
-  }
-
-  button.reply-quote.jump {
-    background: none;
-    font: inherit;
-    color: inherit;
-    text-align: left;
-    cursor: pointer;
-    border-top: none;
-    border-right: none;
-    border-bottom: none;
-  }
-
   .webpage {
     display: grid;
     gap: 2px;
@@ -4060,7 +3962,13 @@
 
   .reply-bar .reply-quote {
     flex: 1;
+    min-width: 0;
     border-left-color: var(--accent);
+  }
+
+  .reply-in {
+    font-weight: 400;
+    color: var(--text-dim);
   }
 
   form {
