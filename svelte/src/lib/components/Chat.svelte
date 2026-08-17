@@ -17,11 +17,18 @@
   import Settings from './Settings.svelte';
   import Stories from './Stories.svelte';
   import Picker from './Picker.svelte';
+  import ReactionBar from './ReactionBar.svelte';
+  import ReactionPicker from './ReactionPicker.svelte';
+  import StarReactionSheet from './StarReactionSheet.svelte';
   import RichMessage from './RichMessage.svelte';
   import Sticker from './Sticker.svelte';
   import {GIT_COMMIT, GIT_COMMIT_SHORT, GIT_COMMIT_URL} from '$lib/buildInfo';
   import {
-    availableReactions,
+    sendQuickReaction,
+    sendReaction as sendMessageReaction,
+    type ReactionOption
+  } from '$lib/telegram/reactions';
+  import {
     clickSponsored,
     deleteMessage,
     deleteMessages,
@@ -53,7 +60,6 @@
     onReadStateChange,
     readMediaContents,
     readParticipants,
-    reactionParticipants,
     onTyping,
     onUserUpdate,
     openDiscussion,
@@ -70,7 +76,6 @@
     sendTyping,
     toggleMute,
     togglePin,
-    toggleReaction,
     viewSponsored,
     votePoll,
     type DialogItem,
@@ -130,13 +135,20 @@
   let activeIsChannel = $state(false);
   /** Names of the people who have read a message, fetched on demand. */
   let readByFor = $state<{mid: number; names: string[]} | null>(null);
-  let reactionMenu = $state<{mid: number; emoticon: string; x: number; y: number} | null>(null);
-  let reactionParticipantsFor = $state<{
-    mid: number;
-    emoticon: string;
-    names: string[];
-    loading: boolean;
-  } | null>(null);
+  /** Open reaction picker, anchored where it was summoned from. */
+  let reactionPickerFor = $state<{mid: number; x: number; y: number} | null>(null);
+  /** Message whose paid (star) reaction sheet is open. */
+  let starReactionFor = $state<number | null>(null);
+  /**
+   * Bumped per message whenever a reaction is sent from here, so that bubble's
+   * bar re-reads its counters even when the server update lands later. Keyed by
+   * mid so one reaction does not make every bubble re-read.
+   */
+  let reactionRevisions = $state<Record<number, number>>({});
+
+  function bumpReaction(mid: number) {
+    reactionRevisions = {...reactionRevisions, [mid]: (reactionRevisions[mid] ?? 0) + 1};
+  }
 
   let loadingChats = $state(true);
   let loadingHistory = $state(false);
@@ -178,8 +190,6 @@
   /** Profile being viewed from a message sender or member list, if any. */
   let profilePeerId = $state<number | null>(null);
   let showPicker = $state(false);
-  let reactionPalette = $state<string[]>([]);
-  let reactingTo = $state<number | null>(null);
   let lightboxIndex = $state<number | null>(null);
   let highlightedMid = $state<number | null>(null);
   let pinnedMessage = $state<MessageItem | null>(null);
@@ -335,11 +345,7 @@
 
     (async () => {
       try {
-        [dialogs, folders, reactionPalette] = await Promise.all([
-          loadDialogs(),
-          loadFolders(),
-          availableReactions()
-        ]);
+        [dialogs, folders] = await Promise.all([loadDialogs(), loadFolders()]);
       } catch (err: any) {
         error = errorOf(err, 'Failed to load chats');
       } finally {
@@ -553,38 +559,34 @@
     }
   }
 
-  async function react(message: MessageItem, emoticon: string) {
-    if (activePeerId === null) return;
-    reactingTo = null;
+  function openReactionPicker(event: MouseEvent, mid: number) {
+    event.preventDefault();
+    event.stopPropagation();
+    reactionPickerFor = {mid, x: event.clientX, y: event.clientY};
+  }
+
+  async function pickReaction(option: ReactionOption) {
+    const picker = reactionPickerFor;
+    reactionPickerFor = null;
+    if (!picker || activePeerId === null) return;
+
     try {
-      await toggleReaction(activePeerId, message.mid, emoticon);
-      const updated = await getMessage(activePeerId, message.mid);
-      if (updated) messages = messages.map((m) => (m.mid === message.mid ? updated : m));
+      await sendMessageReaction(activePeerId, picker.mid, option);
+      bumpReaction(picker.mid);
     } catch (err: any) {
       error = errorOf(err, 'Reaction failed');
     }
   }
 
-  function openReactionMenu(event: MouseEvent, message: MessageItem, emoticon: string) {
-    event.preventDefault();
-    event.stopPropagation();
-    reactionMenu = {mid: message.mid, emoticon, x: event.clientX, y: event.clientY};
-  }
+  /** Double-click a bubble to send the configured quick reaction. */
+  async function quickReact(message: MessageItem) {
+    if (activePeerId === null || message.service || selecting) return;
 
-  async function showReactionParticipants() {
-    const menu = reactionMenu;
-    reactionMenu = null;
-    if (!menu || activePeerId === null) return;
-
-    reactionParticipantsFor = {mid: menu.mid, emoticon: menu.emoticon, names: [], loading: true};
-    const participants = await reactionParticipants(activePeerId, menu.mid, menu.emoticon);
-    if (reactionParticipantsFor?.mid === menu.mid && reactionParticipantsFor.emoticon === menu.emoticon) {
-      reactionParticipantsFor = {
-        mid: menu.mid,
-        emoticon: menu.emoticon,
-        names: participants.map((participant) => participant.title),
-        loading: false
-      };
+    try {
+      await sendQuickReaction(activePeerId, message.mid);
+      bumpReaction(message.mid);
+    } catch (err: any) {
+      error = errorOf(err, 'Reaction failed');
     }
   }
 
@@ -1357,7 +1359,8 @@
 
     if (messageMenu) messageMenu = null;
     else if (menuFor) menuFor = null;
-    else if (reactingTo !== null) reactingTo = null;
+    else if (starReactionFor !== null) starReactionFor = null;
+    else if (reactionPickerFor) reactionPickerFor = null;
     else if (readByFor) readByFor = null;
     else if (selecting) {
       selecting = false;
@@ -2110,6 +2113,7 @@
                   messageMenu = {mid: message.mid, x: e.clientX, y: e.clientY};
                 }}
                 onclick={() => selecting && toggleSelected(message.mid)}
+                ondblclick={() => quickReact(message)}
                 role="presentation"
               >
                 {#if !message.out && message.fromTitle}
@@ -2224,26 +2228,16 @@
                   </div>
                 {/if}
 
-                {#if message.reactions.length}
-                  <span class="reactions">
-                    {#each message.reactions as reaction (reaction.emoticon)}
-                      <button
-                        class="chip"
-                        class:chosen={reaction.chosen}
-                        onclick={() => react(message, reaction.emoticon)}
-                        oncontextmenu={(event) => openReactionMenu(event, message, reaction.emoticon)}
-                        title="Right-click to see who reacted"
-                      >{reaction.emoticon} {reaction.count}</button>
-                    {/each}
-                  </span>
-                {/if}
-
-                {#if reactingTo === message.mid}
-                  <span class="palette">
-                    {#each reactionPalette as emoticon}
-                      <button onclick={() => react(message, emoticon)}>{emoticon}</button>
-                    {/each}
-                  </span>
+                {#if !message.service && activePeerId !== null}
+                  <ReactionBar
+                    peerId={activePeerId}
+                    mid={message.mid}
+                    count={message.reactions.length}
+                    revision={reactionRevisions[message.mid] ?? 0}
+                    onopenpicker={(event) => openReactionPicker(event, message.mid)}
+                    onopenstars={() => (starReactionFor = message.mid)}
+                    onerror={(text) => (error = text)}
+                  />
                 {/if}
 
                 {#if readByFor?.mid === message.mid}
@@ -2262,7 +2256,7 @@
                   {/if}
                   <button
                     class="reply-btn"
-                    onclick={() => (reactingTo = reactingTo === message.mid ? null : message.mid)}
+                    onclick={(event) => openReactionPicker(event, message.mid)}
                   >React</button>
                   <button class="reply-btn" onclick={() => replyToMessage(message)}>Reply</button>
                   <button class="reply-btn" onclick={() => openForward(message)}>Forward</button>
@@ -2477,33 +2471,28 @@
   />
 {/if}
 
-{#if reactionMenu}
-  <div class="menu-backdrop" onclick={() => (reactionMenu = null)} role="presentation"></div>
-  <div class="context-menu" style="left: {reactionMenu.x}px; top: {reactionMenu.y}px">
-    <button onclick={showReactionParticipants}>See who reacted {reactionMenu.emoticon}</button>
-  </div>
+{#if reactionPickerFor && activePeerId !== null}
+  <ReactionPicker
+    peerId={activePeerId}
+    mid={reactionPickerFor.mid}
+    x={reactionPickerFor.x}
+    y={reactionPickerFor.y}
+    onpick={pickReaction}
+    onpaid={() => {
+      starReactionFor = reactionPickerFor?.mid ?? null;
+      reactionPickerFor = null;
+    }}
+    onclose={() => (reactionPickerFor = null)}
+  />
 {/if}
 
-{#if reactionParticipantsFor}
-  <div class="reactors-backdrop" onclick={() => (reactionParticipantsFor = null)} role="presentation">
-    <div class="reactors-dialog" onclick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="People who reacted">
-      <header>
-        <strong>Reactions {reactionParticipantsFor.emoticon}</strong>
-        <button onclick={() => (reactionParticipantsFor = null)} aria-label="Close">✕</button>
-      </header>
-      {#if reactionParticipantsFor.loading}
-        <p class="muted">Loading…</p>
-      {:else if reactionParticipantsFor.names.length}
-        <ul>
-          {#each reactionParticipantsFor.names as name}
-            <li>{name}</li>
-          {/each}
-        </ul>
-      {:else}
-        <p class="muted">The reaction list is unavailable for this message.</p>
-      {/if}
-    </div>
-  </div>
+{#if starReactionFor !== null && activePeerId !== null}
+  <StarReactionSheet
+    peerId={activePeerId}
+    mid={starReactionFor}
+    onsent={() => bumpReaction(starReactionFor!)}
+    onclose={() => (starReactionFor = null)}
+  />
 {/if}
 
 {#if messageMenu}
@@ -2512,6 +2501,14 @@
   <div class="context-menu" style="left: {messageMenu.x}px; top: {messageMenu.y}px">
     {#if menuMessage}
       <button onclick={() => { replyToMessage(menuMessage); messageMenu = null; }}>Reply</button>
+      {#if !menuMessage.service}
+        <button
+          onclick={() => {
+            reactionPickerFor = {mid: menuMessage.mid, x: messageMenu!.x, y: messageMenu!.y};
+            messageMenu = null;
+          }}
+        >React…</button>
+      {/if}
       {#if menuMessage.text}
         <button onclick={() => { copyText(menuMessage); messageMenu = null; }}>Copy text</button>
       {/if}
@@ -2816,44 +2813,6 @@
     cursor: zoom-in;
     display: block;
     min-width: 0;
-  }
-
-  .reactions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-  }
-
-  .chip {
-    background: rgba(0, 0, 0, 0.28);
-    border: none;
-    border-radius: 999px;
-    padding: 2px 8px;
-    font-size: 12px;
-    color: inherit;
-    cursor: pointer;
-  }
-
-  .chip.chosen {
-    background: var(--action);
-    color: var(--action-ink);
-  }
-
-  .palette {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 2px;
-    padding: 4px;
-    border-radius: 999px;
-    background: color-mix(in srgb, currentColor 10%, transparent);
-  }
-
-  .palette button {
-    background: none;
-    border: none;
-    font-size: 18px;
-    cursor: pointer;
-    padding: 2px;
   }
 
   form {
@@ -3406,50 +3365,6 @@
     position: fixed;
     inset: 0;
     z-index: 60;
-  }
-
-  .reactors-backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 70;
-    display: grid;
-    place-items: center;
-    padding: 16px;
-    background: rgba(0, 0, 0, 0.55);
-  }
-
-  .reactors-dialog {
-    width: min(360px, 100%);
-    max-height: min(480px, calc(100dvh - 32px));
-    overflow: auto;
-    padding: 16px;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    border-radius: 14px;
-  }
-
-  .reactors-dialog header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 10px;
-  }
-
-  .reactors-dialog header button {
-    border: 0;
-    background: none;
-    color: inherit;
-    cursor: pointer;
-    font-size: 18px;
-  }
-
-  .reactors-dialog ul {
-    margin: 0;
-    padding-left: 20px;
-  }
-
-  .reactors-dialog li + li {
-    margin-top: 8px;
   }
 
   .context-menu {
