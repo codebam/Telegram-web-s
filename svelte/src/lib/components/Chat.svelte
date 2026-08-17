@@ -19,6 +19,8 @@
   import Stories from './Stories.svelte';
   import Picker from './Picker.svelte';
   import GlobalSearch from './GlobalSearch.svelte';
+  import EmojiStatus from './EmojiStatus.svelte';
+  import {customEmojiEntities, type PendingCustomEmoji} from '$lib/telegram/emoji';
   import RichMessage from './RichMessage.svelte';
   import Sticker from './Sticker.svelte';
   import {GIT_COMMIT, GIT_COMMIT_SHORT, GIT_COMMIT_URL} from '$lib/buildInfo';
@@ -366,6 +368,11 @@
   /** Profile being viewed from a message sender or member list, if any. */
   let profilePeerId = $state<number | null>(null);
   let showPicker = $state(false);
+  /**
+   * Custom emoji sitting in the draft as their plain alt text; on send they
+   * become messageEntityCustomEmoji entities over those characters.
+   */
+  let pendingCustomEmoji = $state<PendingCustomEmoji[]>([]);
   let reactionPalette = $state<string[]>([]);
   let reactingTo = $state<number | null>(null);
   let lightboxIndex = $state<number | null>(null);
@@ -2057,8 +2064,14 @@
 
     // Markdown markers become entities here; what goes to the API is the text
     // with the markers stripped.
-    const {text, entities} = parseComposerText(typed);
+    const {text, entities: markupEntities} = parseComposerText(typed);
     if (!text) return;
+
+    // Custom emoji only exist as entities over the alt text already in `text`.
+    const entities = [...markupEntities, ...customEmojiEntities(text, pendingCustomEmoji)].sort(
+      (a, b) => a.offset - b.offset
+    );
+    pendingCustomEmoji = [];
 
     // The debounced draft save is still pending with the text being sent; let
     // it fire and it writes the message back as a draft right after sendText
@@ -2354,7 +2367,8 @@
     {:else}
       <header>
         <button class="back-mobile" onclick={() => (showSidebarOnMobile = true)} aria-label="Back">←</button>
-        <button class="title-button" onclick={() => (showInfo = !showInfo)}>{activeTitle}</button>
+        <button class="title-button" onclick={() => (showInfo = !showInfo)}
+        >{activeTitle}{#if activePeerId !== null}<EmojiStatus peerId={activePeerId} size={16} />{/if}</button>
         {#if activeThreadId !== undefined}<span class="thread-tag">topic</span>{/if}
         <span class="presence">
           {typingNames.length
@@ -2637,7 +2651,7 @@
               >
                 {#if !message.out && message.fromTitle}
                   <button class="author" onclick={() => (profilePeerId = message.fromId)}>
-                    {message.fromTitle}
+                    {message.fromTitle}<EmojiStatus peerId={message.fromId} size={14} />
                   </button>
                 {/if}
 
@@ -2896,6 +2910,10 @@
           <Picker
             onemoji={(emoji) => (draft += emoji)}
             ondocument={pickDocument}
+            oncustomemoji={(item) => {
+              draft += item.emoji;
+              pendingCustomEmoji = [...pendingCustomEmoji, item];
+            }}
           />
         {/if}
         {#if botMenuButton}

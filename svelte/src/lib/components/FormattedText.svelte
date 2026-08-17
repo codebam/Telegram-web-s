@@ -1,4 +1,5 @@
 <script lang="ts">
+  import CustomEmoji from './CustomEmoji.svelte';
   import Markdown from './Markdown.svelte';
   import {looksLikeMarkdown} from '$lib/telegram/markdown';
   import type {TextPart} from '$lib/telegram/chats';
@@ -6,6 +7,7 @@
   let {
     parts,
     onmention,
+    onlink,
     markdown = false
   }: {
     parts: TextPart[];
@@ -37,7 +39,7 @@
     parts.every((part) =>
       !part.bold && !part.italic && !part.underline && !part.strike &&
       !part.code && !part.pre && !part.spoiler && !part.blockquote &&
-      !part.url && !part.mention
+      !part.url && !part.mention && !part.customEmojiDocId
     )
   );
 
@@ -56,7 +58,11 @@
 {:else}
 <p class="text">
   {#each parts as part, i}
-    {#if part.pre}
+    {#if part.customEmojiDocId}
+      <!-- The alt text stays as the fallback, so a document that will not load
+           still reads as the emoji the sender meant. -->
+      <CustomEmoji docId={part.customEmojiDocId} size={20} fallback={part.text} />
+    {:else if part.pre}
       <code class="pre">{part.text}</code>
     {:else if part.spoiler && !revealed.has(i)}
       <button class="spoiler" onclick={() => reveal(i)} aria-label="Show spoiler">
