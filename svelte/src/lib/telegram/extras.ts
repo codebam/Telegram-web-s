@@ -1,104 +1,144 @@
+import getPeerId from '@appManagers/utils/peers/getPeerId';
 import {bootTelegram} from './client';
 
 /**
- * Premium, Stars, mini apps and Calls. Stories live in `./stories`.
+ * Stories, business info and Calls. Premium, Stars and everything else that
+ * costs money live in `payments.ts`.
  *
  * Same discipline as the other modules: everything returned here is plain and
  * cloneable, raw objects stay behind module-level caches.
  */
 
 /* ------------------------------------------------------------------ */
-/* Premium                                                             */
+/* Stories                                                             */
 /* ------------------------------------------------------------------ */
 
-export type PremiumInfo = {
-  active: boolean;
-  features: {title: string; description: string}[];
+export type StoryPeer = {
+  peerId: number;
+  title: string;
+  unread: boolean;
+  storyIds: number[];
 };
 
-export async function loadPremium(): Promise<PremiumInfo> {
-  const {managers} = await bootTelegram();
-  const self: any = await managers.appUsersManager.getSelf();
-
-  let features: PremiumInfo['features'] = [];
-  try {
-    const promo: any = await managers.appPaymentsManager.getPremiumPromo();
-    const descriptions: string[] = promo?.video_sections ?? [];
-    const texts: string[] = (promo?.status_text ?? '').split('\n').filter(Boolean);
-    features = descriptions.map((section: string, index: number) => ({
-      title: humanizeSection(section),
-      description: texts[index] ?? ''
-    }));
-  } catch(err) {
-    // The promo is optional; the status below is the part that matters.
-  }
-
-  if(!features.length) {
-    features = [
-      {title: 'Doubled limits', description: 'More channels, folders, pinned chats and saved GIFs.'},
-      {title: 'Larger uploads', description: 'Send files up to 4 GB.'},
-      {title: 'Faster downloads', description: 'No speed limits on media.'},
-      {title: 'Voice-to-text', description: 'Transcribe voice messages.'},
-      {title: 'Unique reactions and stickers', description: 'Premium-only packs and effects.'},
-      {title: 'No ads', description: 'Sponsored messages are hidden.'}
-    ];
-  }
-
-  return {active: !!self?.pFlags?.premium, features};
-}
-
-function humanizeSection(section: string): string {
-  return section
-    .replace(/_/g, ' ')
-    .replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-/* ------------------------------------------------------------------ */
-/* Stars                                                               */
-/* ------------------------------------------------------------------ */
-
-export type StarsInfo = {
-  balance: number;
-  transactions: {
-    id: string;
-    amount: number;
-    date: number;
-    title: string;
-    incoming: boolean;
-  }[];
+export type StoryItem = {
+  id: number;
+  date: number;
+  caption: string;
+  isVideo: boolean;
+  /** Seconds of video; 0 for photos, which get a fixed display time. */
+  duration: number;
 };
 
-export async function loadStars(): Promise<StarsInfo> {
+const rawStories = new Map<string, any>();
+const storyUrls = new Map<string, string | null>();
+
+const storyKey = (peerId: number, id: number) => `${peerId}_${id}`;
+
+export async function loadStoriesFeed(): Promise<StoryPeer[]> {
   const {managers} = await bootTelegram();
 
-  const status: any = await managers.appPaymentsManager.getStarsStatus();
-  const balance = Number(status?.balance?.amount ?? status?.balance ?? 0);
-
-  const transactions = (status?.history ?? []).slice(0, 40).map((entry: any) => {
-    const amount = Number(entry?.stars?.amount ?? entry?.stars ?? 0);
-    return {
-      id: String(entry.id ?? `${entry.date}`),
-      amount: Math.abs(amount),
-      date: entry.date ?? 0,
-      title: entry.title || entry.description || (amount >= 0 ? 'Top-up' : 'Purchase'),
-      incoming: amount >= 0
-    };
-  });
-
-  return {balance, transactions};
-}
-
-export async function loadStarsTopupOptions(): Promise<{stars: number; currency: string; amount: number}[]> {
-  const {managers} = await bootTelegram();
   try {
-    const options: any = await managers.appPaymentsManager.getStarsTopupOptions();
-    return (options ?? []).map((option: any) => ({
-      stars: Number(option.stars ?? 0),
-      currency: option.currency ?? '',
-      amount: Number(option.amount ?? 0)
-    }));
+    const result: any = await managers.appStoriesManager.getAllStories();
+    const peerStories: any[] = result?.peer_stories ?? result?.peerStories ?? [];
+
+    return Promise.all(
+      peerStories.map(async(entry: any) => {
+        // A channel's peerId is the negated channel_id, so the raw `peer`
+        // constructor has to go through getPeerId — reading channel_id off it
+        // addresses a peer nobody has stories for, and the viewer then opens
+        // on an empty list.
+        const peerId = Number(getPeerId(entry.peer));
+        const peer: any = await managers.appPeersManager.getPeer(peerId);
+        const stories: any[] = entry.stories ?? [];
+
+        stories.forEach((story) => rawStories.set(storyKey(peerId, story.id), story));
+
+        return {
+          peerId,
+          title: peer?._ === 'user' ?
+            [peer.first_name, peer.last_name].filter(Boolean).join(' ') || peer.username || 'User' :
+            peer?.title ?? 'Channel',
+          unread: (entry.max_read_id ?? 0) < (stories[stories.length - 1]?.id ?? 0),
+          storyIds: stories.map((story) => story.id)
+        };
+      })
+    );
   } catch(err) {
     return [];
+  }
+}
+
+export async function loadStories(peerId: number, ids: number[]): Promise<StoryItem[]> {
+  const {managers} = await bootTelegram();
+
+  try {
+    // Copy to a plain array: callers hold these in Svelte state, and a $state
+    // proxy is not structured-cloneable — postMessage drops the request.
+    const plainIds = Array.from(ids, Number);
+    const stories: any[] = await managers.appStoriesManager.getStoriesById(peerId, plainIds);
+    return (stories ?? []).map((story: any) => {
+      rawStories.set(storyKey(peerId, story.id), story);
+      const document = story.media?.document;
+      const video = (document?.attributes ?? []).find((a: any) => a._ === 'documentAttributeVideo');
+
+      return {
+        id: story.id,
+        date: story.date ?? 0,
+        caption: story.caption ?? '',
+        isVideo: story.media?._ === 'messageMediaDocument',
+        duration: video?.duration ?? 0
+      };
+    });
+  } catch(err) {
+    return [];
+  }
+}
+
+/** Media URL for a story, downloaded like any other message media. */
+export async function loadStoryUrl(peerId: number, id: number): Promise<string | null> {
+  const key = storyKey(peerId, id);
+  if(storyUrls.has(key)) return storyUrls.get(key)!;
+
+  const story = rawStories.get(key);
+  const media = story?.media;
+  // The feed returns storyItemSkipped entries with no media; the full story
+  // arrives later from getStoriesById. Return without caching so the retry
+  // after it lands is not answered from a poisoned negative cache.
+  if(!media) return null;
+
+  await bootTelegram();
+  const [{default: appDownloadManager}, {default: choosePhotoSize}] = await Promise.all([
+    import('@lib/appDownloadManager'),
+    import('@appManagers/utils/photos/choosePhotoSize')
+  ]);
+
+  const target = media._ === 'messageMediaPhoto' ? media.photo : media.document;
+  if(!target) return null;
+
+  try {
+    // Photos need an explicit size: without one the download resolves against
+    // photoSizeEmpty and throws. A video story plays in a <video>, so it wants
+    // the real file — handing it the poster frame puts a JPEG in a video
+    // element, which renders blank.
+    const isPhoto = media._ === 'messageMediaPhoto';
+    const url = await appDownloadManager.downloadMediaURL({
+      media: target,
+      thumb: isPhoto ? choosePhotoSize(target, 720, 1280, true) : undefined
+    });
+    storyUrls.set(key, url ?? null);
+    return url ?? null;
+  } catch(err) {
+    storyUrls.set(key, null);
+    return null;
+  }
+}
+
+export async function markStoriesRead(peerId: number, maxId: number): Promise<void> {
+  const {managers} = await bootTelegram();
+  try {
+    await managers.appStoriesManager.readStories(peerId, maxId);
+  } catch(err) {
+    // Read receipts for stories are best-effort.
   }
 }
 

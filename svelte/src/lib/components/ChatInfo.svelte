@@ -1,7 +1,6 @@
 <script lang="ts">
   import Avatar from './Avatar.svelte';
-  import ChatAdmin from './ChatAdmin.svelte';
-  import {loadAdminAccess} from '$lib/telegram/admin';
+  import BoostPanel from './BoostPanel.svelte';
   import {
     checkChatUsername,
     loadChatInfo,
@@ -28,6 +27,7 @@
 
   let info = $state<ChatInfo | null>(null);
   let error = $state('');
+  let boosting = $state(false);
 
   let editingLink = $state(false);
   let link = $state('');
@@ -35,22 +35,6 @@
   let linkError = $state('');
   let linkFree = $state<boolean | null>(null);
   let linkTimer: ReturnType<typeof setTimeout> | undefined;
-
-  // Whether this account may administer the chat, and the admin panel it opens.
-  let canManage = $state(false);
-  let managing = $state(false);
-
-  $effect(() => {
-    const id = peerId;
-    canManage = false;
-    managing = false;
-    // Non-fatal: without it the profile simply has no "Manage" entry.
-    loadAdminAccess(id)
-      .then((access) => {
-        if(id === peerId) canManage = access.canManage;
-      })
-      .catch(() => {});
-  });
 
   $effect(() => {
     const id = peerId;
@@ -151,8 +135,8 @@
           </button>
         {/if}
 
-        {#if canManage}
-          <button class="link-btn" onclick={() => (managing = true)}>Manage</button>
+        {#if info.isChannel}
+          <button onclick={() => (boosting = true)}>Boosts</button>
         {/if}
       </div>
 
@@ -220,18 +204,12 @@
   </div>
 </aside>
 
-{#if managing}
-  <ChatAdmin
-    {peerId}
-    onclose={() => {
-      managing = false;
-      // The chat may have been renamed, made public, or left entirely.
-      loadChatInfo(peerId)
-        .then((loaded) => (info = loaded))
-        .catch(() => {});
-    }}
-    onmigrated={(newPeerId) => (onmigrated ?? onpeer)?.(newPeerId)}
-    {onpeer}
+{#if boosting && info}
+  <BoostPanel
+    peerId={info.peerId}
+    title={info.title}
+    canCreateGiveaway={info.isChannel}
+    onclose={() => (boosting = false)}
   />
 {/if}
 

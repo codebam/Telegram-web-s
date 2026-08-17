@@ -1,7 +1,5 @@
-import getPeerId from '@appManagers/utils/peers/getPeerId';
-
 import {bootTelegram} from './client';
-import {extraOf, type MessageExtra} from './messageTypes';
+import {paymentPreviewOf, type PaymentPreview} from './payments';
 import {peerRestrictionText, restrictionTextOf} from './restrictions';
 
 /**
@@ -36,6 +34,14 @@ export type DialogItem = {
    * when it is not. Its content must not be rendered while this is set.
    */
   restrictionText: string;
+};
+
+export type TopicItem = {
+  threadId: number;
+  title: string;
+  preview: string;
+  date: number;
+  unread: number;
 };
 
 export type MediaItem = {
@@ -112,8 +118,6 @@ export type MessageItem = {
   reply: ReplyPreview | null;
   /** Comment thread (discussion) attached to this message, if any. */
   repliesCount: number;
-  /** Peer ids of the newest commenters, for the avatars on the comments button. */
-  commenters: number[];
   reactions: ReactionItem[];
   /** Album id — consecutive messages sharing one render as a single bubble. */
   groupedId: string;
@@ -130,11 +134,6 @@ export type MessageItem = {
   webpage: WebPagePreview | null;
   poll: PollPreview | null;
   /**
-   * Location, venue, contact, game, invoice, checklist or gift body — the
-   * message types `media` cannot describe. Null for everything else.
-   */
-  extra: MessageExtra | null;
-  /**
    * Structured body for messages that carry one. Newer messages can arrive as
    * `rich_message` blocks — headings, tables, lists — with `message` empty.
    * Flattening those to text loses the structure, so they are kept as blocks.
@@ -147,38 +146,24 @@ export type MessageItem = {
    * not. Set means the body and media must stay hidden behind the reason.
    */
   restrictionText: string;
+  /**
+   * Invoice, paid media, giveaway or gift attached to this message — null for
+   * the overwhelming majority. Shaped and rendered by `$lib/telegram/payments`.
+   */
+  payment: PaymentPreview | null;
 };
 
 /** A single button from a message's `reply_markup`. */
 export type MessageButton = {
   row: number;
   column: number;
-  kind:
-    | 'url'
-    | 'loginUrl'
-    | 'callback'
-    | 'webview'
-    | 'simpleWebView'
-    | 'switchInline'
-    | 'text'
-    | 'copy'
-    | 'buy'
-    | 'game'
-    | 'userProfile'
-    | 'requestPhone'
-    | 'requestGeo'
-    | 'requestPoll'
-    | 'unsupported';
+  kind: 'url' | 'callback' | 'webview' | 'simpleWebView' | 'switchInline' | 'text' | 'copy' | 'unsupported';
   text: string;
   /** Web-app and link buttons carry their own URL. */
   url: string;
   /** `switchInline` query, `copy` payload. */
   payload: string;
   samePeer: boolean;
-  /** `userProfile` target, 0 for every other kind. */
-  userId: number;
-  /** `loginUrl` button id the server needs to authorise the link. */
-  buttonId: number;
 };
 
 export type WebPagePreview = {
@@ -209,14 +194,14 @@ const messageKey = (peerId: number, mid: number) => `${peerId}_${mid}`;
 
 let selfIdCache: number | null = null;
 
-export async function getSelfId(): Promise<number> {
+async function getSelfId(): Promise<number> {
   if(selfIdCache !== null) return selfIdCache;
   const {managers} = await bootTelegram();
   const self = await managers.appUsersManager.getSelf();
   return (selfIdCache = Number(self?.id ?? 0));
 }
 
-export async function getPeer(peerId: number): Promise<any> {
+async function getPeer(peerId: number): Promise<any> {
   const cached = rawPeers.get(peerId);
   if(cached) return cached;
 
@@ -240,7 +225,7 @@ function isTopicChat(peer: any): boolean {
   return !!peer?.pFlags?.forum || !!peer?.pFlags?.bot_forum_view;
 }
 
-export function peerTitle(peer: any, selfId: number): string {
+function peerTitle(peer: any, selfId: number): string {
   if(!peer) return 'Unknown';
   if(peer._ === 'user' && Number(peer.id) === selfId) return 'Saved Messages';
   if(peer._ === 'user') {
@@ -502,7 +487,7 @@ async function richBody(message: any): Promise<{text: string; entities: any[]} |
 }
 
 /** Preview text for the chat list, including rich messages. */
-export async function previewOf(message: any): Promise<string> {
+async function previewOf(message: any): Promise<string> {
   // A restricted message must not leak through the chat list either.
   const restricted = await restrictionTextOf(message?.restriction_reason);
   if(restricted) return restricted;
@@ -634,6 +619,28 @@ export async function loadDialogs(limit = 40, filterId = 0): Promise<DialogItem[
   );
 }
 
+/**
+ * Forum topics are modelled as dialogs filtered by the forum's own peerId —
+ * same call tweb's own topic list uses.
+ */
+export async function loadTopics(peerId: number, limit = 30): Promise<TopicItem[]> {
+  const {managers} = await bootTelegram();
+  const {dialogs} = await managers.dialogsStorage.getDialogs({limit, filterId: peerId});
+
+  return Promise.all(
+    dialogs.map(async(topic: any) => {
+      const topMessage = await managers.appMessagesManager.getMessageByPeer(peerId, topic.top_message);
+      return {
+        threadId: Number(topic.id),
+        title: topic.title || 'Topic',
+        preview: await previewOf(topMessage),
+        date: topMessage?.date ?? 0,
+        unread: topic.unread_count ?? 0
+      };
+    })
+  );
+}
+
 /* ------------------------------------------------------------------ */
 /* History                                                             */
 /* ------------------------------------------------------------------ */
@@ -680,9 +687,6 @@ async function toItem(message: any, peerId: number, selfId: number): Promise<Mes
     media: mediaOf(message),
     reply: await replyOf(message, peerId, selfId),
     repliesCount: message.replies?.replies ?? 0,
-    commenters: (message.replies?.recent_repliers ?? [])
-      .map((peer: any) => Number(getPeerId(peer)))
-      .filter(Boolean),
     reactions: reactionsOf(message),
     groupedId: message.grouped_id ? '' + message.grouped_id : '',
     stickerDocId: isStickerMessage(message) ? '' + message.media.document.id : '',
@@ -692,10 +696,10 @@ async function toItem(message: any, peerId: number, selfId: number): Promise<Mes
     forwardedFrom: await forwardedTitle(message, selfId),
     webpage: webpageOf(message),
     poll: pollOf(message),
-    extra: extraOf(message, peerId, selfId),
     rich: richBlocksOf(message),
     buttons: buttonsOf(message),
-    restrictionText: await restrictionTextOf(message.restriction_reason)
+    restrictionText: await restrictionTextOf(message.restriction_reason),
+    payment: paymentPreviewOf(message)
   };
 }
 
@@ -711,34 +715,12 @@ function buttonsOf(message: any): MessageButton[][] {
 }
 
 function toButton(button: any, row: number, column: number): MessageButton {
-  const base = {
-    row,
-    column,
-    text: button.text ?? '',
-    url: '',
-    payload: '',
-    samePeer: false,
-    userId: 0,
-    buttonId: 0
-  };
+  const base = {row, column, text: button.text ?? '', url: '', payload: '', samePeer: false};
 
   switch(button._) {
     case 'keyboardButtonUrl':
-      return {...base, kind: 'url', url: button.url ?? ''};
     case 'keyboardButtonUrlAuth':
-      return {...base, kind: 'loginUrl', url: button.url ?? '', buttonId: button.button_id ?? 0};
-    case 'keyboardButtonBuy':
-      return {...base, kind: 'buy'};
-    case 'keyboardButtonGame':
-      return {...base, kind: 'game'};
-    case 'keyboardButtonUserProfile':
-      return {...base, kind: 'userProfile', userId: Number(button.user_id ?? 0)};
-    case 'keyboardButtonRequestPhone':
-      return {...base, kind: 'requestPhone'};
-    case 'keyboardButtonRequestGeoLocation':
-      return {...base, kind: 'requestGeo'};
-    case 'keyboardButtonRequestPoll':
-      return {...base, kind: 'requestPoll'};
+      return {...base, kind: 'url', url: button.url ?? ''};
     case 'keyboardButtonWebView':
       return {...base, kind: 'webview', url: button.url ?? ''};
     case 'keyboardButtonSimpleWebView':
@@ -769,8 +751,7 @@ export async function pressCallbackButton(
   peerId: number,
   mid: number,
   row: number,
-  column: number,
-  game = false
+  column: number
 ): Promise<{message: string; alert: boolean; url: string}> {
   const {managers} = await bootTelegram();
 
@@ -778,7 +759,7 @@ export async function pressCallbackButton(
     await managers.appMessagesManager.getMessageByPeer(peerId, mid);
   const button = message?.reply_markup?.rows?.[row]?.buttons?.[column];
 
-  const answer: any = await managers.appInlineBotsManager.callbackButtonClick(peerId, mid, button, game);
+  const answer: any = await managers.appInlineBotsManager.callbackButtonClick(peerId, mid, button);
   return {
     message: answer?.message ?? '',
     alert: !!answer?.pFlags?.alert,
@@ -881,20 +862,17 @@ async function fetchMessages(peerId: number, mids: number[]): Promise<any[]> {
 
 export async function loadHistory(
   peerId: number,
-  options: {threadId?: number; limit?: number; offsetId?: number; savedReaction?: string} = {}
+  options: {threadId?: number; limit?: number; offsetId?: number} = {}
 ): Promise<MessageItem[]> {
   const {managers} = await bootTelegram();
   const selfId = await getSelfId();
-  const {threadId, limit = 40, offsetId, savedReaction} = options;
+  const {threadId, limit = 40, offsetId} = options;
 
   const result = await managers.appMessagesManager.getHistory({
     peerId,
     limit,
     threadId,
     offsetId,
-    // Saved Messages filtered by tag. The manager turns this into a search
-    // rather than a plain history request.
-    savedReaction: savedReaction ? [{_: 'reactionEmoji', emoticon: savedReaction}] : undefined,
     fetchIfWasNotFetched: true
   });
 
@@ -1004,6 +982,26 @@ export async function votePoll(peerId: number, mid: number, optionIndexes: numbe
     await managers.appMessagesManager.getMessageByPeer(peerId, mid);
   if(!message) throw new Error('Message not found');
   await managers.appPollsManager.sendVote(message, optionIndexes);
+}
+
+/**
+ * Opens the comment thread attached to a channel post. The discussion lives in
+ * the linked group, so this returns a different peer plus the thread id.
+ */
+export async function openDiscussion(
+  peerId: number,
+  mid: number
+): Promise<{peerId: number; threadId: number} | null> {
+  const {managers} = await bootTelegram();
+
+  try {
+    const result: any = await managers.appMessagesManager.getDiscussionMessage(peerId, mid);
+    const message = result?.message ?? result;
+    if(!message?.mid) return null;
+    return {peerId: Number(message.peerId), threadId: message.mid};
+  } catch(err) {
+    return null;
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -1510,7 +1508,7 @@ function stickerKind(doc: any): StickerItem['kind'] {
   return 'static';
 }
 
-export function toSticker(doc: any): StickerItem {
+function toSticker(doc: any): StickerItem {
   rawDocs.set('' + doc.id, doc);
   const size = (doc.attributes ?? []).find((a: any) => a._ === 'documentAttributeImageSize' || a._ === 'documentAttributeVideo');
   const sticker = (doc.attributes ?? []).find((a: any) => a._ === 'documentAttributeSticker');
@@ -1525,11 +1523,10 @@ export function toSticker(doc: any): StickerItem {
 }
 
 /**
- * Put a document that arrived from somewhere other than a sticker set into the
- * cache `loadDocUrl` reads, so `Sticker` can render it. Topic icons are custom
- * emoji fetched one at a time and take this route.
+ * Registers a sticker document that came from somewhere other than the sticker
+ * APIs — star gifts, for one — so `loadDocUrl` can resolve it like any other.
  */
-export function registerDoc(doc: any): StickerItem {
+export function adoptSticker(doc: any): StickerItem {
   return toSticker(doc);
 }
 
