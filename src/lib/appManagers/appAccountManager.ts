@@ -370,4 +370,21 @@ export default class AppAccountManager extends AppManager {
   public deleteAccount(reason: string) {
     return this.apiManager.invokeApi('account.deleteAccount', {reason});
   }
+
+  /** Days of inactivity after which the server deletes the account. */
+  public getAccountTTL() {
+    return this.apiManager.invokeApiSingleProcess({
+      method: 'account.getAccountTTL',
+      params: {},
+      processResult: (result) => result.days
+    });
+  }
+
+  public setAccountTTL(days: number) {
+    return this.apiManager.invokeApiSingleProcess({
+      method: 'account.setAccountTTL',
+      params: {ttl: {_: 'accountDaysTTL', days}},
+      processResult: (result) => result
+    });
+  }
 }

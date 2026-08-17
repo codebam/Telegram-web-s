@@ -1349,6 +1349,11 @@ export async function onDialogsUpdate(callback: () => void): Promise<() => void>
 /* Files: avatars and message media                                    */
 /* ------------------------------------------------------------------ */
 
+/** Drops the memoised avatar so the next read re-resolves it — used after an upload. */
+export function invalidateAvatarUrl(peerId: number): void {
+  avatarUrls.delete(peerId);
+}
+
 /** Blob/stream URL for a peer's small avatar, or null when it has none. */
 export async function loadAvatarUrl(peerId: number): Promise<string | null> {
   if(avatarUrls.has(peerId)) return avatarUrls.get(peerId)!;
