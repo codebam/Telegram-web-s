@@ -1,5 +1,5 @@
 <script lang="ts">
-  import {onMount, tick} from 'svelte';
+  import {onMount, tick, untrack} from 'svelte';
 
   import Avatar from './Avatar.svelte';
   import Glyph from './Glyph.svelte';
@@ -19,10 +19,10 @@
   import Picker from './Picker.svelte';
   import RichMessage from './RichMessage.svelte';
   import Sticker from './Sticker.svelte';
-  import CommentsButton from './CommentsButton.svelte';
-  import SavedTags from './SavedTags.svelte';
-  import TopicEditor from './TopicEditor.svelte';
-  import TopicIcon from './TopicIcon.svelte';
+  import BotBar from './BotBar.svelte';
+  import InlineKeyboard from './InlineKeyboard.svelte';
+  import ReplyKeyboard from './ReplyKeyboard.svelte';
+  import Suggestions from './Suggestions.svelte';
   import {GIT_COMMIT, GIT_COMMIT_SHORT, GIT_COMMIT_URL} from '$lib/buildInfo';
   import {
     availableReactions,
@@ -45,6 +45,7 @@
     loadSponsored,
     hidePinnedMessage,
     loadOlder,
+    loadTopics,
     markDialogRead,
     markDialogUnread,
     onDialogsUpdate,
@@ -59,6 +60,7 @@
     reactionParticipants,
     onTyping,
     onUserUpdate,
+    openDiscussion,
     pressCallbackButton,
     readUpTo,
     resolveUsername,
@@ -79,25 +81,9 @@
     type FolderItem,
     type MessageButton,
     type MessageItem,
-    type SponsoredItem
-  } from '$lib/telegram/chats';
-  import {
-    canCreateTopic,
-    deleteTopic,
-    isSavedViewedAsChats,
-    isViewingForumAsMessages,
-    loadSavedDialogs,
-    loadTopics,
-    openCommentThread,
-    setSavedViewedAsChats,
-    setTopicClosed,
-    setTopicHidden,
-    setViewForumAsMessages,
-    toggleSavedTag,
-    toggleTopicPin,
-    type SavedDialogItem,
+    type SponsoredItem,
     type TopicItem
-  } from '$lib/telegram/topics';
+  } from '$lib/telegram/chats';
   import {
     getBotMenuButton,
     openBotAppLink,
@@ -112,6 +98,28 @@
     syncPushSubscription
   } from '$lib/telegram/notifications';
   import {queryInlineBot, sendInlineResult, type InlineQueryAnswer, type InlineResultItem} from '$lib/telegram/settings';
+  import {
+    acceptUrlAuth,
+    clearBotHistory,
+    filterBotCommands,
+    getBotChatState,
+    getReplyKeyboard,
+    hostOf,
+    loadBotCommands,
+    needsUrlConfirmation,
+    onReplyKeyboardChange,
+    rememberHashtags,
+    requestUrlAuth,
+    searchHashtags,
+    searchMentions,
+    setBotBlocked,
+    startBot,
+    type BotChatState,
+    type BotCommandItem,
+    type ReplyKeyboardButton,
+    type ReplyKeyboardState,
+    type SuggestionItem
+  } from '$lib/telegram/botUi';
   import {applyAccent, applyDensity, applyTheme} from '$lib/telegram/theme';
   import {
     getBusinessBot,
@@ -136,46 +144,6 @@
    * timeline" from "nothing picked yet".
    */
   let topicOpen = $state(false);
-  /**
-   * The synthetic "All messages" row above a forum's topics — thread id 0 means
-   * the chat's own timeline, which `openTopic` maps back to no thread at all.
-   */
-  const allMessagesRow: TopicItem = {
-    threadId: 0,
-    title: 'All messages',
-    preview: '',
-    date: 0,
-    unread: 0,
-    closed: false,
-    hidden: false,
-    pinned: false,
-    isGeneral: false,
-    iconColor: 0,
-    iconEmojiId: '',
-    canManage: false
-  };
-  /** Right-clicked topic row, keyed by thread id. */
-  let topicMenuFor = $state<number | null>(null);
-  /** Open topic editor: `{topic: null}` creates, `{topic}` edits. */
-  let topicEditor = $state<{topic: TopicItem | null} | null>(null);
-  let canManageForum = $state(false);
-  /** Forum shown as one flat timeline instead of a topic list. */
-  let forumAsMessages = $state(false);
-  /**
-   * What the open thread actually is. A thread id alone cannot tell a forum
-   * topic from a comment thread from a saved sub-chat, and the header, the
-   * back button and the composer all behave differently for each.
-   */
-  let threadKind = $state<'' | 'topic' | 'comments' | 'saved'>('');
-  /** Comments already on the channel post whose thread is open. */
-  let threadCommentCount = $state(0);
-  /** Where a comment thread was entered from, for the back button. */
-  let commentsOrigin = $state<{peerId: number; title: string} | null>(null);
-  /** Saved Messages split per original sender instead of one timeline. */
-  let savedAsChats = $state(false);
-  let savedDialogs = $state<SavedDialogItem[]>([]);
-  /** Tag currently filtering Saved Messages, '' for no filter. */
-  let savedTag = $state('');
   /** Calls are one-to-one only, and never to Saved Messages. */
   let activeIsUser = $state(false);
   let activeIsSelf = $state(false);
@@ -186,14 +154,6 @@
    */
   let readOutboxMaxId = $state(0);
   let activeIsChannel = $state(false);
-  /**
-   * The sidebar shows a sub-list instead of the chat list: a forum's topics, or
-   * Saved Messages split per sender. Both replace the search box and folders
-   * with a back button to the chat list.
-   */
-  let topicListOpen = $derived(activeIsForum && activePeerId !== null && !forumAsMessages);
-  let savedListOpen = $derived(activeIsSelf && activePeerId !== null && savedAsChats);
-  let sublistOpen = $derived(topicListOpen || savedListOpen);
   /** Names of the people who have read a message, fetched on demand. */
   let readByFor = $state<{mid: number; names: string[]} | null>(null);
   let reactionMenu = $state<{mid: number; emoticon: string; x: number; y: number} | null>(null);
@@ -285,6 +245,30 @@
   let botMenuButton = $state<{text: string; url: string} | null>(null);
   /** Files queued by paste, drop or the attach button, pending confirmation. */
   let pendingFiles = $state<File[]>([]);
+
+  /* ---------- bot keyboards, commands and autocomplete ---------- */
+
+  /** The keyboard the chat's bot last attached, null while it is unknown. */
+  let replyKeyboard = $state<ReplyKeyboardState | null>(null);
+  let replyKeyboardOpen = $state(false);
+  /** The force-reply already honoured, so it does not re-arm on every update. */
+  let forcedReplyMid = 0;
+  /** `row:column` of the callback button waiting on the bot. */
+  let callbackBusyKey = $state('');
+  /** A bot link the user has to approve before it opens. */
+  let linkPrompt = $state<{text: string; confirm: string; onconfirm: () => void} | null>(null);
+  let botState = $state<BotChatState | null>(null);
+  let botBusy = $state(false);
+  let botCommands: BotCommandItem[] = [];
+  /** Which trigger opened the suggestion strip, null when it is closed. */
+  let suggestKind = $state<'command' | 'mention' | 'hashtag' | null>(null);
+  let suggestItems = $state<SuggestionItem[]>([]);
+  let suggestIndex = $state(0);
+  /** Range in the draft the picked suggestion replaces. */
+  let suggestFrom = 0;
+  let suggestTo = 0;
+  /** Guards a slow lookup against a newer keystroke. */
+  let suggestToken = 0;
 
   /** Media messages in order — the lightbox pages through these. */
   const mediaMessages = $derived(
@@ -767,62 +751,22 @@
     }
   }
 
-  /**
-   * A channel post's comments live in the linked discussion group, so opening
-   * them swaps the peer as well as the thread. The channel is remembered so the
-   * back button returns to the post instead of the chat list.
-   */
   async function openComments(message: MessageItem) {
     if (activePeerId === null) return;
     try {
-      const thread = await openCommentThread(activePeerId, message.mid);
-      if (!thread) {
+      const discussion = await openDiscussion(activePeerId, message.mid);
+      if (!discussion) {
         error = 'No discussion for this post';
         return;
       }
-
-      commentsOrigin = {peerId: activePeerId, title: activeTitle};
-      activePeerId = thread.peerId;
-      activeThreadId = thread.threadId;
+      activePeerId = discussion.peerId;
+      activeThreadId = discussion.threadId;
       activeTitle = 'Comments';
-      threadKind = 'comments';
-      threadCommentCount = thread.count || message.repliesCount;
       activeIsForum = false;
-      // The discussion group is a megagroup: ticks, not view counts, and the
-      // composer must be live so a comment can actually be posted.
-      activeIsChannel = false;
-      activeIsUser = false;
-      activeIsSelf = false;
-      activeRestriction = '';
-      topicOpen = true;
-      replyTo = null;
-      await openHistory(thread.peerId, thread.threadId, thread.count, thread.readMaxId);
+      await openHistory(discussion.peerId, discussion.threadId);
     } catch (err: any) {
       error = errorOf(err, 'Could not open comments');
     }
-  }
-
-  /** Back out of a comment thread to the channel post it belongs to. */
-  async function leaveCommentThread() {
-    const origin = commentsOrigin;
-    commentsOrigin = null;
-    threadKind = '';
-    threadCommentCount = 0;
-    activeThreadId = undefined;
-    if (!origin) {
-      activePeerId = null;
-      return;
-    }
-
-    const dialog = dialogs.find((d) => d.peerId === origin.peerId);
-    if (dialog) {
-      await openChat(dialog);
-      return;
-    }
-
-    activePeerId = origin.peerId;
-    activeTitle = origin.title;
-    await openHistory(origin.peerId);
   }
 
   /* ---------- jumping to a message ---------- */
@@ -1288,6 +1232,52 @@
     };
   }
 
+  /**
+   * A bot can label a link button anything, so anywhere outside Telegram's own
+   * domains gets a confirmation carrying the real destination.
+   */
+  function openBotLink(url: string) {
+    if (!url) return;
+    if (!needsUrlConfirmation(url)) {
+      followLink(url);
+      return;
+    }
+
+    linkPrompt = {
+      text: `Open ${hostOf(url) || url}? This link was sent by a bot.`,
+      confirm: 'Open link',
+      onconfirm: () => followLink(url)
+    };
+  }
+
+  /** `keyboardButtonUrlAuth`: ask the server, then the user, then log in. */
+  async function pressLoginButton(message: MessageItem, button: MessageButton) {
+    if (activePeerId === null) return;
+    const peerId = activePeerId;
+
+    const prompt = await requestUrlAuth(peerId, message.mid, button.buttonId, button.url);
+    if (prompt.kind === 'open') {
+      openBotLink(prompt.url);
+      return;
+    }
+
+    const who = prompt.botTitle ? ` and let ${prompt.botTitle} know who you are` : '';
+    linkPrompt = {
+      text: `Log in to ${hostOf(button.url) || button.url}${who}?`,
+      confirm: 'Log in',
+      onconfirm: async () => {
+        const url = await acceptUrlAuth(
+          peerId,
+          message.mid,
+          button.buttonId,
+          button.url,
+          prompt.requestWriteAccess
+        );
+        followLink(url);
+      }
+    };
+  }
+
   async function pressButton(message: MessageItem, button: MessageButton) {
     if (activePeerId === null) return;
     // Keyboards belong to the bot that sent the message.
@@ -1295,7 +1285,42 @@
 
     switch (button.kind) {
       case 'url':
-        if (button.url) followLink(button.url);
+        openBotLink(button.url);
+        break;
+
+      case 'loginUrl':
+        await pressLoginButton(message, button);
+        break;
+
+      case 'userProfile':
+        if (button.userId) profilePeerId = button.userId;
+        break;
+
+      case 'buy':
+        error = 'Payments are not supported in this client yet.';
+        break;
+
+      case 'game':
+      case 'requestPhone':
+      case 'requestGeo':
+      case 'requestPoll':
+        try {
+          callbackBusyKey = `${button.row}:${button.column}`;
+          const answer = await pressCallbackButton(
+            activePeerId,
+            message.mid,
+            button.row,
+            button.column,
+            button.kind === 'game'
+          );
+          if (answer.url) openBotLink(answer.url);
+          else if (answer.message) error = answer.message;
+          else if (button.kind !== 'game') error = 'This button is not supported yet.';
+        } catch (err: any) {
+          error = errorOf(err, 'This button is not supported yet.');
+        } finally {
+          callbackBusyKey = '';
+        }
         break;
 
       case 'webview':
@@ -1321,11 +1346,18 @@
 
       case 'callback':
         try {
+          // The bot can take a moment to answer, so the pressed button says so.
+          callbackBusyKey = `${button.row}:${button.column}`;
           const answer = await pressCallbackButton(activePeerId, message.mid, button.row, button.column);
-          if (answer.url) followLink(answer.url);
-          else if (answer.message) error = answer.message;
+          if (answer.url) openBotLink(answer.url);
+          // An alert is a modal the user must dismiss; a plain answer is a toast.
+          else if (answer.message && answer.alert) {
+            linkPrompt = {text: answer.message, confirm: 'OK', onconfirm: () => {}};
+          } else if (answer.message) error = answer.message;
         } catch (err: any) {
           error = errorOf(err, 'The bot did not answer');
+        } finally {
+          callbackBusyKey = '';
         }
         break;
 
@@ -1358,6 +1390,314 @@
     return peer?.username ?? '';
   }
 
+  /* ---------- reply keyboards ---------- */
+
+  /**
+   * Pull the keyboard tweb has merged for this chat. A `forceReply` arms the
+   * reply bar once — re-arming it on every refresh would fight the user
+   * cancelling it.
+   */
+  async function refreshReplyKeyboard(peerId: number) {
+    const state = await getReplyKeyboard(peerId);
+    if (activePeerId !== peerId) return;
+
+    replyKeyboard = state;
+    if (state.kind !== 'markup') replyKeyboardOpen = false;
+
+    if (state.kind === 'forceReply' && state.mid && forcedReplyMid !== state.mid) {
+      forcedReplyMid = state.mid;
+      const target = messages.find((m) => m.mid === state.mid);
+      if (target) replyTo = target;
+      focusComposer();
+    }
+  }
+
+  $effect(() => {
+    const peerId = activePeerId;
+    replyKeyboard = null;
+    replyKeyboardOpen = false;
+    forcedReplyMid = 0;
+    if (peerId === null) return;
+
+    let cancelled = false;
+    refreshReplyKeyboard(peerId).catch(() => {});
+
+    const off = onReplyKeyboardChange((changed) => {
+      if (!cancelled && changed === activePeerId) refreshReplyKeyboard(changed).catch(() => {});
+    });
+
+    return () => {
+      cancelled = true;
+      off.then((stop) => stop()).catch(() => {});
+    };
+  });
+
+  async function pressReplyKeyboardButton(button: ReplyKeyboardButton) {
+    if (activePeerId === null) return;
+
+    // `single_use` keyboards fold away as soon as one button is pressed.
+    if (replyKeyboard?.singleUse) replyKeyboardOpen = false;
+
+    switch (button.kind) {
+      case 'webview':
+      case 'simpleWebView':
+        miniApp = {
+          botId: activePeerId,
+          peerId: activePeerId,
+          url: button.url,
+          buttonText: button.text,
+          title: button.text,
+          isSimpleWebView: button.kind === 'simpleWebView'
+        };
+        return;
+
+      case 'text':
+        try {
+          await sendMessage(activePeerId, button.text, {threadId: activeThreadId});
+          await scrollToBottom();
+        } catch (err: any) {
+          error = errorOf(err, 'Send failed');
+        }
+        return;
+
+      default:
+        // Contact, location and poll requests need input this client cannot
+        // collect yet; say so rather than sending the label as a message.
+        error = 'This button is not supported in this client yet.';
+    }
+  }
+
+  /* ---------- bot chats: start, stop, clear ---------- */
+
+  $effect(() => {
+    const peerId = activePeerId;
+    botState = null;
+    botCommands = [];
+    if (peerId === null || peerId < 0) return;
+
+    let cancelled = false;
+    const hasMessages = untrack(() => messages.some((m) => !m.service));
+    getBotChatState(peerId, hasMessages).then((state) => {
+      if (!cancelled && activePeerId === peerId) botState = state;
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  });
+
+  async function runBotAction(action: () => Promise<void>) {
+    if (botBusy) return;
+    botBusy = true;
+    try {
+      await action();
+    } catch (err: any) {
+      error = errorOf(err, 'The bot did not respond');
+    } finally {
+      botBusy = false;
+    }
+  }
+
+  function startBotChat() {
+    const peerId = activePeerId;
+    if (peerId === null) return;
+
+    runBotAction(async () => {
+      await startBot(peerId);
+      if (activePeerId === peerId && botState) botState = {...botState, blocked: false, fresh: false};
+    });
+  }
+
+  function stopBotChat() {
+    const peerId = activePeerId;
+    if (peerId === null) return;
+
+    runBotAction(async () => {
+      await setBotBlocked(peerId, true);
+      if (activePeerId === peerId && botState) botState = {...botState, blocked: true};
+    });
+  }
+
+  function clearBotChat() {
+    const peerId = activePeerId;
+    if (peerId === null) return;
+
+    runBotAction(async () => {
+      await clearBotHistory(peerId);
+      if (activePeerId !== peerId) return;
+      messages = [];
+      if (botState) botState = {...botState, fresh: true};
+    });
+  }
+
+  /* ---------- `/`, `@` and `#` autocomplete ---------- */
+
+  /** Text each suggestion drops into the draft, parallel to `suggestItems`. */
+  let suggestValues: string[] = [];
+
+  function closeSuggestions() {
+    suggestKind = null;
+    suggestItems = [];
+    suggestValues = [];
+    suggestIndex = 0;
+  }
+
+  /**
+   * Reads the token the caret sits in and fills the suggestion strip from it.
+   * Only one strip is ever open, so it cannot fight the inline-bot results for
+   * Enter or the arrow keys.
+   */
+  async function updateSuggestions() {
+    const peerId = activePeerId;
+    if (peerId === null || editing) {
+      closeSuggestions();
+      return;
+    }
+
+    const caret = composer?.selectionStart ?? draft.length;
+    const before = draft.slice(0, caret);
+    const match = /(?:^|\s)([@#/])([^\s@#/]*)$/.exec(before);
+    if (!match) {
+      closeSuggestions();
+      return;
+    }
+
+    const [, trigger, query] = match;
+    const from = caret - query.length - 1;
+
+    // A command is only a command at the very start of a message, and a leading
+    // "@bot " is the inline-bot syntax, which owns its own result list.
+    if (trigger === '/' && from !== 0) {
+      closeSuggestions();
+      return;
+    }
+    if (trigger === '@' && from === 0 && inlineBot) {
+      closeSuggestions();
+      return;
+    }
+
+    const token = ++suggestToken;
+    let items: SuggestionItem[] = [];
+    let values: string[] = [];
+
+    if (trigger === '/') {
+      if (!botCommands.length) botCommands = await loadBotCommands(peerId);
+      const found = filterBotCommands(botCommands, query);
+      items = found.map((command) => ({
+        key: `${command.botId}:${command.command}`,
+        title: '/' + command.command + command.suffix,
+        subtitle: command.description
+      }));
+      values = found.map((command) => `/${command.command}${command.suffix} `);
+    } else if (trigger === '@') {
+      const mentions = (await searchMentions(peerId, query, activeThreadId))
+      .filter((mention) => mention.username);
+      items = mentions.map((mention) => ({
+        key: String(mention.peerId),
+        title: '@' + mention.username,
+        subtitle: mention.title
+      }));
+      values = mentions.map((mention) => `@${mention.username} `);
+    } else {
+      const tags = searchHashtags(query, messages.map((m) => m.text));
+      items = tags.map((tag) => ({key: tag, title: '#' + tag, subtitle: ''}));
+      values = tags.map((tag) => `#${tag} `);
+    }
+
+    if (token !== suggestToken || activePeerId !== peerId) return;
+
+    if (!items.length) {
+      closeSuggestions();
+      return;
+    }
+
+    suggestKind = trigger === '/' ? 'command' : trigger === '@' ? 'mention' : 'hashtag';
+    suggestItems = items;
+    suggestValues = values;
+    suggestIndex = 0;
+    suggestFrom = from;
+    suggestTo = caret;
+  }
+
+  /** The commands button next to the composer: the whole list, unfiltered. */
+  async function openCommandList() {
+    if (activePeerId === null) return;
+    if (suggestKind === 'command') {
+      closeSuggestions();
+      return;
+    }
+
+    if (!botCommands.length) botCommands = await loadBotCommands(activePeerId);
+    if (!botCommands.length) return;
+
+    const caret = composer?.selectionStart ?? draft.length;
+    suggestKind = 'command';
+    suggestItems = botCommands.map((command) => ({
+      key: `${command.botId}:${command.command}`,
+      title: '/' + command.command + command.suffix,
+      subtitle: command.description
+    }));
+    suggestValues = botCommands.map((command) => `/${command.command}${command.suffix} `);
+    suggestIndex = 0;
+    // Picking from the button inserts at the caret rather than replacing a token.
+    suggestFrom = caret;
+    suggestTo = caret;
+    composer?.focus();
+  }
+
+  async function applySuggestion(index: number) {
+    const value = suggestValues[index];
+    if (value === undefined) return;
+
+    const wasCommand = suggestKind === 'command';
+    const before = draft.slice(0, suggestFrom);
+    const after = draft.slice(suggestTo);
+    draft = before + value + after;
+    closeSuggestions();
+
+    // A command picked on its own is what the user meant to send, the way the
+    // other clients treat the command list.
+    if (wasCommand && !before.trim() && !after.trim()) {
+      await submit(new Event('submit'));
+      return;
+    }
+
+    await tick();
+    const caret = (before + value).length;
+    composer?.focus();
+    composer?.setSelectionRange(caret, caret);
+    onDraftInput();
+  }
+
+  /** Arrow keys, Enter and Tab belong to the strip while it is open. */
+  function onSuggestionKey(e: KeyboardEvent): boolean {
+    if (!suggestKind || !suggestItems.length || e.isComposing) return false;
+
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const step = e.key === 'ArrowDown' ? 1 : -1;
+      suggestIndex = (suggestIndex + step + suggestItems.length) % suggestItems.length;
+      return true;
+    }
+
+    if (e.key === 'Enter' || e.key === 'Tab') {
+      if (e.shiftKey || e.ctrlKey || e.metaKey) return false;
+      e.preventDefault();
+      applySuggestion(suggestIndex);
+      return true;
+    }
+
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      // The window handler would otherwise close the chat behind the strip.
+      e.stopPropagation();
+      closeSuggestions();
+      return true;
+    }
+
+    return false;
+  }
+
   /**
    * Whether this chat's bot pins a web app next to the composer. Fetched after
    * the chat has rendered so it never delays opening one.
@@ -1382,6 +1722,9 @@
    * the desktop client. Ctrl+Up from nothing selects the newest message.
    */
   function onComposerKey(e: KeyboardEvent) {
+    // An open suggestion strip owns the arrows and Enter first.
+    if (onSuggestionKey(e)) return;
+
     // Enter sends; Shift+Enter (or Ctrl/Cmd+Enter) inserts a newline. isComposing
     // guards IME candidate selection, which also arrives as Enter.
     if (e.key === 'Enter' && !e.isComposing) {
@@ -1451,7 +1794,6 @@
       miniApp ||
       showSettings ||
       folderEditorOpen ||
-      topicEditor ||
       newChatOpen ||
       editingFolder ||
       forwarding ||
@@ -1464,7 +1806,6 @@
 
     if (messageMenu) messageMenu = null;
     else if (menuFor) menuFor = null;
-    else if (topicMenuFor !== null) topicMenuFor = null;
     else if (reactingTo !== null) reactingTo = null;
     else if (readByFor) readByFor = null;
     else if (selecting) {
@@ -1503,6 +1844,7 @@
   function onDraftInput() {
     resizeComposer();
     onInlineInput();
+    updateSuggestions().catch(() => {});
     if (activePeerId === null || editing) return;
 
     // The server expires a typing status after ~6s, so keep re-sending while
@@ -1551,110 +1893,19 @@
     sponsored = null;
 
     topicOpen = false;
-    topicMenuFor = null;
-    threadKind = '';
-    threadCommentCount = 0;
-    commentsOrigin = null;
-    savedDialogs = [];
-    savedTag = '';
 
     if (activeRestriction) return;
 
-    // Saved Messages can be split per original sender. The preference is local,
-    // so the split list is only fetched when it is actually the active view.
-    if (dialog.isSelf) {
-      savedAsChats = isSavedViewedAsChats();
-      if (savedAsChats) {
-        await refreshSavedDialogs();
-        return;
-      }
-    }
-
     if (dialog.isForum) {
-      forumAsMessages = await isViewingForumAsMessages(dialog.peerId);
-      if (forumAsMessages) {
-        // "View as messages": one flat timeline, no topic list in between.
-        topicOpen = true;
-        await openHistory(dialog.peerId, undefined, dialog.unread, dialog.readMaxId);
-        return;
+      try {
+        topics = await loadTopics(dialog.peerId);
+      } catch (err: any) {
+        error = errorOf(err, 'Failed to load topics');
       }
-
-      canManageForum = await canCreateTopic(dialog.peerId);
-      await refreshTopics();
       return;
     }
 
     await openHistory(dialog.peerId, undefined, dialog.unread, dialog.readMaxId);
-  }
-
-  /* ---------- forum topics ---------- */
-
-  async function refreshTopics() {
-    if (activePeerId === null) return;
-    const peerId = activePeerId;
-    try {
-      const loaded = await loadTopics(peerId);
-      if (activePeerId !== peerId) return;
-      // Pinned topics sit above the rest, hidden ones drop out entirely — the
-      // General topic is hidden rather than deleted.
-      topics = loaded
-        .filter((topic) => !topic.hidden)
-        .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.date - a.date);
-    } catch (err: any) {
-      error = errorOf(err, 'Failed to load topics');
-    }
-  }
-
-  async function runTopicAction(action: () => Promise<unknown>) {
-    topicMenuFor = null;
-    try {
-      await action();
-      await refreshTopics();
-    } catch (err: any) {
-      error = errorOf(err, 'Topic action failed');
-    }
-  }
-
-  async function removeTopic(topic: TopicItem) {
-    if (!confirm(`Delete the topic "${topic.title}" and all its messages?`)) return;
-    await runTopicAction(() => deleteTopic(activePeerId!, topic.threadId));
-    if (activeThreadId === topic.threadId) backToChats();
-  }
-
-  async function onTopicSaved(threadId: number) {
-    const creating = !topicEditor?.topic;
-    topicEditor = null;
-    await refreshTopics();
-    if (creating) {
-      const created = topics.find((topic) => topic.threadId === threadId);
-      if (created) await openTopic(created);
-    }
-  }
-
-  async function toggleForumAsMessages() {
-    if (activePeerId === null) return;
-    const peerId = activePeerId;
-    const next = !forumAsMessages;
-    try {
-      await setViewForumAsMessages(peerId, next);
-      forumAsMessages = next;
-      const dialog = dialogs.find((d) => d.peerId === peerId);
-      if (next) {
-        topicOpen = true;
-        activeThreadId = undefined;
-        activeTitle = dialog?.title ?? activeTitle;
-        threadKind = '';
-        await openHistory(peerId, undefined, dialog?.unread ?? 0, dialog?.readMaxId ?? 0);
-      } else {
-        topicOpen = false;
-        activeThreadId = undefined;
-        messages = [];
-        canManageForum = await canCreateTopic(peerId);
-        await refreshTopics();
-      }
-    } catch (err: any) {
-      error = errorOf(err, 'Could not switch the forum view');
-    }
   }
 
   async function openTopic(topic: TopicItem) {
@@ -1663,100 +1914,10 @@
     // anything posted outside a topic unreachable.
     const threadId = topic.threadId || undefined;
     topicOpen = true;
-    topicMenuFor = null;
-    threadKind = threadId === undefined ? '' : 'topic';
     activeThreadId = threadId;
     activeTitle = threadId === undefined ? (dialogs.find((d) => d.peerId === activePeerId)?.title ?? 'All messages') : topic.title;
     replyTo = null;
     await openHistory(activePeerId!, threadId, topic.unread, 0);
-  }
-
-  /* ---------- Saved Messages sub-dialogs ---------- */
-
-  async function refreshSavedDialogs() {
-    const peerId = activePeerId;
-    try {
-      const loaded = await loadSavedDialogs();
-      if (activePeerId !== peerId) return;
-      savedDialogs = loaded.sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.date - a.date);
-    } catch (err: any) {
-      error = errorOf(err, 'Failed to load saved chats');
-    }
-  }
-
-  async function toggleSavedAsChats() {
-    const next = !savedAsChats;
-    savedAsChats = next;
-    setSavedViewedAsChats(next);
-    savedTag = '';
-    if (next) {
-      topicOpen = false;
-      threadKind = '';
-      activeThreadId = undefined;
-      messages = [];
-      await refreshSavedDialogs();
-    } else {
-      savedDialogs = [];
-      await openSavedTimeline();
-    }
-  }
-
-  /** All of Saved Messages as one timeline, the default view. */
-  async function openSavedTimeline() {
-    if (activePeerId === null) return;
-    topicOpen = true;
-    threadKind = '';
-    activeThreadId = undefined;
-    activeTitle = 'Saved Messages';
-    replyTo = null;
-    await openHistory(activePeerId, undefined, 0, 0);
-  }
-
-  /**
-   * One sender's saved messages. Their peer id doubles as the thread id the
-   * saved timeline is filtered by.
-   */
-  async function openSavedDialog(saved: SavedDialogItem) {
-    if (activePeerId === null) return;
-    showSidebarOnMobile = false;
-    topicOpen = true;
-    threadKind = 'saved';
-    savedTag = '';
-    activeThreadId = saved.savedPeerId;
-    activeTitle = saved.title;
-    replyTo = null;
-    await openHistory(activePeerId, saved.savedPeerId, 0, 0);
-  }
-
-  /** Reload the open Saved view with a tag filter applied (or cleared). */
-  async function applySavedTag(emoticon: string) {
-    savedTag = emoticon;
-    if (activePeerId === null) return;
-    loadingHistory = true;
-    try {
-      messages = await loadHistory(activePeerId, {
-        threadId: activeThreadId,
-        savedReaction: emoticon || undefined
-      });
-      await tick();
-      await scrollToBottom();
-    } catch (err: any) {
-      error = errorOf(err, 'Could not filter by tag');
-    } finally {
-      loadingHistory = false;
-    }
-  }
-
-  /** A saved tag is a reaction on your own message — same toggle semantics. */
-  async function tagMessage(message: MessageItem, emoticon: string) {
-    reactingTo = null;
-    try {
-      await toggleSavedTag(message.mid, emoticon);
-      const updated = await getMessage(activePeerId!, message.mid);
-      if (updated) messages = messages.map((m) => (m.mid === message.mid ? updated : m));
-    } catch (err: any) {
-      error = errorOf(err, 'Could not tag the message');
-    }
   }
 
   async function openHistory(peerId: number, threadId?: number, unread = 0, readMaxId = 0) {
@@ -1897,34 +2058,16 @@
 
   function backToChats() {
     showSidebarOnMobile = true;
-
-    // A comment thread lives in a different peer than the post it belongs to,
-    // so leaving it is a navigation, not just a thread reset.
-    if (threadKind === 'comments') {
-      leaveCommentThread();
-      return;
-    }
-
-    // "View as messages" has no list to fall back to: the forum's timeline is
-    // the whole view, so backing out leaves the chat entirely.
-    if (topicOpen && !(activeIsForum && forumAsMessages) && !(activeIsSelf && !savedAsChats)) {
+    if (topicOpen) {
       topicOpen = false;
-      threadKind = '';
-      threadCommentCount = 0;
-      savedTag = '';
       activeThreadId = undefined;
       messages = [];
       const dialog = dialogs.find((d) => d.peerId === activePeerId);
       activeTitle = dialog?.title ?? '';
       return;
     }
-
     activePeerId = null;
     topics = [];
-    savedDialogs = [];
-    topicOpen = false;
-    threadKind = '';
-    savedTag = '';
   }
 
   function isScrolledToBottom() {
@@ -2038,6 +2181,10 @@
     const replyToMsgId = replyTo?.mid;
     draft = '';
     replyTo = null;
+    closeSuggestions();
+    // The composer keeps its own recent-hashtag list; this is where it grows.
+    rememberHashtags(text);
+    if (botState?.fresh) botState = {...botState, fresh: false};
 
     try {
       await sendMessage(activePeerId, text, {replyToMsgId, threadId: activeThreadId});
@@ -2064,47 +2211,16 @@
   <aside>
     <header>
       <button class="icon-button settings-open" onclick={() => (showSettings = true)} aria-label="Settings"><Glyph name="settings" /></button>
-      {#if sublistOpen}
-        <button
-          class="back"
-          onclick={() => {
-            activePeerId = null;
-            topics = [];
-            savedDialogs = [];
-          }}
-          aria-label="Back">←</button
-        >
+      {#if activeIsForum && activePeerId !== null}
+        <button class="back" onclick={backToChats} aria-label="Back">←</button>
         <span>{dialogs.find((d) => d.peerId === activePeerId)?.title ?? 'Topics'}</span>
-        {#if topicListOpen}
-          {#if canManageForum}
-            <button
-              class="icon-button"
-              onclick={() => (topicEditor = {topic: null})}
-              aria-label="New topic"
-              title="New topic">＋</button
-            >
-          {/if}
-          <button
-            class="icon-button"
-            onclick={toggleForumAsMessages}
-            aria-label="View as messages"
-            title="View as messages">≡</button
-          >
-        {:else}
-          <button
-            class="icon-button"
-            onclick={toggleSavedAsChats}
-            aria-label="View as messages"
-            title="View as messages">≡</button
-          >
-        {/if}
       {:else}
         <span>Chats</span>
         <button class="icon-button new-chat" onclick={openNewChat} aria-label="New group or channel" title="New group or channel"><Glyph name="edit" /></button>
       {/if}
     </header>
 
-    {#if !sublistOpen}
+    {#if !(activeIsForum && activePeerId !== null)}
       <div class="search">
         <input
           bind:this={searchBox}
@@ -2137,102 +2253,26 @@
     <div class="list">
       {#if loadingChats || searching}
         <p class="muted">Loading chats…</p>
-      {:else if topicListOpen}
-        <button
-          class="row-button"
-          class:active={activeThreadId === undefined && topicOpen}
-          onclick={() => openTopic(allMessagesRow)}
-        >
-          <span class="topic-glyph">≡</span>
-          <span class="meta">
-            <span class="row"><span class="title">All messages</span></span>
-            <span class="row"><span class="preview">Everything in this chat</span></span>
-          </span>
-        </button>
-
-        {#each topics as topic (topic.threadId)}
-          <button
-            class="row-button"
-            class:active={topic.threadId === activeThreadId}
-            onclick={() => openTopic(topic)}
-            oncontextmenu={(e) => {
-              e.preventDefault();
-              topicMenuFor = topicMenuFor === topic.threadId ? null : topic.threadId;
-            }}
-          >
-            <TopicIcon
-              iconEmojiId={topic.iconEmojiId}
-              iconColor={topic.iconColor}
-              title={topic.title}
-              isGeneral={topic.isGeneral}
-            />
-            <span class="meta">
-              <span class="row">
-                <span class="title">
-                  {#if topic.pinned}
-                    <span class="flag" title="Pinned"><Glyph name="pin" size={13} /></span>
-                  {/if}
-                  {#if topic.closed}<span class="flag" title="Closed">🔒</span>{/if}
-                  {topic.title}
-                </span>
-                <span class="time">{timeOf(topic.date)}</span>
-              </span>
-              <span class="row">
-                <span class="preview">{topic.preview}</span>
-                {#if topic.unread}<span class="badge">{topic.unread}</span>{/if}
-              </span>
-            </span>
-          </button>
-
-          {#if topicMenuFor === topic.threadId && topic.canManage}
-            <div class="menu">
-              <button onclick={() => (topicEditor = {topic})}>Edit</button>
-              <button onclick={() => runTopicAction(() => toggleTopicPin(activePeerId!, topic.threadId))}>
-                {topic.pinned ? 'Unpin' : 'Pin'}
-              </button>
-              <button
-                onclick={() =>
-                  runTopicAction(() => setTopicClosed(activePeerId!, topic.threadId, !topic.closed))}
-              >
-                {topic.closed ? 'Reopen' : 'Close'}
-              </button>
-              {#if topic.isGeneral}
-                <!-- General cannot be deleted, only folded away. -->
-                <button onclick={() => runTopicAction(() => setTopicHidden(activePeerId!, topic.threadId, true))}>
-                  Hide
-                </button>
-              {:else}
-                <button class="danger" onclick={() => removeTopic(topic)}>Delete</button>
-              {/if}
-            </div>
-          {/if}
-        {/each}
-      {:else if savedListOpen}
-        {#if !savedDialogs.length}
-          <p class="muted">Nothing saved yet.</p>
-        {:else}
-          {#each savedDialogs as saved (saved.savedPeerId)}
+      {:else if activeIsForum && activePeerId !== null}
+        {#each [{threadId: 0, title: 'All messages', preview: 'Everything in this chat', date: 0, unread: 0}, ...topics] as topic (topic.threadId)}
             <button
               class="row-button"
-              class:active={saved.savedPeerId === activeThreadId}
-              onclick={() => openSavedDialog(saved)}
+              class:active={(topic.threadId || undefined) === activeThreadId}
+              onclick={() => openTopic(topic)}
             >
-              <Avatar peerId={saved.savedPeerId} title={saved.title} />
+              <span class="topic-glyph">{topic.threadId ? '#' : '≡'}</span>
               <span class="meta">
                 <span class="row">
-                  <span class="title">
-                    {#if saved.pinned}
-                      <span class="flag" title="Pinned"><Glyph name="pin" size={13} /></span>
-                    {/if}
-                    {saved.title}
-                  </span>
-                  <span class="time">{timeOf(saved.date)}</span>
+                  <span class="title">{topic.title}</span>
+                  <span class="time">{timeOf(topic.date)}</span>
                 </span>
-                <span class="row"><span class="preview">{saved.preview}</span></span>
+                <span class="row">
+                  <span class="preview">{topic.preview}</span>
+                  {#if topic.unread}<span class="badge">{topic.unread}</span>{/if}
+                </span>
               </span>
             </button>
-          {/each}
-        {/if}
+        {/each}
       {:else if !dialogs.length}
         <p class="muted">No chats yet.</p>
       {:else}
@@ -2283,34 +2323,6 @@
               >
                 {dialog.unread ? 'Mark as read' : 'Mark as unread'}
               </button>
-              {#if dialog.isSelf}
-                <button
-                  onclick={() => {
-                    menuFor = null;
-                    // Toggling the open chat has to redraw it; toggling a chat
-                    // that is not open only needs the stored preference.
-                    if (activePeerId === dialog.peerId) toggleSavedAsChats();
-                    else setSavedViewedAsChats(!isSavedViewedAsChats());
-                  }}
-                >
-                  {(activePeerId === dialog.peerId ? savedAsChats : isSavedViewedAsChats())
-                    ? 'View as messages'
-                    : 'View as chats'}
-                </button>
-              {/if}
-              {#if dialog.isForum}
-                <button
-                  onclick={() => {
-                    menuFor = null;
-                    if (activePeerId === dialog.peerId) toggleForumAsMessages();
-                    else openChat(dialog).then(toggleForumAsMessages);
-                  }}
-                >
-                  {forumAsMessages && activePeerId === dialog.peerId
-                    ? 'View as topics'
-                    : 'View as messages'}
-                </button>
-              {/if}
               <button class="danger" onclick={() => runDialogAction(() => leaveOrDelete(dialog.peerId))}>
                 Delete / Leave
               </button>
@@ -2331,11 +2343,9 @@
     ondrop={onDrop}
     aria-label="Conversation"
   >
-    {#if activePeerId === null || (sublistOpen && !topicOpen)}
+    {#if activePeerId === null || (activeIsForum && !topicOpen)}
       <div class="empty">
-        <p class="muted">
-          {topicListOpen ? 'Select a topic' : savedListOpen ? 'Select a saved chat' : 'Select a chat'}
-        </p>
+        <p class="muted">{activeIsForum ? 'Select a topic' : 'Select a chat'}</p>
         <!-- Same disclosure the sign-in card carries; required for a
              third-party client by https://core.telegram.org/api/terms. -->
         <p class="disclosure">
@@ -2355,19 +2365,9 @@
       </div>
     {:else}
       <header>
-        <button class="back-mobile" onclick={backToChats} aria-label="Back">←</button>
+        <button class="back-mobile" onclick={() => (showSidebarOnMobile = true)} aria-label="Back">←</button>
         <button class="title-button" onclick={() => (showInfo = !showInfo)}>{activeTitle}</button>
-        {#if threadKind === 'comments'}
-          <button class="thread-tag thread-back" onclick={leaveCommentThread} title="Back to the post">
-            {threadCommentCount
-              ? `${threadCommentCount} ${threadCommentCount === 1 ? 'comment' : 'comments'}`
-              : 'comments'}
-          </button>
-        {:else if threadKind === 'topic'}
-          <span class="thread-tag">topic</span>
-        {:else if threadKind === 'saved'}
-          <span class="thread-tag">saved</span>
-        {/if}
+        {#if activeThreadId !== undefined}<span class="thread-tag">topic</span>{/if}
         <span class="presence">
           {typingNames.length
             ? `${typingNames.join(', ')} ${typingNames.length > 1 ? 'are' : 'is'} typing…`
@@ -2378,14 +2378,6 @@
         {/if}
         <button class="icon-button" onclick={() => (chatSearchOpen = !chatSearchOpen)} aria-label="Search messages"><Glyph name="search" /></button>
       </header>
-
-      {#if activeIsSelf}
-        <SavedTags
-          savedPeerId={threadKind === 'saved' ? activeThreadId : undefined}
-          active={savedTag}
-          onselect={applySavedTag}
-        />
-      {/if}
 
       {#if chatSearchOpen}
         <div class="chat-search">
@@ -2666,24 +2658,11 @@
                 {/if}
 
                 {#if message.buttons.length}
-                  <div class="keyboard">
-                    {#each message.buttons as row, rowIndex (rowIndex)}
-                      <div class="keyboard-row">
-                        {#each row as button (button.column)}
-                          <button
-                            class="keyboard-btn"
-                            disabled={button.kind === 'unsupported'}
-                            onclick={() => pressButton(message, button)}
-                          >
-                            {#if button.kind === 'webview' || button.kind === 'simpleWebView'}
-                              <span class="kb-icon">▸</span>
-                            {/if}
-                            {button.text}
-                          </button>
-                        {/each}
-                      </div>
-                    {/each}
-                  </div>
+                  <InlineKeyboard
+                    buttons={message.buttons}
+                    busyKey={callbackBusyKey}
+                    onpress={(button) => pressButton(message, button)}
+                  />
                 {/if}
 
                 {#if message.reactions.length}
@@ -2703,12 +2682,7 @@
                 {#if reactingTo === message.mid}
                   <span class="palette">
                     {#each reactionPalette as emoticon}
-                      <!-- In Saved Messages a reaction is a tag, not a reaction:
-                           same call, but it feeds the tag filter above. -->
-                      <button
-                        onclick={() =>
-                          activeIsSelf ? tagMessage(message, emoticon) : react(message, emoticon)}
-                      >{emoticon}</button>
+                      <button onclick={() => react(message, emoticon)}>{emoticon}</button>
                     {/each}
                   </span>
                 {/if}
@@ -2721,18 +2695,8 @@
                   </span>
                 {/if}
 
-                {#if activeIsChannel && threadKind !== 'comments'}
-                  <!-- Channel posts get the full comments bar with the newest
-                       commenters' faces, the way the official clients show it. -->
-                  <CommentsButton
-                    count={message.repliesCount}
-                    commenters={message.commenters}
-                    onopen={() => openComments(message)}
-                  />
-                {/if}
-
                 <span class="stamp">
-                  {#if message.repliesCount && !activeIsChannel}
+                  {#if message.repliesCount}
                     <button class="reply-btn" onclick={() => openComments(message)}>
                       {message.repliesCount} 💬
                     </button>
@@ -2845,12 +2809,57 @@
         </div>
       {/if}
 
+      {#if suggestKind && suggestItems.length}
+        <Suggestions
+          items={suggestItems}
+          active={suggestIndex}
+          label={suggestKind === 'command' ? 'Bot commands' : suggestKind === 'mention' ? 'Members' : 'Hashtags'}
+          onpick={applySuggestion}
+        />
+      {/if}
+
+      {#if botState?.isBot}
+        <BotBar
+          bot={botState}
+          busy={botBusy}
+          onstart={startBotChat}
+          onstop={stopBotChat}
+          onrestart={startBotChat}
+          onclear={clearBotChat}
+        />
+      {/if}
+
+      {#if replyKeyboardOpen && replyKeyboard?.kind === 'markup'}
+        <ReplyKeyboard
+          keyboard={replyKeyboard}
+          onpress={pressReplyKeyboardButton}
+          onclose={() => (replyKeyboardOpen = false)}
+        />
+      {:else}
       <form onsubmit={submit}>
         {#if showPicker}
           <Picker
             onemoji={(emoji) => (draft += emoji)}
             ondocument={pickDocument}
           />
+        {/if}
+        {#if replyKeyboard?.kind === 'markup'}
+          <button
+            type="button"
+            class="attach"
+            onclick={() => (replyKeyboardOpen = true)}
+            title="Show the bot keyboard"
+            aria-label="Show the bot keyboard"
+          >⌨</button>
+        {/if}
+        {#if botState?.hasCommands}
+          <button
+            type="button"
+            class="attach bot-commands"
+            onclick={openCommandList}
+            title="Bot commands"
+            aria-label="Bot commands"
+          >/</button>
         {/if}
         {#if botMenuButton}
           <button
@@ -2883,17 +2892,19 @@
           onchange={(e) => attach((e.currentTarget as HTMLInputElement).files)}
         />
         <textarea
-          placeholder="Message"
+          placeholder={replyKeyboard?.placeholder || 'Message'}
           rows="1"
           bind:this={composer}
           bind:value={draft}
           oninput={onDraftInput}
           onkeydown={onComposerKey}
+          onclick={() => updateSuggestions()}
         ></textarea>
         <button type="submit" disabled={!draft.trim()} aria-label={editing ? 'Save' : 'Send'}>
           <Glyph name={editing ? 'check' : 'send'} />
         </button>
       </form>
+      {/if}
     {/if}
   </section>
 
@@ -2983,6 +2994,31 @@
   </div>
 {/if}
 
+{#if linkPrompt}
+  <div class="reactors-backdrop" onclick={() => (linkPrompt = null)} role="presentation">
+    <div
+      class="reactors-dialog bot-prompt"
+      onclick={(event) => event.stopPropagation()}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Bot request"
+    >
+      <p class="bot-prompt-text">{linkPrompt.text}</p>
+      <div class="bot-prompt-actions">
+        <button class="bot-prompt-cancel" onclick={() => (linkPrompt = null)}>Cancel</button>
+        <button
+          class="bot-prompt-ok"
+          onclick={() => {
+            const prompt = linkPrompt;
+            linkPrompt = null;
+            prompt?.onconfirm();
+          }}
+        >{linkPrompt.confirm}</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
 {#if messageMenu}
   {@const menuMessage = messages.find((m) => m.mid === messageMenu!.mid)}
   <div class="menu-backdrop" onclick={() => (messageMenu = null)} role="presentation"></div>
@@ -3029,15 +3065,6 @@
     dialogs={allDialogs}
     onclose={() => (folderEditorOpen = false)}
     onsaved={onFolderSaved}
-  />
-{/if}
-
-{#if topicEditor && activePeerId !== null}
-  <TopicEditor
-    peerId={activePeerId}
-    topic={topicEditor.topic}
-    onclose={() => (topicEditor = null)}
-    onsaved={onTopicSaved}
   />
 {/if}
 
@@ -3120,17 +3147,6 @@
     border: 1px solid var(--border);
     border-radius: 999px;
     padding: 1px 8px;
-  }
-
-  .thread-back {
-    background: none;
-    cursor: pointer;
-    font-family: inherit;
-  }
-
-  .thread-back:hover {
-    color: var(--accent);
-    border-color: var(--accent);
   }
 
   .list {
@@ -3671,41 +3687,43 @@
     font-size: 16px;
   }
 
-  .keyboard {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    margin-top: 6px;
+  .bot-commands {
+    font-weight: 700;
+    font-size: 18px;
+    line-height: 1;
   }
 
-  .keyboard-row {
-    display: flex;
-    gap: 4px;
+  .bot-prompt {
+    padding: 18px;
   }
 
-  .keyboard-btn {
-    flex: 1;
-    padding: 8px 10px;
+  .bot-prompt-text {
+    margin: 0 0 16px;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+  }
+
+  .bot-prompt-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  .bot-prompt-cancel,
+  .bot-prompt-ok {
+    padding: 8px 14px;
     border: 1px solid var(--border);
     border-radius: 10px;
     background: var(--bg-elevated);
     color: var(--text);
-    font-size: 13px;
+    font: inherit;
     cursor: pointer;
   }
 
-  .keyboard-btn:hover:not(:disabled) {
-    border-color: var(--accent);
-  }
-
-  .keyboard-btn:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
-
-  .kb-icon {
-    color: var(--accent);
-    margin-right: 4px;
+  .bot-prompt-ok {
+    border-color: transparent;
+    background: var(--accent);
+    color: #fff;
   }
 
   .inline-switch {
