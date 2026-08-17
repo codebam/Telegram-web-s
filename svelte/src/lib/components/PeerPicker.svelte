@@ -1,4 +1,6 @@
 <script lang="ts">
+  import type {Snippet} from 'svelte';
+
   import Avatar from './Avatar.svelte';
   import type {DialogItem} from '$lib/telegram/chats';
 
@@ -6,13 +8,29 @@
     title,
     dialogs,
     onpick,
-    onclose
+    onclose,
+    selectedIds = null,
+    onconfirm,
+    confirmLabel = 'Send',
+    extras
   }: {
     title: string;
     dialogs: DialogItem[];
+    /** In multi-select mode this toggles a target rather than committing it. */
     onpick: (peerId: number) => void;
     onclose: () => void;
+    /**
+     * Present — even empty — switches the picker to multi-select: rows carry a
+     * checkmark and picking one keeps the dialog open.
+     */
+    selectedIds?: number[] | null;
+    onconfirm?: () => void;
+    confirmLabel?: string;
+    /** Extra controls between the list and the buttons. */
+    extras?: Snippet;
   } = $props();
+
+  const multi = $derived(!!selectedIds);
 
   let query = $state('');
 
@@ -29,14 +47,31 @@
     <input placeholder="Search" bind:value={query} />
     <div class="list">
       {#each filtered as dialog (dialog.peerId)}
-        <button class="row" onclick={() => onpick(dialog.peerId)}>
+        <button
+          class="row"
+          class:picked={selectedIds?.includes(dialog.peerId)}
+          onclick={() => onpick(dialog.peerId)}
+        >
           <Avatar peerId={dialog.peerId} title={dialog.title} size={32} />
           <span class="name">{dialog.title}</span>
+          {#if multi}
+            <span class="check">{selectedIds?.includes(dialog.peerId) ? '✓' : ''}</span>
+          {/if}
         </button>
       {/each}
       {#if !filtered.length}<p class="muted">No chats found.</p>{/if}
     </div>
-    <footer><button onclick={onclose}>Cancel</button></footer>
+    {#if extras}
+      <div class="extras">{@render extras()}</div>
+    {/if}
+    <footer>
+      <button onclick={onclose}>Cancel</button>
+      {#if onconfirm}
+        <button class="primary" disabled={!selectedIds?.length} onclick={onconfirm}>
+          {confirmLabel}
+        </button>
+      {/if}
+    </footer>
   </div>
 </div>
 
@@ -111,9 +146,25 @@
     white-space: nowrap;
   }
 
+  .picked {
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+  }
+
+  .check {
+    margin-left: auto;
+    color: var(--accent);
+    font-weight: 700;
+  }
+
+  .extras {
+    display: grid;
+    gap: 8px;
+  }
+
   footer {
     display: flex;
     justify-content: flex-end;
+    gap: 8px;
   }
 
   footer button {
@@ -123,6 +174,17 @@
     background: transparent;
     color: inherit;
     cursor: pointer;
+  }
+
+  footer .primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+
+  footer .primary:disabled {
+    opacity: 0.5;
+    cursor: default;
   }
 
   .muted {
