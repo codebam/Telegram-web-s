@@ -80,6 +80,18 @@
     type TopicItem
   } from '$lib/telegram/chats';
   import {
+    FOLDER_ID_ARCHIVE,
+    getArchiveSummary,
+    isPeerOnline,
+    loadArchivedDialogs,
+    loadFolderMemberships,
+    reorderPinnedDialogs,
+    setDialogArchived,
+    toggleFolderMembership,
+    type ArchiveSummary,
+    type FolderMembership
+  } from '$lib/telegram/archive';
+  import {
     getBotMenuButton,
     openBotAppLink,
     parseMiniAppLink,
@@ -182,6 +194,172 @@
   let folderEditorOpen = $state(false);
   let newChatOpen = $state(false);
   let menuFor = $state<DialogItem | null>(null);
+
+  /* ---------- archive, folder membership, presence, pinned order ---------- */
+
+  /** True while the list shows folder 1 instead of the current folder. */
+  let archiveOpen = $state(false);
+  let archivedDialogs = $state<DialogItem[]>([]);
+  let archiveSummary = $state<ArchiveSummary>({total: 0, unread: 0});
+  let loadingArchive = $state(false);
+  /** Peer ids currently online, for the dot on private rows. */
+  let onlinePeerIds = $state<number[]>([]);
+  /** peerId → names typing in that chat right now, for the row preview. */
+  let typingByPeer = $state<Record<number, string[]>>({});
+  /** Peer whose "Add to folder" submenu is open, if any. */
+  let folderMenuFor = $state<number | null>(null);
+  let folderMemberships = $state<FolderMembership[]>([]);
+  let dragPeerId = $state<number | null>(null);
+  let dragOverPeerId = $state<number | null>(null);
+
+  /** The rows on screen: the archive when it is open, the folder otherwise. */
+  let listedDialogs = $derived(archiveOpen ? archivedDialogs : dialogs);
+
+  onMount(() => {
+    let unsubscribe: (() => void) | undefined;
+    let disposed = false;
+
+    (async () => {
+      archiveSummary = await getArchiveSummary();
+
+      const offDialogs = await onDialogsUpdate(async () => {
+        archiveSummary = await getArchiveSummary();
+        if (archiveOpen) archivedDialogs = await loadArchivedDialogs();
+      });
+
+      // The list shows "typing…" for any chat, not just the open one, so it
+      // keeps its own subscription rather than widening the header's.
+      const offTyping = await onTyping((peerId, _threadId, names) => {
+        typingByPeer = {...typingByPeer, [peerId]: names};
+      });
+
+      const offUsers = await onUserUpdate(async (userId) => {
+        const online = await isPeerOnline(userId);
+        const has = onlinePeerIds.includes(userId);
+        if (online && !has) onlinePeerIds = [...onlinePeerIds, userId];
+        else if (!online && has) onlinePeerIds = onlinePeerIds.filter((id) => id !== userId);
+      });
+
+      const all = () => {
+        offDialogs();
+        offTyping();
+        offUsers();
+      };
+
+      if (disposed) all();
+      else unsubscribe = all;
+    })();
+
+    return () => {
+      disposed = true;
+      unsubscribe?.();
+    };
+  });
+
+  // Presence for the rows on screen. Statuses are already cached with the peer,
+  // so this costs a worker round-trip per row and nothing on the network.
+  $effect(() => {
+    const peerIds = listedDialogs.filter((d) => d.isUser && !d.isSelf).map((d) => d.peerId);
+    let cancelled = false;
+
+    (async () => {
+      const states = await Promise.all(peerIds.map((peerId) => isPeerOnline(peerId)));
+      if (!cancelled) onlinePeerIds = peerIds.filter((_, index) => states[index]);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  });
+
+  function typingTextFor(peerId: number): string {
+    const names = typingByPeer[peerId] ?? [];
+    if (!names.length) return '';
+    return `${names.join(', ')} ${names.length > 1 ? 'are' : 'is'} typing…`;
+  }
+
+  async function openArchive() {
+    archiveOpen = true;
+    menuFor = null;
+    folderMenuFor = null;
+    loadingArchive = true;
+    try {
+      archivedDialogs = await loadArchivedDialogs();
+    } catch (err: any) {
+      error = errorOf(err, 'Failed to load the archive');
+    } finally {
+      loadingArchive = false;
+    }
+  }
+
+  function closeArchive() {
+    archiveOpen = false;
+    menuFor = null;
+    folderMenuFor = null;
+  }
+
+  async function openFolderMenu(dialog: DialogItem) {
+    if (folderMenuFor === dialog.peerId) {
+      folderMenuFor = null;
+      return;
+    }
+
+    folderMenuFor = dialog.peerId;
+    folderMemberships = await loadFolderMemberships(dialog.peerId);
+  }
+
+  /* ---------- drag-to-reorder pinned chats ---------- */
+
+  function onRowDragStart(event: DragEvent, dialog: DialogItem) {
+    if (!dialog.pinned) return;
+    dragPeerId = dialog.peerId;
+    event.dataTransfer?.setData('text/plain', String(dialog.peerId));
+    if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+  }
+
+  function onRowDragOver(event: DragEvent, dialog: DialogItem) {
+    if (dragPeerId === null || !dialog.pinned) return;
+    // Only a prevented dragover marks the row as a valid drop target.
+    event.preventDefault();
+    dragOverPeerId = dialog.peerId;
+  }
+
+  function onRowDragEnd() {
+    dragPeerId = null;
+    dragOverPeerId = null;
+  }
+
+  async function onRowDrop(event: DragEvent, dialog: DialogItem) {
+    const from = dragPeerId;
+    dragPeerId = null;
+    dragOverPeerId = null;
+    if (from === null || !dialog.pinned || from === dialog.peerId) return;
+    event.preventDefault();
+
+    const list = listedDialogs;
+    const order = list.filter((d) => d.pinned).map((d) => d.peerId);
+    const fromIndex = order.indexOf(from);
+    const toIndex = order.indexOf(dialog.peerId);
+    if (fromIndex === -1 || toIndex === -1) return;
+    order.splice(toIndex, 0, ...order.splice(fromIndex, 1));
+
+    // Show the new order straight away; the server confirms it right after.
+    const byPeerId = new Map(list.map((d) => [d.peerId, d]));
+    const reordered = [
+      ...order.map((peerId) => byPeerId.get(peerId)!),
+      ...list.filter((d) => !d.pinned)
+    ];
+    if (archiveOpen) archivedDialogs = reordered;
+    else dialogs = reordered;
+
+    try {
+      await reorderPinnedDialogs(order, archiveOpen ? FOLDER_ID_ARCHIVE : activeFolder);
+    } catch (err: any) {
+      error = errorOf(err, 'Failed to reorder pinned chats');
+      if (archiveOpen) archivedDialogs = await loadArchivedDialogs();
+      else dialogs = await loadDialogs(40, activeFolder);
+    }
+  }
   let showInfo = $state(false);
   /** Profile being viewed from a message sender or member list, if any. */
   let profilePeerId = $state<number | null>(null);
@@ -551,9 +729,12 @@
 
   async function runDialogAction(action: () => Promise<void>) {
     menuFor = null;
+    folderMenuFor = null;
     try {
       await action();
       dialogs = await loadDialogs(40, activeFolder);
+      archiveSummary = await getArchiveSummary();
+      if (archiveOpen) archivedDialogs = await loadArchivedDialogs();
     } catch (err: any) {
       error = errorOf(err, 'Action failed');
     }
@@ -1986,20 +2167,69 @@
               </span>
             </button>
         {/each}
-      {:else if !dialogs.length}
-        <p class="muted">No chats yet.</p>
+      {:else if archiveOpen && loadingArchive}
+        <p class="muted">Loading archive…</p>
+      {:else if !listedDialogs.length}
+        {#if archiveOpen}
+          <button class="row-button archive-row" onclick={closeArchive}>
+            <span class="topic-glyph">←</span>
+            <span class="meta"><span class="title">Back to chats</span></span>
+          </button>
+        {/if}
+        <p class="muted">{archiveOpen ? 'The archive is empty.' : 'No chats yet.'}</p>
       {:else}
-        {#each dialogs as dialog (dialog.peerId)}
+        {#if archiveOpen}
+          <button class="row-button archive-row" onclick={closeArchive}>
+            <span class="topic-glyph">←</span>
+            <span class="meta">
+              <span class="row">
+                <span class="title">Archived chats</span>
+              </span>
+              <span class="row">
+                <span class="preview">Back to chats</span>
+              </span>
+            </span>
+          </button>
+        {:else if archiveSummary.total && !query && activeFolder === 0}
+          <button class="row-button archive-row" onclick={openArchive}>
+            <span class="topic-glyph"><Glyph name="archive" size={18} /></span>
+            <span class="meta">
+              <span class="row">
+                <span class="title">Archived chats</span>
+              </span>
+              <span class="row">
+                <span class="preview">
+                  {archiveSummary.total} chat{archiveSummary.total === 1 ? '' : 's'}
+                </span>
+                {#if archiveSummary.unread}<span class="badge">{archiveSummary.unread}</span>{/if}
+              </span>
+            </span>
+          </button>
+        {/if}
+
+        {#each listedDialogs as dialog (dialog.peerId)}
           <button
             class="row-button"
             class:active={dialog.peerId === activePeerId}
+            class:drag-over={dragOverPeerId === dialog.peerId}
+            draggable={dialog.pinned}
+            ondragstart={(e) => onRowDragStart(e, dialog)}
+            ondragover={(e) => onRowDragOver(e, dialog)}
+            ondragend={onRowDragEnd}
+            ondrop={(e) => onRowDrop(e, dialog)}
             onclick={() => openChat(dialog)}
             oncontextmenu={(e) => {
               e.preventDefault();
+              folderMenuFor = null;
               menuFor = menuFor?.peerId === dialog.peerId ? null : dialog;
             }}
           >
-            <Avatar peerId={dialog.peerId} title={dialog.title} />
+            <span class="avatar-wrap">
+              <Avatar peerId={dialog.peerId} title={dialog.title} />
+              {#if dialog.isUser && !dialog.isSelf && onlinePeerIds.includes(dialog.peerId)}
+                <span class="online-dot" title="Online"></span>
+              {/if}
+            </span>
             <span class="meta">
               <span class="row">
                 <span class="title">
@@ -2014,7 +2244,11 @@
                 <span class="time">{timeOf(dialog.date)}</span>
               </span>
               <span class="row">
-                <span class="preview">{dialog.preview}</span>
+                {#if typingTextFor(dialog.peerId)}
+                  <span class="preview typing">{typingTextFor(dialog.peerId)}</span>
+                {:else}
+                  <span class="preview">{dialog.preview}</span>
+                {/if}
                 {#if dialog.unread}<span class="badge">{dialog.unread}</span>{/if}
               </span>
             </span>
@@ -2022,7 +2256,12 @@
 
           {#if menuFor?.peerId === dialog.peerId}
             <div class="menu">
-              <button onclick={() => runDialogAction(() => togglePin(dialog.peerId, activeFolder))}>
+              <button
+                onclick={() =>
+                  runDialogAction(() =>
+                    togglePin(dialog.peerId, archiveOpen ? FOLDER_ID_ARCHIVE : activeFolder)
+                  )}
+              >
                 {dialog.pinned ? 'Unpin' : 'Pin'}
               </button>
               <button onclick={() => runDialogAction(() => toggleMute(dialog.peerId, !dialog.muted))}>
@@ -2036,6 +2275,32 @@
               >
                 {dialog.unread ? 'Mark as read' : 'Mark as unread'}
               </button>
+              <button onclick={() => runDialogAction(() => setDialogArchived(dialog.peerId, !archiveOpen))}>
+                {archiveOpen ? 'Unarchive' : 'Archive'}
+              </button>
+              <button class="submenu-trigger" onclick={() => openFolderMenu(dialog)}>
+                Add to folder
+                <span class="chevron">{folderMenuFor === dialog.peerId ? '▾' : '▸'}</span>
+              </button>
+              {#if folderMenuFor === dialog.peerId}
+                {#if !folderMemberships.length}
+                  <span class="submenu-empty">No folders yet</span>
+                {:else}
+                  {#each folderMemberships as membership (membership.folderId)}
+                    <button
+                      class="submenu-item"
+                      onclick={() =>
+                        runDialogAction(() =>
+                          toggleFolderMembership(membership.folderId, dialog.peerId, !membership.included)
+                        )}
+                    >
+                      <span class="check">{membership.included ? '✓' : ''}</span>
+                      {membership.emoticon}
+                      {membership.title}
+                    </button>
+                  {/each}
+                {/if}
+              {/if}
               <button class="danger" onclick={() => runDialogAction(() => leaveOrDelete(dialog.peerId))}>
                 Delete / Leave
               </button>
@@ -3042,6 +3307,64 @@
     display: inline-flex;
     color: var(--text-dim);
     flex: none;
+  }
+
+  .menu .submenu-trigger {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .menu .submenu-item {
+    display: flex;
+    gap: 6px;
+    padding-left: 20px;
+  }
+
+  .menu .check {
+    width: 12px;
+    flex: none;
+    color: var(--accent);
+  }
+
+  .submenu-empty {
+    padding: 9px 12px 9px 20px;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  .chevron {
+    color: var(--text-dim);
+  }
+
+  .archive-row .topic-glyph {
+    color: var(--text-dim);
+  }
+
+  .avatar-wrap {
+    position: relative;
+    display: flex;
+    flex: none;
+  }
+
+  .online-dot {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    background: #4dcb5f;
+    border: 2px solid var(--bg);
+  }
+
+  .preview.typing {
+    color: var(--accent);
+  }
+
+  .row-button.drag-over {
+    border-left-color: var(--accent);
+    background: color-mix(in srgb, var(--text) 10%, transparent);
   }
 
   .title-button {

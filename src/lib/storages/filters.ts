@@ -328,6 +328,35 @@ export default class FiltersStorage extends AppManager {
     return this.updateDialogFilter(filter);
   }
 
+  /**
+   * Reorder the pinned peers of a custom folder. `order` is the new order of
+   * peers that are already pinned there — anything else in it is ignored, and
+   * a pinned peer missing from it keeps its place at the end.
+   */
+  public reorderPinnedPeers(filterId: number, order: PeerId[]) {
+    const filter = this.filters[filterId];
+    if(!filter) {
+      return Promise.reject(makeError('UNKNOWN'));
+    }
+
+    const inputPeers: Map<PeerId, MyDialogFilter['pinned_peers'][0]> = new Map();
+    filter.pinnedPeerIds.forEach((peerId, idx) => {
+      inputPeers.set(peerId, filter.pinned_peers[idx]);
+    });
+
+    const pinnedPeerIds = order.filter((peerId) => inputPeers.has(peerId));
+    filter.pinnedPeerIds.forEach((peerId) => {
+      if(!pinnedPeerIds.includes(peerId)) {
+        pinnedPeerIds.push(peerId);
+      }
+    });
+
+    filter.pinnedPeerIds = pinnedPeerIds;
+    filter.pinned_peers = pinnedPeerIds.map((peerId) => inputPeers.get(peerId));
+
+    return this.updateDialogFilter(filter);
+  }
+
   public createDialogFilter(filter: MyDialogFilter, prepend?: boolean) {
     const maxId = Math.max(1, ...Object.keys(this.filters).map((i) => +i));
     filter = copy(filter);

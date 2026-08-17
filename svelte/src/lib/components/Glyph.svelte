@@ -23,7 +23,8 @@
     | 'muted'
     | 'file'
     | 'save'
-    | 'close';
+    | 'close'
+    | 'archive';
 
   let {name, size = 18}: {name: GlyphName; size?: number} = $props();
 </script>
@@ -84,6 +85,10 @@
     <path d="M3.8 3.6l12.4 12.8" />
   {:else if name === 'close'}
     <path d="M5.4 5.4l9.2 9.2M14.6 5.4l-9.2 9.2" />
+  {:else if name === 'archive'}
+    <path d="M3.4 4.6h13.2v2.8H3.4z" />
+    <path d="M4.6 7.4v7.2a1 1 0 001 1h8.8a1 1 0 001-1V7.4" />
+    <path d="M8.2 10.2h3.6" />
   {/if}
 </svg>
 
