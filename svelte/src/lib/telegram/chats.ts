@@ -1,3 +1,5 @@
+import getPeerId from '@appManagers/utils/peers/getPeerId';
+
 import {bootTelegram} from './client';
 import {extraOf, type MessageExtra} from './messageTypes';
 import {buildForwardInfo, buildReplyInfo, type ForwardInfo, type ReplyInfo} from './reply';
@@ -36,14 +38,6 @@ export type DialogItem = {
    * when it is not. Its content must not be rendered while this is set.
    */
   restrictionText: string;
-};
-
-export type TopicItem = {
-  threadId: number;
-  title: string;
-  preview: string;
-  date: number;
-  unread: number;
 };
 
 export type MediaItem = {
@@ -134,6 +128,8 @@ export type MessageItem = {
   reply: ReplyPreview | null;
   /** Comment thread (discussion) attached to this message, if any. */
   repliesCount: number;
+  /** Peer ids of the newest commenters, for the avatars on the comments button. */
+  commenters: number[];
   reactions: ReactionItem[];
   /** Album id — consecutive messages sharing one render as a single bubble. */
   groupedId: string;
@@ -645,28 +641,6 @@ export async function loadDialogs(limit = 40, filterId = 0): Promise<DialogItem[
   );
 }
 
-/**
- * Forum topics are modelled as dialogs filtered by the forum's own peerId —
- * same call tweb's own topic list uses.
- */
-export async function loadTopics(peerId: number, limit = 30): Promise<TopicItem[]> {
-  const {managers} = await bootTelegram();
-  const {dialogs} = await managers.dialogsStorage.getDialogs({limit, filterId: peerId});
-
-  return Promise.all(
-    dialogs.map(async(topic: any) => {
-      const topMessage = await managers.appMessagesManager.getMessageByPeer(peerId, topic.top_message);
-      return {
-        threadId: Number(topic.id),
-        title: topic.title || 'Topic',
-        preview: await previewOf(topMessage),
-        date: topMessage?.date ?? 0,
-        unread: topic.unread_count ?? 0
-      };
-    })
-  );
-}
-
 /* ------------------------------------------------------------------ */
 /* History                                                             */
 /* ------------------------------------------------------------------ */
@@ -715,6 +689,9 @@ async function toItem(message: any, peerId: number, selfId: number): Promise<Mes
     media: mediaOf(message),
     reply: await buildReplyInfo(message, peerId, selfId),
     repliesCount: message.replies?.replies ?? 0,
+    commenters: (message.replies?.recent_repliers ?? [])
+      .map((peer: any) => Number(getPeerId(peer)))
+      .filter(Boolean),
     reactions: reactionsOf(message),
     groupedId: message.grouped_id ? '' + message.grouped_id : '',
     stickerDocId: isStickerMessage(message) ? '' + message.media.document.id : '',
@@ -862,17 +839,20 @@ async function fetchMessages(peerId: number, mids: number[]): Promise<any[]> {
 
 export async function loadHistory(
   peerId: number,
-  options: {threadId?: number; limit?: number; offsetId?: number} = {}
+  options: {threadId?: number; limit?: number; offsetId?: number; savedReaction?: string} = {}
 ): Promise<MessageItem[]> {
   const {managers} = await bootTelegram();
   const selfId = await getSelfId();
-  const {threadId, limit = 40, offsetId} = options;
+  const {threadId, limit = 40, offsetId, savedReaction} = options;
 
   const result = await managers.appMessagesManager.getHistory({
     peerId,
     limit,
     threadId,
     offsetId,
+    // Saved Messages filtered by tag. The manager turns this into a search
+    // rather than a plain history request.
+    savedReaction: savedReaction ? [{_: 'reactionEmoji', emoticon: savedReaction}] : undefined,
     fetchIfWasNotFetched: true
   });
 
@@ -993,26 +973,6 @@ export async function votePoll(peerId: number, mid: number, optionIndexes: numbe
     await managers.appMessagesManager.getMessageByPeer(peerId, mid);
   if(!message) throw new Error('Message not found');
   await managers.appPollsManager.sendVote(message, optionIndexes);
-}
-
-/**
- * Opens the comment thread attached to a channel post. The discussion lives in
- * the linked group, so this returns a different peer plus the thread id.
- */
-export async function openDiscussion(
-  peerId: number,
-  mid: number
-): Promise<{peerId: number; threadId: number} | null> {
-  const {managers} = await bootTelegram();
-
-  try {
-    const result: any = await managers.appMessagesManager.getDiscussionMessage(peerId, mid);
-    const message = result?.message ?? result;
-    if(!message?.mid) return null;
-    return {peerId: Number(message.peerId), threadId: message.mid};
-  } catch(err) {
-    return null;
-  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -2303,4 +2263,4 @@ export async function clickSponsored(key: string): Promise<void> {
  * search results and must format peers and messages identically. Not part of
  * the surface the components use.
  */
-export {getSelfId, getPeer, peerTitle, toItem};
+export {getSelfId, getPeer, peerTitle, previewOf, toItem};
