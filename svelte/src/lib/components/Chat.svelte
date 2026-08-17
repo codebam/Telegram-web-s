@@ -5751,6 +5751,12 @@
     cursor: pointer;
     text-align: left;
     justify-self: start;
+    /* Display names run long — and a name is never worth widening the bubble
+       past its max-width, so it ellipsises instead. */
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .author:hover {

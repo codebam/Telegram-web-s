@@ -77,6 +77,10 @@
 
   .body {
     display: grid;
+    /* minmax(0, …): an auto track is max-content wide, so a long display name
+       or preview grew the header straight past the bubble instead of being
+       ellipsised by the rules below. */
+    grid-template-columns: minmax(0, 1fr);
     gap: 1px;
     min-width: 0;
   }
@@ -85,6 +89,7 @@
     display: flex;
     gap: 5px;
     align-items: baseline;
+    min-width: 0;
     font-size: 12px;
     font-weight: 600;
     color: var(--peer-color);
@@ -103,6 +108,18 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    min-width: 0;
+  }
+
+  /* The name yields first: "in <chat>" is the part that stops the header being
+     ambiguous, so it keeps its width. */
+  .name {
+    flex: 0 1 auto;
+  }
+
+  .in-chat {
+    flex: none;
+    max-width: 45%;
   }
 
   .preview,
