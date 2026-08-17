@@ -1,4 +1,5 @@
 import {bootTelegram} from './client';
+import {extraOf, type MessageExtra} from './messageTypes';
 import {buildForwardInfo, buildReplyInfo, type ForwardInfo, type ReplyInfo} from './reply';
 import {peerRestrictionText, restrictionTextOf} from './restrictions';
 import type {MessageEntity} from '@layer';
@@ -150,6 +151,11 @@ export type MessageItem = {
   forward: ForwardInfo | null;
   webpage: WebPagePreview | null;
   poll: PollPreview | null;
+  /**
+   * Location, venue, contact, game, invoice, checklist or gift body — the
+   * message types `media` cannot describe. Null for everything else.
+   */
+  extra: MessageExtra | null;
   /**
    * Structured body for messages that carry one. Newer messages can arrive as
    * `rich_message` blocks — headings, tables, lists — with `message` empty.
@@ -719,6 +725,7 @@ async function toItem(message: any, peerId: number, selfId: number): Promise<Mes
     forward,
     webpage: webpageOf(message),
     poll: pollOf(message),
+    extra: extraOf(message, peerId, selfId),
     rich: richBlocksOf(message),
     buttons: buttonsOf(message),
     restrictionText: await restrictionTextOf(message.restriction_reason)
