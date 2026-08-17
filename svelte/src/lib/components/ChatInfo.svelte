@@ -1,5 +1,7 @@
 <script lang="ts">
   import Avatar from './Avatar.svelte';
+  import ChatAdmin from './ChatAdmin.svelte';
+  import {loadAdminAccess} from '$lib/telegram/admin';
   import {
     checkChatUsername,
     loadChatInfo,
@@ -33,6 +35,22 @@
   let linkError = $state('');
   let linkFree = $state<boolean | null>(null);
   let linkTimer: ReturnType<typeof setTimeout> | undefined;
+
+  // Whether this account may administer the chat, and the admin panel it opens.
+  let canManage = $state(false);
+  let managing = $state(false);
+
+  $effect(() => {
+    const id = peerId;
+    canManage = false;
+    managing = false;
+    // Non-fatal: without it the profile simply has no "Manage" entry.
+    loadAdminAccess(id)
+      .then((access) => {
+        if(id === peerId) canManage = access.canManage;
+      })
+      .catch(() => {});
+  });
 
   $effect(() => {
     const id = peerId;
@@ -132,6 +150,10 @@
             {info.isChannel || info.isGroup ? 'Open chat' : 'Send message'}
           </button>
         {/if}
+
+        {#if canManage}
+          <button class="link-btn" onclick={() => (managing = true)}>Manage</button>
+        {/if}
       </div>
 
       {#if info.canSetUsername}
@@ -197,6 +219,21 @@
     {/if}
   </div>
 </aside>
+
+{#if managing}
+  <ChatAdmin
+    {peerId}
+    onclose={() => {
+      managing = false;
+      // The chat may have been renamed, made public, or left entirely.
+      loadChatInfo(peerId)
+        .then((loaded) => (info = loaded))
+        .catch(() => {});
+    }}
+    onmigrated={(newPeerId) => (onmigrated ?? onpeer)?.(newPeerId)}
+    {onpeer}
+  />
+{/if}
 
 <style>
   .info {
