@@ -214,6 +214,7 @@ export type MyInputMessagesFilter = 'inputMessagesFilterEmpty'
   | 'inputMessagesFilterRoundVideo'
   | 'inputMessagesFilterMusic'
   | 'inputMessagesFilterUrl'
+  | 'inputMessagesFilterGif'
   | 'inputMessagesFilterMyMentions'
   | 'inputMessagesFilterChatPhotos'
   | 'inputMessagesFilterPinned';

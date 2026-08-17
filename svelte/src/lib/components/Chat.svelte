@@ -17,6 +17,7 @@
   import Settings from './Settings.svelte';
   import Stories from './Stories.svelte';
   import Picker from './Picker.svelte';
+  import GlobalSearch from './GlobalSearch.svelte';
   import RichMessage from './RichMessage.svelte';
   import Sticker from './Sticker.svelte';
   import {GIT_COMMIT, GIT_COMMIT_SHORT, GIT_COMMIT_URL} from '$lib/buildInfo';
@@ -61,9 +62,7 @@
     readUpTo,
     resolveUsername,
     saveDraftText,
-    searchMessages,
     setOwnOnline,
-    searchDialogs,
     sendDocument,
     sendFiles,
     sendMessage,
@@ -94,6 +93,15 @@
     syncPushSubscription
   } from '$lib/telegram/notifications';
   import {queryInlineBot, sendInlineResult, type InlineQueryAnswer, type InlineResultItem} from '$lib/telegram/settings';
+  import {
+    dialogTargetFor,
+    findMessageIdByDate,
+    searchChatMembers,
+    searchChatMessages,
+    MEDIA_FILTERS,
+    type MediaFilter,
+    type SearchPeerItem
+  } from '$lib/telegram/search';
   import {applyAccent, applyDensity, applyTheme} from '$lib/telegram/theme';
   import {
     getBusinessBot,
@@ -151,7 +159,8 @@
   let observer: ResizeObserver | undefined;
 
   let query = $state('');
-  let searching = $state(false);
+  /** True while the sidebar search pane replaces the chat list. */
+  let searchOpen = $state(false);
   let loadingOlder = $state(false);
   let reachedStart = $state(false);
   // False while the loaded window is centred on an older message (a jump), when
@@ -165,7 +174,6 @@
   let searchBox: HTMLInputElement | undefined = $state();
   let dragging = $state(false);
   let typingTimer: ReturnType<typeof setTimeout> | undefined;
-  let searchTimer: ReturnType<typeof setTimeout> | undefined;
 
   let folders = $state<FolderItem[]>([]);
   let activeFolder = $state(0);
@@ -203,6 +211,19 @@
   let chatResults = $state<MessageItem[] | null>(null);
   let chatSearchOpen = $state(false);
   let chatSearchTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Server-side total for the current in-chat search — the M in "N of M". */
+  let chatResultCount = $state(0);
+  let chatResultIndex = $state(-1);
+  let chatResultsEnd = $state(true);
+  let chatSearching = $state(false);
+  /** Sender filter: groups and channels only, a DM has just two of them. */
+  let chatFrom = $state<SearchPeerItem | null>(null);
+  let chatFromOpen = $state(false);
+  let chatFromQuery = $state('');
+  let chatMembers = $state<SearchPeerItem[]>([]);
+  let chatFilter = $state<MediaFilter>('all');
+  let chatDate = $state('');
+  let chatFiltersOpen = $state(false);
   let selecting = $state(false);
   let selected = $state<Set<number>>(new Set());
   let messageMenu = $state<{mid: number; x: number; y: number} | null>(null);
@@ -631,25 +652,152 @@
 
   /* ---------- in-chat search ---------- */
 
+  /** Filters narrow the search on their own — an empty query is fine with one. */
+  const chatSearchNarrowed = $derived(
+    !!chatQuery.trim() || chatFilter !== 'all' || !!chatFrom
+  );
+
+  /** Sender picking only makes sense where there is more than one sender. */
+  const canFilterBySender = $derived(activePeerId !== null && activePeerId < 0);
+
+  function chatSearchOptions(offsetId = 0) {
+    return {
+      threadId: activeThreadId,
+      fromPeerId: chatFrom?.peerId,
+      filter: chatFilter,
+      offsetId
+    };
+  }
+
+  async function runChatSearch() {
+    if (activePeerId === null || !chatSearchNarrowed) {
+      chatResults = null;
+      chatResultCount = 0;
+      chatResultIndex = -1;
+      chatResultsEnd = true;
+      return;
+    }
+
+    const peerId = activePeerId;
+    chatSearching = true;
+    try {
+      const page = await searchChatMessages(peerId, chatQuery, chatSearchOptions());
+      if (activePeerId !== peerId) return;
+      chatResults = page.items.map((item) => item.message);
+      chatResultCount = page.count;
+      chatResultIndex = page.items.length ? 0 : -1;
+      chatResultsEnd = page.isEnd;
+    } catch (err: any) {
+      error = errorOf(err, 'Search failed');
+    } finally {
+      chatSearching = false;
+    }
+  }
+
   function onChatQueryInput() {
     clearTimeout(chatSearchTimer);
-    chatSearchTimer = setTimeout(async () => {
-      if (activePeerId === null || !chatQuery.trim()) {
-        chatResults = null;
-        return;
-      }
-      try {
-        chatResults = await searchMessages(activePeerId, chatQuery, {threadId: activeThreadId});
-      } catch (err: any) {
-        error = errorOf(err, 'Search failed');
-      }
-    }, 300);
+    chatSearchTimer = setTimeout(runChatSearch, 300);
+  }
+
+  /** A filter change is a deliberate click, so it searches without the debounce. */
+  function applyChatFilter(filter: MediaFilter) {
+    chatFilter = filter;
+    clearTimeout(chatSearchTimer);
+    runChatSearch();
+  }
+
+  async function openFromPicker() {
+    chatFromOpen = !chatFromOpen;
+    if (chatFromOpen && activePeerId !== null) {
+      chatMembers = await searchChatMembers(activePeerId, chatFromQuery);
+    }
+  }
+
+  async function onFromQueryInput() {
+    if (activePeerId === null) return;
+    chatMembers = await searchChatMembers(activePeerId, chatFromQuery);
+  }
+
+  function pickFrom(member: SearchPeerItem | null) {
+    chatFrom = member;
+    chatFromOpen = false;
+    chatFromQuery = '';
+    clearTimeout(chatSearchTimer);
+    runChatSearch();
+  }
+
+  /** Older results, pulled in when the user pages past the loaded ones. */
+  async function loadMoreChatResults() {
+    if (activePeerId === null || chatResultsEnd || chatSearching || !chatResults?.length) return;
+
+    const peerId = activePeerId;
+    chatSearching = true;
+    try {
+      const page = await searchChatMessages(
+        peerId,
+        chatQuery,
+        chatSearchOptions(chatResults[chatResults.length - 1].mid)
+      );
+      if (activePeerId !== peerId) return;
+
+      const known = new Set(chatResults.map((m) => m.mid));
+      const fresh = page.items.map((item) => item.message).filter((m) => !known.has(m.mid));
+      chatResults = [...chatResults, ...fresh];
+      chatResultsEnd = page.isEnd || !fresh.length;
+    } catch (err: any) {
+      error = errorOf(err, 'Search failed');
+    } finally {
+      chatSearching = false;
+    }
+  }
+
+  /** Step through results newest-first; `step` of 1 goes towards older ones. */
+  async function stepResult(step: number) {
+    if (!chatResults?.length) return;
+
+    const next = chatResultIndex + step;
+    if (next < 0) return;
+
+    if (next >= chatResults.length) {
+      await loadMoreChatResults();
+      if (next >= (chatResults?.length ?? 0)) return;
+    }
+
+    chatResultIndex = next;
+    jumpTo(chatResults[next].mid);
+  }
+
+  function selectResult(index: number) {
+    chatResultIndex = index;
+    if (chatResults?.[index]) jumpTo(chatResults[index].mid);
+  }
+
+  /** Jump the timeline to the first message on the picked day. */
+  async function jumpToDate(value: string) {
+    chatDate = value;
+    if (!value || activePeerId === null) return;
+
+    // The day's last second: the server answers with the newest message at or
+    // before the offset, which is the bottom of that day.
+    const end = new Date(`${value}T23:59:59`);
+    const mid = await findMessageIdByDate(activePeerId, Math.floor(end.getTime() / 1000), activeThreadId);
+    if (mid) jumpTo(mid);
+    else error = 'No messages on that day';
   }
 
   function closeChatSearch() {
     chatSearchOpen = false;
     chatQuery = '';
     chatResults = null;
+    chatResultCount = 0;
+    chatResultIndex = -1;
+    chatResultsEnd = true;
+    chatFrom = null;
+    chatFromOpen = false;
+    chatFromQuery = '';
+    chatFilter = 'all';
+    chatDate = '';
+    chatFiltersOpen = false;
   }
 
   /* ---------- selection ---------- */
@@ -898,37 +1046,50 @@
     }
   }
 
-  /* ---------- search ---------- */
+  /* ---------- global search ---------- */
 
-  async function runSearch() {
-    searching = true;
-    try {
-      dialogs = await searchDialogs(query);
-    } catch (err: any) {
-      error = errorOf(err, 'Search failed');
-    } finally {
-      searching = false;
+  /**
+   * The search pane owns its own results and debounce; the box here only holds
+   * the query and decides when the pane replaces the chat list.
+   */
+  function openSearch() {
+    searchOpen = true;
+  }
+
+  function closeSearch() {
+    searchOpen = false;
+    query = '';
+    searchBox?.blur();
+  }
+
+  function onQueryKey(e: KeyboardEvent) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      closeSearch();
     }
   }
 
-  function onQueryInput() {
-    clearTimeout(searchTimer);
-    searchTimer = setTimeout(runSearch, 250);
+  /** A search result opens like a chat-list row, dialog or not. */
+  async function openSearchPeer(peerId: number) {
+    try {
+      const target = await dialogTargetFor(peerId);
+      closeSearch();
+      await openChat(target);
+    } catch (err: any) {
+      error = errorOf(err, 'Could not open that chat');
+    }
   }
 
-  /**
-   * Enter opens the first result. The keystroke can beat the debounce, so run
-   * the pending search first rather than acting on the previous query's list.
-   */
-  async function onQueryKey(e: KeyboardEvent) {
-    if (e.key !== 'Enter' || e.isComposing || !query.trim()) return;
-    e.preventDefault();
-
-    clearTimeout(searchTimer);
-    await runSearch();
-
-    const first = dialogs[0];
-    if (first) openChat(first);
+  /** Open the chat a found message lives in, then jump to the message itself. */
+  async function openSearchMessage(peerId: number, mid: number) {
+    try {
+      const target = await dialogTargetFor(peerId);
+      closeSearch();
+      await openChat(target);
+      if (activePeerId === peerId) await jumpTo(mid);
+    } catch (err: any) {
+      error = errorOf(err, 'Could not open that message');
+    }
   }
 
   /* ---------- scrollback ---------- */
@@ -1770,11 +1931,14 @@
       <div class="search">
         <input
           bind:this={searchBox}
-          placeholder="Search chats"
+          placeholder="Search chats, channels and messages"
           bind:value={query}
-          oninput={onQueryInput}
+          onfocus={openSearch}
           onkeydown={onQueryKey}
         />
+        {#if searchOpen}
+          <button class="search-cancel" onclick={closeSearch} aria-label="Close search">✕</button>
+        {/if}
       </div>
       <Stories />
       {#if folders.length > 1}
@@ -1796,8 +1960,11 @@
       {/if}
     {/if}
 
+    {#if searchOpen}
+      <GlobalSearch {query} onOpenPeer={openSearchPeer} onOpenMessage={openSearchMessage} />
+    {:else}
     <div class="list">
-      {#if loadingChats || searching}
+      {#if loadingChats}
         <p class="muted">Loading chats…</p>
       {:else if activeIsForum && activePeerId !== null}
         {#each [{threadId: 0, title: 'All messages', preview: 'Everything in this chat', date: 0, unread: 0}, ...topics] as topic (topic.threadId)}
@@ -1877,6 +2044,7 @@
         {/each}
       {/if}
     </div>
+    {/if}
   </aside>
 
   <section
@@ -1928,19 +2096,100 @@
       {#if chatSearchOpen}
         <div class="chat-search">
           <input placeholder="Search in chat" bind:value={chatQuery} oninput={onChatQueryInput} />
+          {#if chatResults?.length}
+            <span class="result-counter">
+              {chatResultIndex + 1} of {Math.max(chatResultCount, chatResults.length)}
+            </span>
+            <button
+              class="step"
+              onclick={() => stepResult(1)}
+              disabled={chatResultIndex + 1 >= chatResults.length && chatResultsEnd}
+              aria-label="Older result"
+            >↓</button>
+            <button
+              class="step"
+              onclick={() => stepResult(-1)}
+              disabled={chatResultIndex <= 0}
+              aria-label="Newer result"
+            >↑</button>
+          {/if}
+          <button
+            class="filters-toggle"
+            class:on={chatFiltersOpen || chatFilter !== 'all' || !!chatFrom || !!chatDate}
+            onclick={() => (chatFiltersOpen = !chatFiltersOpen)}
+          >Filters</button>
           <button onclick={closeChatSearch} aria-label="Close search">✕</button>
         </div>
+
+        {#if chatFiltersOpen}
+          <div class="chat-filters">
+            <div class="filter-chips">
+              {#each MEDIA_FILTERS as option (option.value)}
+                <button
+                  class="chip"
+                  class:on={chatFilter === option.value}
+                  onclick={() => applyChatFilter(option.value)}
+                >{option.label}</button>
+              {/each}
+            </div>
+
+            <div class="filter-row">
+              {#if canFilterBySender}
+                <button class="chip" class:on={!!chatFrom} onclick={openFromPicker}>
+                  {chatFrom ? `From: ${chatFrom.title}` : 'From sender'}
+                </button>
+                {#if chatFrom}
+                  <button class="chip" onclick={() => pickFrom(null)} aria-label="Clear sender">✕</button>
+                {/if}
+              {/if}
+              <label class="date-jump">
+                Jump to date
+                <input type="date" value={chatDate} onchange={(e) => jumpToDate(e.currentTarget.value)} />
+              </label>
+            </div>
+
+            {#if chatFromOpen}
+              <div class="from-picker">
+                <input
+                  placeholder="Search members"
+                  bind:value={chatFromQuery}
+                  oninput={onFromQueryInput}
+                />
+                {#if !chatMembers.length}
+                  <p class="muted">No members found.</p>
+                {:else}
+                  {#each chatMembers as member (member.peerId)}
+                    <button class="from-row" onclick={() => pickFrom(member)}>
+                      <Avatar peerId={member.peerId} title={member.title} size={28} />
+                      <span class="from-name">{member.title}</span>
+                    </button>
+                  {/each}
+                {/if}
+              </div>
+            {/if}
+          </div>
+        {/if}
+
         {#if chatResults}
           <div class="results">
             {#if !chatResults.length}
-              <p class="muted">Nothing found.</p>
+              <p class="muted">{chatSearching ? 'Searching…' : 'Nothing found.'}</p>
             {:else}
-              {#each chatResults as result (result.mid)}
-                <button class="result" onclick={() => { closeChatSearch(); jumpTo(result.mid); }}>
+              {#each chatResults as result, index (result.mid)}
+                <button
+                  class="result"
+                  class:current={index === chatResultIndex}
+                  onclick={() => selectResult(index)}
+                >
                   <span class="result-from">{result.fromTitle}</span>
                   <span class="result-text">{result.text || 'Media'}</span>
                 </button>
               {/each}
+              {#if !chatResultsEnd}
+                <button class="result more" onclick={loadMoreChatResults} disabled={chatSearching}>
+                  {chatSearching ? 'Loading…' : 'Load more'}
+                </button>
+              {/if}
             {/if}
           </div>
         {/if}
@@ -2643,13 +2892,26 @@
   }
 
   .search {
+    display: flex;
+    align-items: center;
+    gap: 6px;
     padding: 10px 14px;
     border-bottom: 1px solid var(--border);
     flex: none;
   }
 
+  .search-cancel {
+    background: none;
+    border: 0;
+    color: var(--text-dim);
+    cursor: pointer;
+    padding: 4px;
+    flex: none;
+  }
+
   .search input {
     width: 100%;
+    min-width: 0;
     padding: 9px 12px;
     border: 1px solid var(--border);
     border-radius: 999px;
@@ -3355,6 +3617,133 @@
   }
 
   .result-text {
+    font-size: 13px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .result.current {
+    background: var(--row-active);
+  }
+
+  .result.more {
+    color: var(--accent);
+    font-size: 13px;
+    text-align: center;
+  }
+
+  .result-counter {
+    font-size: 12px;
+    color: var(--text-dim);
+    align-self: center;
+    white-space: nowrap;
+  }
+
+  .step:disabled {
+    opacity: 0.35;
+    cursor: default;
+  }
+
+  .filters-toggle {
+    font-size: 12px !important;
+    padding: 4px 10px !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 999px !important;
+  }
+
+  .filters-toggle.on {
+    border-color: var(--accent) !important;
+    color: var(--accent);
+  }
+
+  .chat-filters {
+    padding: 8px 18px 10px;
+    border-bottom: 1px solid var(--border);
+    flex: none;
+    display: grid;
+    gap: 8px;
+  }
+
+  .filter-chips,
+  .filter-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+  }
+
+  .chip {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 4px 10px;
+    font-size: 12px;
+    color: inherit;
+    cursor: pointer;
+  }
+
+  .chip.on {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .date-jump {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  .date-jump input {
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: inherit;
+    padding: 3px 6px;
+    font: inherit;
+    font-size: 12px;
+  }
+
+  .from-picker {
+    max-height: 220px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 6px;
+  }
+
+  .from-picker input {
+    width: 100%;
+    padding: 6px 10px;
+    margin-bottom: 4px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: transparent;
+    color: inherit;
+    outline: none;
+  }
+
+  .from-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 5px 6px;
+    background: none;
+    border: 0;
+    border-radius: 8px;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .from-row:hover {
+    background: var(--bg-elevated);
+  }
+
+  .from-name {
     font-size: 13px;
     overflow: hidden;
     text-overflow: ellipsis;

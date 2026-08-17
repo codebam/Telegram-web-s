@@ -2256,3 +2256,14 @@ export async function clickSponsored(key: string): Promise<void> {
   const {managers} = await bootTelegram();
   await managers.appMessagesManager.clickSponsoredMessage(randomId);
 }
+
+/* ------------------------------------------------------------------ */
+/* Shared internals                                                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Re-exported for `./search.ts`, which builds the same plain items out of
+ * search results and must format peers and messages identically. Not part of
+ * the surface the components use.
+ */
+export {getSelfId, getPeer, peerTitle, toItem};
