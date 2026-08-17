@@ -7051,6 +7051,37 @@ export class AppMessagesManager extends AppManager {
     });
   }
 
+  /**
+   * Persist a new order for the pinned dialogs of a folder.
+   *
+   * `messages.reorderPinnedDialogs` answers with a plain Bool, so the new order
+   * is applied locally through the same update the server would have sent for a
+   * reorder made elsewhere.
+   */
+  public reorderPinnedDialogs(options: {
+    order: PeerId[],
+    filterId?: number
+  }) {
+    const {order} = options;
+    const filterId = options.filterId ?? FOLDER_ID_ALL;
+
+    if(!REAL_FOLDERS.has(filterId)) {
+      return this.filtersStorage.reorderPinnedPeers(filterId, order);
+    }
+
+    return this.apiManager.invokeApi('messages.reorderPinnedDialogs', {
+      force: true,
+      folder_id: filterId as REAL_FOLDER_ID,
+      order: order.map((peerId) => this.appPeersManager.getInputDialogPeerById(peerId))
+    }).then(() => {
+      this.apiUpdatesManager.processLocalUpdate({
+        _: 'updatePinnedDialogs',
+        folder_id: filterId,
+        order: order.map((peerId) => this.appPeersManager.getDialogPeer(peerId))
+      });
+    });
+  }
+
   public async markDialogUnread({peerId, read, monoforumThreadId}: MarkDialogUnreadArgs) {
     const dialog = monoforumThreadId ?
       this.monoforumDialogsStorage.getDialogByParent(peerId, monoforumThreadId) :
