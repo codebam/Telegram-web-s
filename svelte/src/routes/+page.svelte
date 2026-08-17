@@ -2,8 +2,10 @@
   import {onMount} from 'svelte';
 
   import Chat from '$lib/components/Chat.svelte';
+  import QrLogin from '$lib/components/QrLogin.svelte';
   import {bootTelegram} from '$lib/telegram/client';
   import {GIT_COMMIT, GIT_COMMIT_SHORT, GIT_COMMIT_URL} from '$lib/buildInfo';
+  import {isAddingAccount, switchAccount} from '$lib/telegram/accounts';
   import {
     AlreadySignedIn,
     checkPassword,
@@ -16,7 +18,7 @@
     type SentCode
   } from '$lib/telegram/auth';
 
-  type Step = 'boot' | 'phone' | 'code' | 'password' | 'signedIn';
+  type Step = 'boot' | 'phone' | 'qr' | 'code' | 'password' | 'signedIn';
 
   let step = $state<Step>('boot');
   let busy = $state(false);
@@ -34,6 +36,10 @@
   let passwordHint = $state('');
   let self = $state<any>(null);
 
+  // True when this tab is signing in to an extra account slot rather than the
+  // first one — the sign-in card then offers a way back to the live account.
+  let addingAccount = $state(false);
+
   onMount(async () => {
     try {
       const {authState} = await bootTelegram();
@@ -41,12 +47,29 @@
         await showSelf();
       } else {
         step = 'phone';
+        addingAccount = await isAddingAccount();
       }
     } catch (err) {
       error = errorText(err);
       step = 'phone';
     }
   });
+
+  /** Abandon an in-progress "add account" and go back to the first account. */
+  function cancelAddAccount() {
+    switchAccount(1);
+  }
+
+  async function qrPasswordNeeded() {
+    error = '';
+    step = 'password';
+    try {
+      passwordState = await getPasswordState();
+      passwordHint = passwordState?.hint || '';
+    } catch (err) {
+      error = errorText(err);
+    }
+  }
 
   async function showSelf() {
     step = 'signedIn';
@@ -162,6 +185,15 @@
           {busy ? 'Sending…' : 'Next'}
         </button>
       </form>
+      <button class="link" onclick={() => { error = ''; step = 'qr'; }}>Log in by QR code</button>
+    {:else if step === 'qr'}
+      <h1>Log in by QR code</h1>
+      <QrLogin
+        onsuccess={showSelf}
+        onpasswordneeded={qrPasswordNeeded}
+        onerror={(message) => (error = message)}
+      />
+      <button class="link" onclick={() => { error = ''; step = 'phone'; }}>Log in by phone number</button>
     {:else if step === 'code'}
       <div class="logo"></div>
       <h1>{sentCode?.phone_number}</h1>
@@ -208,6 +240,13 @@
 
     {#if error}
       <p class="error">{error}</p>
+    {/if}
+
+    {#if addingAccount && step !== 'boot'}
+      <p class="adding">
+        Adding another account — your other accounts stay signed in.
+        <button class="link inline" onclick={cancelAddAccount}>Cancel</button>
+      </p>
     {/if}
 
     <!-- Required by https://core.telegram.org/api/terms: a third-party client
@@ -365,5 +404,17 @@
     margin: 16px 0 0;
     color: var(--danger);
     font-size: 14px;
+  }
+
+  .adding {
+    margin: 14px 0 0;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-dim);
+  }
+
+  .link.inline {
+    margin: 0 0 0 4px;
+    font-size: 12px;
   }
 </style>
