@@ -9,6 +9,7 @@
   import FormattedText from './FormattedText.svelte';
   import InlinePreview from './InlinePreview.svelte';
   import Lightbox from './Lightbox.svelte';
+  import AudioPlayerBar from './AudioPlayerBar.svelte';
   import Media from './Media.svelte';
   import CallScreen from './CallScreen.svelte';
   import MiniApp from './MiniApp.svelte';
@@ -132,6 +133,7 @@
     type SearchPeerItem
   } from '$lib/telegram/search';
   import {applyAccent, applyDensity, applyTheme} from '$lib/telegram/theme';
+  import {playAudioMessage} from '$lib/telegram/player';
   import {
     getBusinessBot,
     onPeerSettings,
@@ -1282,6 +1284,18 @@
 
     const names = await readParticipants(activePeerId, message.mid);
     readByFor = {mid: message.mid, names};
+  }
+
+  /**
+   * Music and voice play in the persistent bar rather than in the bubble, so
+   * playback survives leaving the chat. The bar is the single audio source:
+   * starting a track stops anything else the page is playing.
+   */
+  function openInPlayer(message: MessageItem) {
+    const kind = message.media?.kind;
+    if (kind !== 'audio' && kind !== 'voice') return;
+    if (message.media?.selfDestruct || activePeerId === null) return;
+    playAudioMessage(activePeerId, message.mid).catch(() => {});
   }
 
   function openLightbox(message: MessageItem) {
@@ -2853,7 +2867,7 @@
                   e.preventDefault();
                   messageMenu = {mid: message.mid, x: e.clientX, y: e.clientY};
                 }}
-                onclick={() => selecting && toggleSelected(message.mid)}
+                onclick={() => (selecting ? toggleSelected(message.mid) : openInPlayer(message))}
                 role="presentation"
               >
                 {#if !message.out && message.fromTitle}
@@ -3248,9 +3262,15 @@
     peerId={activePeerId}
     items={mediaMessages}
     bind:index={lightboxIndex}
+    threadId={activeThreadId}
     onclose={() => (lightboxIndex = null)}
+    onforward={openForward}
+    onjump={jumpTo}
   />
 {/if}
+
+<AudioPlayerBar />
+
 
 {#if pendingFiles.length}
   <!-- Keyed on the batch: the dialog seeds its per-item choices once, so a new
