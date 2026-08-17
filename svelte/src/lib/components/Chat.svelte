@@ -142,6 +142,21 @@
     startCall,
     type BusinessBot
   } from '$lib/telegram/extras';
+  import EffectOverlay from './EffectOverlay.svelte';
+  import EffectPicker from './EffectPicker.svelte';
+  import ScheduledMessages from './ScheduledMessages.svelte';
+  import SendAsPicker from './SendAsPicker.svelte';
+  import SendOptionsSheet from './SendOptionsSheet.svelte';
+  import {
+    countScheduled,
+    getCurrentSendAs,
+    getSlowMode,
+    isSilentByDefault,
+    onChatFullUpdate,
+    onScheduledUpdate,
+    sendMessageWithOptions,
+    type SlowMode
+  } from '$lib/telegram/sendOptions';
 
   let dialogs = $state<DialogItem[]>([]);
   let topics = $state<TopicItem[]>([]);
@@ -2250,10 +2265,173 @@
     maybeLoadOlder();
   }
 
+  /* ---------- send options: schedule, silent, effects, slow mode, send-as ---------- */
+
+  let sendOptionsOpen = $state(false);
+  let scheduledOpen = $state(false);
+  let effectPickerOpen = $state(false);
+  let sendAsPickerOpen = $state(false);
+
+  /** Effect armed for the next message, '' for none. */
+  let sendEffect = $state('');
+  /** Emoticon of the armed effect, for the button label. */
+  let sendEffectEmoticon = $state('');
+  /** Per-chat "send without sound" preference. */
+  let silentDefault = $state(false);
+  /** Identity we post as here, null when posting as ourselves. */
+  let sendAsPeerId = $state<number | null>(null);
+  let slowMode = $state<SlowMode | null>(null);
+  let scheduledCount = $state(0);
+  /** Ticks once a second, but only while a slow-mode cooldown is running. */
+  let nowSeconds = $state(Math.floor(Date.now() / 1000));
+  /** Long-press timer on the send button, for touch devices. */
+  let sendHoldTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Set when a long press opened the sheet, so the release does not also send. */
+  let sendHeld = false;
+
+  const slowModeLeft = $derived(
+    slowMode?.nextSendDate ? Math.max(0, slowMode.nextSendDate - nowSeconds) : 0
+  );
+
+  function slowModeLabel(seconds: number) {
+    const minutes = Math.floor(seconds / 60);
+    return minutes ? `${minutes}:${`${seconds % 60}`.padStart(2, '0')}` : `${seconds}`;
+  }
+
+  /**
+   * Refresh slow mode and send-as from **cached** full-chat state only. Both
+   * readers are cache-only by design, so this never adds a request to the
+   * chat-open path; the real values land later through `chat_full_update`.
+   */
+  function refreshChatSendState(peer: number) {
+    getSlowMode(peer)
+    .then((state) => {
+      if (peer === activePeerId) slowMode = state;
+    })
+    .catch(() => {});
+
+    getCurrentSendAs(peer)
+    .then((id) => {
+      if (peer === activePeerId) sendAsPeerId = id;
+    })
+    .catch(() => {});
+  }
+
+  function refreshScheduledCount(peer: number) {
+    countScheduled(peer)
+    .then((count) => {
+      if (peer === activePeerId) scheduledCount = count;
+    })
+    .catch(() => {});
+  }
+
+  $effect(() => {
+    const peer = activePeerId;
+
+    sendOptionsOpen = false;
+    scheduledOpen = false;
+    effectPickerOpen = false;
+    sendAsPickerOpen = false;
+    sendEffect = '';
+    sendEffectEmoticon = '';
+    slowMode = null;
+    sendAsPeerId = null;
+    scheduledCount = 0;
+
+    if (peer === null) {
+      silentDefault = false;
+      return;
+    }
+
+    silentDefault = isSilentByDefault(peer);
+    refreshChatSendState(peer);
+    refreshScheduledCount(peer);
+  });
+
+  $effect(() => {
+    let unsubscribe: (() => void) | undefined;
+    let cancelled = false;
+
+    onChatFullUpdate((peer) => {
+      if (!cancelled && peer === activePeerId) refreshChatSendState(peer);
+    }).then((off) => {
+      if (cancelled) off();
+      else unsubscribe = off;
+    });
+
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
+  });
+
+  $effect(() => {
+    let unsubscribe: (() => void) | undefined;
+    let cancelled = false;
+
+    onScheduledUpdate((peer) => {
+      if (!cancelled && peer === activePeerId) refreshScheduledCount(peer);
+    }).then((off) => {
+      if (cancelled) off();
+      else unsubscribe = off;
+    });
+
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
+  });
+
+  // Only run a clock while there is a cooldown to count down.
+  $effect(() => {
+    if (!slowMode?.nextSendDate) return;
+    nowSeconds = Math.floor(Date.now() / 1000);
+    const timer = setInterval(() => (nowSeconds = Math.floor(Date.now() / 1000)), 1000);
+    return () => clearInterval(timer);
+  });
+
+  /** Right-click / long-press on the send button opens the options sheet. */
+  function openSendOptions(e: Event) {
+    e.preventDefault();
+    if (activePeerId === null || editing) return;
+    sendOptionsOpen = true;
+  }
+
+  function onSendPointerDown() {
+    if (activePeerId === null || editing) return;
+    clearTimeout(sendHoldTimer);
+    sendHeld = false;
+    sendHoldTimer = setTimeout(() => {
+      sendHeld = true;
+      sendOptionsOpen = true;
+    }, 450);
+  }
+
+  function cancelSendHold() {
+    clearTimeout(sendHoldTimer);
+  }
+
+  function pickEffect(effectId: string, emoticon: string) {
+    sendEffect = effectId;
+    sendEffectEmoticon = emoticon;
+    effectPickerOpen = false;
+  }
+
   async function submit(e: Event) {
     e.preventDefault();
+    // The release of a long press must not send as well as open the sheet.
+    if (sendHeld) {
+      sendHeld = false;
+      return;
+    }
+    await deliver();
+  }
+
+  async function deliver(options: {scheduleDate?: number; silent?: boolean} = {}) {
     const typed = draft.trim();
     if (!typed || activePeerId === null) return;
+    // Slow mode blocks sending now, but never blocks scheduling for later.
+    if (!editing && !options.scheduleDate && slowModeLeft > 0) return;
 
     // Markdown markers become entities here; what goes to the API is the text
     // with the markers stripped.
@@ -2299,15 +2477,40 @@
         activePeerId
       ) :
       {};
+    const peer = activePeerId;
+    const scheduleDate = options.scheduleDate;
+    const effect = sendEffect;
     draft = '';
     cancelReply();
+    sendEffect = '';
+    sendEffectEmoticon = '';
 
     try {
-      await sendMessage(activePeerId, text, {...reply, threadId: activeThreadId, entities});
+      await sendMessageWithOptions(peer, text, {
+        ...reply,
+        threadId: activeThreadId,
+        entities,
+        scheduleDate,
+        silent: options.silent ?? silentDefault,
+        effect: effect || undefined,
+        sendAsPeerId: sendAsPeerId ?? undefined
+      });
       lastTypingSent = 0;
-      sendTyping(activePeerId, activeThreadId, 'cancel').catch(() => {});
-      // The outgoing message arrives back through history_multiappend.
-      await scrollToBottom();
+      sendTyping(peer, activeThreadId, 'cancel').catch(() => {});
+
+      if (scheduleDate) {
+        // A scheduled message never joins the timeline — it joins the queue.
+        refreshScheduledCount(peer);
+      } else {
+        // Start the next cooldown immediately; the server-side value arrives
+        // with the next chat_full_update and overwrites this.
+        if (slowMode?.seconds) {
+          nowSeconds = Math.floor(Date.now() / 1000);
+          slowMode = {...slowMode, nextSendDate: nowSeconds + slowMode.seconds};
+        }
+        // The outgoing message arrives back through history_multiappend.
+        await scrollToBottom();
+      }
     } catch (err: any) {
       error = errorOf(err, 'Failed to send');
     }
@@ -3168,6 +3371,31 @@
             }}
           />
         {/if}
+        {#if sendAsPickerOpen && activePeerId !== null}
+          <SendAsPicker
+            peerId={activePeerId}
+            current={sendAsPeerId}
+            onpick={(id) => (sendAsPeerId = id)}
+            onclose={() => (sendAsPickerOpen = false)}
+          />
+        {/if}
+        {#if effectPickerOpen}
+          <EffectPicker
+            selected={sendEffect}
+            onpick={pickEffect}
+            onclose={() => (effectPickerOpen = false)}
+          />
+        {/if}
+        {#if sendAsPeerId !== null}
+          <button
+            type="button"
+            class="attach send-as"
+            onclick={() => (sendAsPickerOpen = !sendAsPickerOpen)}
+            title="Send message as…"
+            aria-label="Send message as…"
+            disabled={!!editing}
+          ><Avatar peerId={sendAsPeerId} title="" size={22} /></button>
+        {/if}
         {#if botMenuButton}
           <button
             type="button"
@@ -3207,6 +3435,25 @@
           onkeydown={onComposerKey}
         ></textarea>
         <FormatBar textarea={composer} />
+        {#if !editing}
+          <button
+            type="button"
+            class="attach effect-button"
+            class:armed={!!sendEffect}
+            onclick={() => (effectPickerOpen = !effectPickerOpen)}
+            title={sendEffect ? 'Message effect armed' : 'Add a message effect'}
+            aria-label="Add a message effect"
+          >{sendEffectEmoticon || '✨'}</button>
+        {/if}
+        {#if scheduledCount > 0 && !editing}
+          <button
+            type="button"
+            class="attach scheduled-button"
+            onclick={() => (scheduledOpen = true)}
+            title="Scheduled messages"
+            aria-label="Scheduled messages"
+          >🕑<span class="scheduled-count">{scheduledCount}</span></button>
+        {/if}
         {#if !draft.trim() && !editing && activePeerId !== null}
           <!-- Empty composer: the send button gives way to the recorder, the
                same swap the official clients do. -->
@@ -3221,11 +3468,54 @@
             onerror={(message) => (error = message)}
           />
         {:else}
-          <button type="submit" disabled={!draft.trim()} aria-label={editing ? 'Save' : 'Send'}>
-            <Glyph name={editing ? 'check' : 'send'} />
+          <button
+            type="submit"
+            class="send-button"
+            class:silent={silentDefault && !editing}
+            disabled={!draft.trim() || (!editing && slowModeLeft > 0)}
+            aria-label={editing ? 'Save' : 'Send'}
+            title={editing ?
+              'Save' :
+              slowModeLeft > 0 ?
+                `Slow mode — wait ${slowModeLabel(slowModeLeft)}` :
+                'Send. Right-click or hold for scheduled and silent send'}
+            oncontextmenu={openSendOptions}
+            onpointerdown={onSendPointerDown}
+            onpointerup={cancelSendHold}
+            onpointerleave={cancelSendHold}
+          >
+            {#if !editing && slowModeLeft > 0}
+              <span class="slowmode">{slowModeLabel(slowModeLeft)}</span>
+            {:else}
+              <Glyph name={editing ? 'check' : 'send'} />
+            {/if}
           </button>
         {/if}
       </form>
+
+      {#if sendOptionsOpen && activePeerId !== null}
+        <SendOptionsSheet
+          peerId={activePeerId}
+          isUser={activeIsUser}
+          defaultSilent={silentDefault}
+          onsend={(options) => {
+            sendOptionsOpen = false;
+            silentDefault = isSilentByDefault(activePeerId!);
+            deliver(options);
+          }}
+          onclose={() => (sendOptionsOpen = false)}
+        />
+      {/if}
+
+      {#if scheduledOpen && activePeerId !== null}
+        <ScheduledMessages
+          peerId={activePeerId}
+          title={activeTitle}
+          onclose={() => (scheduledOpen = false)}
+        />
+      {/if}
+
+      <EffectOverlay peerId={activePeerId} />
     {/if}
   </section>
 
@@ -5007,6 +5297,59 @@
 
   .attach:hover {
     opacity: 1;
+  }
+
+  /* ---------- send options ---------- */
+
+  .send-as {
+    display: grid;
+    place-items: center;
+    padding: 0;
+    opacity: 1;
+  }
+
+  .effect-button {
+    line-height: 1;
+  }
+
+  .effect-button.armed {
+    opacity: 1;
+    filter: drop-shadow(0 0 4px var(--accent));
+  }
+
+  .scheduled-button {
+    position: relative;
+    line-height: 1;
+  }
+
+  .scheduled-count {
+    position: absolute;
+    top: -2px;
+    right: -4px;
+    min-width: 14px;
+    padding: 0 3px;
+    border-radius: 999px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 9px;
+    line-height: 14px;
+    text-align: center;
+  }
+
+  .send-button.silent {
+    /* A muted send reads as a quieter button, the way the official clients
+       swap the icon for the crossed-out bell. */
+    background: color-mix(in srgb, var(--action) 55%, transparent);
+  }
+
+  .send-button:disabled {
+    cursor: default;
+    opacity: 0.55;
+  }
+
+  .slowmode {
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
   }
 
   form button:disabled {
