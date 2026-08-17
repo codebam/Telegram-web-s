@@ -1,5 +1,5 @@
 <script lang="ts">
-  import {onMount, tick} from 'svelte';
+  import {onMount, tick, untrack} from 'svelte';
 
   import Avatar from './Avatar.svelte';
   import Glyph from './Glyph.svelte';
@@ -48,6 +48,10 @@
   import SavedTags from './SavedTags.svelte';
   import TopicEditor from './TopicEditor.svelte';
   import TopicIcon from './TopicIcon.svelte';
+  import BotBar from './BotBar.svelte';
+  import InlineKeyboard from './InlineKeyboard.svelte';
+  import ReplyKeyboard from './ReplyKeyboard.svelte';
+  import Suggestions from './Suggestions.svelte';
   import {parseStickerSetLink} from '$lib/telegram/stickers';
   import {GIT_COMMIT, GIT_COMMIT_SHORT, GIT_COMMIT_URL} from '$lib/buildInfo';
   import {
@@ -169,6 +173,28 @@
     type MediaFilter,
     type SearchPeerItem
   } from '$lib/telegram/search';
+  import {
+    acceptUrlAuth,
+    clearBotHistory,
+    filterBotCommands,
+    getBotChatState,
+    getReplyKeyboard,
+    hostOf,
+    loadBotCommands,
+    needsUrlConfirmation,
+    onReplyKeyboardChange,
+    rememberHashtags,
+    requestUrlAuth,
+    searchHashtags,
+    searchMentions,
+    setBotBlocked,
+    startBot,
+    type BotChatState,
+    type BotCommandItem,
+    type ReplyKeyboardButton,
+    type ReplyKeyboardState,
+    type SuggestionItem
+  } from '$lib/telegram/botUi';
   import {applyAccent, applyDensity, applyTheme} from '$lib/telegram/theme';
   import {playAudioMessage} from '$lib/telegram/player';
   import {applyAppearance} from '$lib/telegram/appearance';
@@ -581,6 +607,30 @@
       uploadProgress.reduce((sum, item) => sum + item.progress, 0) / uploadProgress.length :
       null
   );
+
+  /* ---------- bot keyboards, commands and autocomplete ---------- */
+
+  /** The keyboard the chat's bot last attached, null while it is unknown. */
+  let replyKeyboard = $state<ReplyKeyboardState | null>(null);
+  let replyKeyboardOpen = $state(false);
+  /** The force-reply already honoured, so it does not re-arm on every update. */
+  let forcedReplyMid = 0;
+  /** `row:column` of the callback button waiting on the bot. */
+  let callbackBusyKey = $state('');
+  /** A bot link the user has to approve before it opens. */
+  let linkPrompt = $state<{text: string; confirm: string; onconfirm: () => void} | null>(null);
+  let botState = $state<BotChatState | null>(null);
+  let botBusy = $state(false);
+  let botCommands: BotCommandItem[] = [];
+  /** Which trigger opened the suggestion strip, null when it is closed. */
+  let suggestKind = $state<'command' | 'mention' | 'hashtag' | null>(null);
+  let suggestItems = $state<SuggestionItem[]>([]);
+  let suggestIndex = $state(0);
+  /** Range in the draft the picked suggestion replaces. */
+  let suggestFrom = 0;
+  let suggestTo = 0;
+  /** Guards a slow lookup against a newer keystroke. */
+  let suggestToken = 0;
 
   /** Media messages in order — the lightbox pages through these. */
   const mediaMessages = $derived(
@@ -1906,6 +1956,52 @@
     };
   }
 
+  /**
+   * A bot can label a link button anything, so anywhere outside Telegram's own
+   * domains gets a confirmation carrying the real destination.
+   */
+  function openBotLink(url: string) {
+    if (!url) return;
+    if (!needsUrlConfirmation(url)) {
+      followLink(url);
+      return;
+    }
+
+    linkPrompt = {
+      text: `Open ${hostOf(url) || url}? This link was sent by a bot.`,
+      confirm: 'Open link',
+      onconfirm: () => followLink(url)
+    };
+  }
+
+  /** `keyboardButtonUrlAuth`: ask the server, then the user, then log in. */
+  async function pressLoginButton(message: MessageItem, button: MessageButton) {
+    if (activePeerId === null) return;
+    const peerId = activePeerId;
+
+    const prompt = await requestUrlAuth(peerId, message.mid, button.buttonId, button.url);
+    if (prompt.kind === 'open') {
+      openBotLink(prompt.url);
+      return;
+    }
+
+    const who = prompt.botTitle ? ` and let ${prompt.botTitle} know who you are` : '';
+    linkPrompt = {
+      text: `Log in to ${hostOf(button.url) || button.url}${who}?`,
+      confirm: 'Log in',
+      onconfirm: async () => {
+        const url = await acceptUrlAuth(
+          peerId,
+          message.mid,
+          button.buttonId,
+          button.url,
+          prompt.requestWriteAccess
+        );
+        followLink(url);
+      }
+    };
+  }
+
   async function pressButton(message: MessageItem, button: MessageButton) {
     if (activePeerId === null) return;
     // Keyboards belong to the bot that sent the message.
@@ -1913,7 +2009,42 @@
 
     switch (button.kind) {
       case 'url':
-        if (button.url) followLink(button.url);
+        openBotLink(button.url);
+        break;
+
+      case 'loginUrl':
+        await pressLoginButton(message, button);
+        break;
+
+      case 'userProfile':
+        if (button.userId) profilePeerId = button.userId;
+        break;
+
+      case 'buy':
+        error = 'Payments are not supported in this client yet.';
+        break;
+
+      case 'game':
+      case 'requestPhone':
+      case 'requestGeo':
+      case 'requestPoll':
+        try {
+          callbackBusyKey = `${button.row}:${button.column}`;
+          const answer = await pressCallbackButton(
+            activePeerId,
+            message.mid,
+            button.row,
+            button.column,
+            button.kind === 'game'
+          );
+          if (answer.url) openBotLink(answer.url);
+          else if (answer.message) error = answer.message;
+          else if (button.kind !== 'game') error = 'This button is not supported yet.';
+        } catch (err: any) {
+          error = errorOf(err, 'This button is not supported yet.');
+        } finally {
+          callbackBusyKey = '';
+        }
         break;
 
       case 'webview':
@@ -1939,11 +2070,18 @@
 
       case 'callback':
         try {
+          // The bot can take a moment to answer, so the pressed button says so.
+          callbackBusyKey = `${button.row}:${button.column}`;
           const answer = await pressCallbackButton(activePeerId, message.mid, button.row, button.column);
-          if (answer.url) followLink(answer.url);
-          else if (answer.message) error = answer.message;
+          if (answer.url) openBotLink(answer.url);
+          // An alert is a modal the user must dismiss; a plain answer is a toast.
+          else if (answer.message && answer.alert) {
+            linkPrompt = {text: answer.message, confirm: 'OK', onconfirm: () => {}};
+          } else if (answer.message) error = answer.message;
         } catch (err: any) {
           error = errorOf(err, 'The bot did not answer');
+        } finally {
+          callbackBusyKey = '';
         }
         break;
 
@@ -1976,6 +2114,317 @@
     return peer?.username ?? '';
   }
 
+  /* ---------- reply keyboards ---------- */
+
+  /**
+   * Pull the keyboard tweb has merged for this chat. A `forceReply` arms the
+   * reply bar once — re-arming it on every refresh would fight the user
+   * cancelling it.
+   */
+  async function refreshReplyKeyboard(peerId: number) {
+    const state = await getReplyKeyboard(peerId);
+    if (activePeerId !== peerId) return;
+
+    replyKeyboard = state;
+    if (state.kind !== 'markup') replyKeyboardOpen = false;
+
+    if (state.kind === 'forceReply' && state.mid && forcedReplyMid !== state.mid) {
+      forcedReplyMid = state.mid;
+      const target = messages.find((m) => m.mid === state.mid);
+      if (target) replyTo = target;
+      focusComposer();
+    }
+  }
+
+  $effect(() => {
+    const peerId = activePeerId;
+    replyKeyboard = null;
+    replyKeyboardOpen = false;
+    forcedReplyMid = 0;
+    if (peerId === null) return;
+
+    let cancelled = false;
+    refreshReplyKeyboard(peerId).catch(() => {});
+
+    const off = onReplyKeyboardChange((changed) => {
+      if (!cancelled && changed === activePeerId) refreshReplyKeyboard(changed).catch(() => {});
+    });
+
+    return () => {
+      cancelled = true;
+      off.then((stop) => stop()).catch(() => {});
+    };
+  });
+
+  async function pressReplyKeyboardButton(button: ReplyKeyboardButton) {
+    if (activePeerId === null) return;
+
+    // `single_use` keyboards fold away as soon as one button is pressed.
+    if (replyKeyboard?.singleUse) replyKeyboardOpen = false;
+
+    switch (button.kind) {
+      case 'webview':
+      case 'simpleWebView':
+        miniApp = {
+          botId: activePeerId,
+          peerId: activePeerId,
+          url: button.url,
+          buttonText: button.text,
+          title: button.text,
+          isSimpleWebView: button.kind === 'simpleWebView'
+        };
+        return;
+
+      case 'text':
+        try {
+          await sendMessage(activePeerId, button.text, {threadId: activeThreadId});
+          await scrollToBottom();
+        } catch (err: any) {
+          error = errorOf(err, 'Send failed');
+        }
+        return;
+
+      default:
+        // Contact, location and poll requests need input this client cannot
+        // collect yet; say so rather than sending the label as a message.
+        error = 'This button is not supported in this client yet.';
+    }
+  }
+
+  /* ---------- bot chats: start, stop, clear ---------- */
+
+  $effect(() => {
+    const peerId = activePeerId;
+    botState = null;
+    botCommands = [];
+    if (peerId === null || peerId < 0) return;
+
+    let cancelled = false;
+    const hasMessages = untrack(() => messages.some((m) => !m.service));
+    getBotChatState(peerId, hasMessages).then((state) => {
+      if (!cancelled && activePeerId === peerId) botState = state;
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  });
+
+  async function runBotAction(action: () => Promise<void>) {
+    if (botBusy) return;
+    botBusy = true;
+    try {
+      await action();
+    } catch (err: any) {
+      error = errorOf(err, 'The bot did not respond');
+    } finally {
+      botBusy = false;
+    }
+  }
+
+  function startBotChat() {
+    const peerId = activePeerId;
+    if (peerId === null) return;
+
+    runBotAction(async () => {
+      await startBot(peerId);
+      if (activePeerId === peerId && botState) botState = {...botState, blocked: false, fresh: false};
+    });
+  }
+
+  function stopBotChat() {
+    const peerId = activePeerId;
+    if (peerId === null) return;
+
+    runBotAction(async () => {
+      await setBotBlocked(peerId, true);
+      if (activePeerId === peerId && botState) botState = {...botState, blocked: true};
+    });
+  }
+
+  function clearBotChat() {
+    const peerId = activePeerId;
+    if (peerId === null) return;
+
+    runBotAction(async () => {
+      await clearBotHistory(peerId);
+      if (activePeerId !== peerId) return;
+      messages = [];
+      if (botState) botState = {...botState, fresh: true};
+    });
+  }
+
+  /* ---------- `/`, `@` and `#` autocomplete ---------- */
+
+  /** Text each suggestion drops into the draft, parallel to `suggestItems`. */
+  let suggestValues: string[] = [];
+
+  function closeSuggestions() {
+    suggestKind = null;
+    suggestItems = [];
+    suggestValues = [];
+    suggestIndex = 0;
+  }
+
+  /**
+   * Reads the token the caret sits in and fills the suggestion strip from it.
+   * Only one strip is ever open, so it cannot fight the inline-bot results for
+   * Enter or the arrow keys.
+   */
+  async function updateSuggestions() {
+    const peerId = activePeerId;
+    if (peerId === null || editing) {
+      closeSuggestions();
+      return;
+    }
+
+    const caret = composer?.selectionStart ?? draft.length;
+    const before = draft.slice(0, caret);
+    const match = /(?:^|\s)([@#/])([^\s@#/]*)$/.exec(before);
+    if (!match) {
+      closeSuggestions();
+      return;
+    }
+
+    const [, trigger, query] = match;
+    const from = caret - query.length - 1;
+
+    // A command is only a command at the very start of a message, and a leading
+    // "@bot " is the inline-bot syntax, which owns its own result list.
+    if (trigger === '/' && from !== 0) {
+      closeSuggestions();
+      return;
+    }
+    if (trigger === '@' && from === 0 && inlineBot) {
+      closeSuggestions();
+      return;
+    }
+
+    const token = ++suggestToken;
+    let items: SuggestionItem[] = [];
+    let values: string[] = [];
+
+    if (trigger === '/') {
+      if (!botCommands.length) botCommands = await loadBotCommands(peerId);
+      const found = filterBotCommands(botCommands, query);
+      items = found.map((command) => ({
+        key: `${command.botId}:${command.command}`,
+        title: '/' + command.command + command.suffix,
+        subtitle: command.description
+      }));
+      values = found.map((command) => `/${command.command}${command.suffix} `);
+    } else if (trigger === '@') {
+      const mentions = (await searchMentions(peerId, query, activeThreadId))
+      .filter((mention) => mention.username);
+      items = mentions.map((mention) => ({
+        key: String(mention.peerId),
+        title: '@' + mention.username,
+        subtitle: mention.title
+      }));
+      values = mentions.map((mention) => `@${mention.username} `);
+    } else {
+      const tags = searchHashtags(query, messages.map((m) => m.text));
+      items = tags.map((tag) => ({key: tag, title: '#' + tag, subtitle: ''}));
+      values = tags.map((tag) => `#${tag} `);
+    }
+
+    if (token !== suggestToken || activePeerId !== peerId) return;
+
+    if (!items.length) {
+      closeSuggestions();
+      return;
+    }
+
+    suggestKind = trigger === '/' ? 'command' : trigger === '@' ? 'mention' : 'hashtag';
+    suggestItems = items;
+    suggestValues = values;
+    suggestIndex = 0;
+    suggestFrom = from;
+    suggestTo = caret;
+  }
+
+  /** The commands button next to the composer: the whole list, unfiltered. */
+  async function openCommandList() {
+    if (activePeerId === null) return;
+    if (suggestKind === 'command') {
+      closeSuggestions();
+      return;
+    }
+
+    if (!botCommands.length) botCommands = await loadBotCommands(activePeerId);
+    if (!botCommands.length) return;
+
+    const caret = composer?.selectionStart ?? draft.length;
+    suggestKind = 'command';
+    suggestItems = botCommands.map((command) => ({
+      key: `${command.botId}:${command.command}`,
+      title: '/' + command.command + command.suffix,
+      subtitle: command.description
+    }));
+    suggestValues = botCommands.map((command) => `/${command.command}${command.suffix} `);
+    suggestIndex = 0;
+    // Picking from the button inserts at the caret rather than replacing a token.
+    suggestFrom = caret;
+    suggestTo = caret;
+    composer?.focus();
+  }
+
+  async function applySuggestion(index: number) {
+    const value = suggestValues[index];
+    if (value === undefined) return;
+
+    const wasCommand = suggestKind === 'command';
+    const before = draft.slice(0, suggestFrom);
+    const after = draft.slice(suggestTo);
+    draft = before + value + after;
+    closeSuggestions();
+
+    // A command picked on its own is what the user meant to send, the way the
+    // other clients treat the command list.
+    if (wasCommand && !before.trim() && !after.trim()) {
+      await submit(new Event('submit'));
+      return;
+    }
+
+    await tick();
+    const caret = (before + value).length;
+    composer?.focus();
+    composer?.setSelectionRange(caret, caret);
+    onDraftInput();
+  }
+
+  /** Arrow keys, Enter and Tab belong to the strip while it is open. */
+  function onSuggestionKey(e: KeyboardEvent): boolean {
+    if (!suggestKind || !suggestItems.length || e.isComposing) return false;
+
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      // Ctrl+Arrow is reply navigation and Alt/Meta are the OS's — only a bare
+      // arrow moves the highlight.
+      if (e.ctrlKey || e.metaKey || e.altKey) return false;
+      e.preventDefault();
+      const step = e.key === 'ArrowDown' ? 1 : -1;
+      suggestIndex = (suggestIndex + step + suggestItems.length) % suggestItems.length;
+      return true;
+    }
+
+    if (e.key === 'Enter' || e.key === 'Tab') {
+      if (e.shiftKey || e.ctrlKey || e.metaKey) return false;
+      e.preventDefault();
+      applySuggestion(suggestIndex);
+      return true;
+    }
+
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      // The window handler would otherwise close the chat behind the strip.
+      e.stopPropagation();
+      closeSuggestions();
+      return true;
+    }
+
+    return false;
+  }
+
   /**
    * Whether this chat's bot pins a web app next to the composer. Fetched after
    * the chat has rendered so it never delays opening one.
@@ -2000,6 +2449,9 @@
    * the desktop client. Ctrl+Up from nothing selects the newest message.
    */
   function onComposerKey(e: KeyboardEvent) {
+    // An open suggestion strip owns the arrows and Enter first.
+    if (onSuggestionKey(e)) return;
+
     // Enter sends; Shift+Enter (or Ctrl/Cmd+Enter) inserts a newline. isComposing
     // guards IME candidate selection, which also arrives as Enter.
     if (e.key === 'Enter' && !e.isComposing) {
@@ -2124,6 +2576,7 @@
   function onDraftInput() {
     resizeComposer();
     onInlineInput();
+    updateSuggestions().catch(() => {});
     if (activePeerId === null || editing) return;
 
     // The server expires a typing status after ~6s, so keep re-sending while
@@ -2848,6 +3301,10 @@
     cancelReply();
     sendEffect = '';
     sendEffectEmoticon = '';
+    closeSuggestions();
+    // The composer keeps its own recent-hashtag list; this is where it grows.
+    rememberHashtags(text);
+    if (botState?.fresh) botState = {...botState, fresh: false};
 
     try {
       await sendMessageWithOptions(peer, text, {
@@ -3754,24 +4211,11 @@
                 {/if}
 
                 {#if message.buttons.length}
-                  <div class="keyboard">
-                    {#each message.buttons as row, rowIndex (rowIndex)}
-                      <div class="keyboard-row">
-                        {#each row as button (button.column)}
-                          <button
-                            class="keyboard-btn"
-                            disabled={button.kind === 'unsupported'}
-                            onclick={() => pressButton(message, button)}
-                          >
-                            {#if button.kind === 'webview' || button.kind === 'simpleWebView'}
-                              <span class="kb-icon">▸</span>
-                            {/if}
-                            {button.text}
-                          </button>
-                        {/each}
-                      </div>
-                    {/each}
-                  </div>
+                  <InlineKeyboard
+                    buttons={message.buttons}
+                    busyKey={callbackBusyKey}
+                    onpress={(button) => pressButton(message, button)}
+                  />
                 {/if}
 
                 {#if !message.service && activePeerId !== null}
@@ -3902,7 +4346,10 @@
         </div>
       {/if}
 
-      {#if !editing}
+      <!-- Exactly one suggestion strip is live at a time: the bot/mention/hashtag
+           strip owns the composer keys while it is open, so the sticker strip
+           stands down rather than fighting it for Enter and Tab. -->
+      {#if !editing && !suggestKind}
         <StickerSuggest
           {draft}
           onpick={(docId) => {
@@ -3942,6 +4389,33 @@
         </div>
       {/if}
 
+      {#if suggestKind && suggestItems.length}
+        <Suggestions
+          items={suggestItems}
+          active={suggestIndex}
+          label={suggestKind === 'command' ? 'Bot commands' : suggestKind === 'mention' ? 'Members' : 'Hashtags'}
+          onpick={applySuggestion}
+        />
+      {/if}
+
+      {#if botState?.isBot}
+        <BotBar
+          bot={botState}
+          busy={botBusy}
+          onstart={startBotChat}
+          onstop={stopBotChat}
+          onrestart={startBotChat}
+          onclear={clearBotChat}
+        />
+      {/if}
+
+      {#if replyKeyboardOpen && replyKeyboard?.kind === 'markup'}
+        <ReplyKeyboard
+          keyboard={replyKeyboard}
+          onpress={pressReplyKeyboardButton}
+          onclose={() => (replyKeyboardOpen = false)}
+        />
+      {:else}
       <form onsubmit={submit}>
         {#if showPicker}
           <Picker
@@ -3977,6 +4451,24 @@
             aria-label="Send message as…"
             disabled={!!editing}
           ><Avatar peerId={sendAsPeerId} title="" size={22} /></button>
+        {/if}
+        {#if replyKeyboard?.kind === 'markup'}
+          <button
+            type="button"
+            class="attach"
+            onclick={() => (replyKeyboardOpen = true)}
+            title="Show the bot keyboard"
+            aria-label="Show the bot keyboard"
+          >⌨</button>
+        {/if}
+        {#if botState?.hasCommands}
+          <button
+            type="button"
+            class="attach bot-commands"
+            onclick={openCommandList}
+            title="Bot commands"
+            aria-label="Bot commands"
+          >/</button>
         {/if}
         {#if botMenuButton}
           <button
@@ -4030,12 +4522,13 @@
           onchange={(e) => attach((e.currentTarget as HTMLInputElement).files)}
         />
         <textarea
-          placeholder="Message"
+          placeholder={replyKeyboard?.placeholder || 'Message'}
           rows="1"
           bind:this={composer}
           bind:value={draft}
           oninput={onDraftInput}
           onkeydown={onComposerKey}
+          onclick={() => updateSuggestions()}
         ></textarea>
         <FormatBar textarea={composer} />
         {#if !editing}
@@ -4095,6 +4588,7 @@
           </button>
         {/if}
       </form>
+      {/if}
 
       {#if sendOptionsOpen && activePeerId !== null}
         <SendOptionsSheet
@@ -4214,6 +4708,31 @@
     onsent={() => bumpReaction(starReactionFor!)}
     onclose={() => (starReactionFor = null)}
   />
+{/if}
+
+{#if linkPrompt}
+  <div class="reactors-backdrop" onclick={() => (linkPrompt = null)} role="presentation">
+    <div
+      class="reactors-dialog bot-prompt"
+      onclick={(event) => event.stopPropagation()}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Bot request"
+    >
+      <p class="bot-prompt-text">{linkPrompt.text}</p>
+      <div class="bot-prompt-actions">
+        <button class="bot-prompt-cancel" onclick={() => (linkPrompt = null)}>Cancel</button>
+        <button
+          class="bot-prompt-ok"
+          onclick={() => {
+            const prompt = linkPrompt;
+            linkPrompt = null;
+            prompt?.onconfirm();
+          }}
+        >{linkPrompt.confirm}</button>
+      </div>
+    </div>
+  </div>
 {/if}
 
 {#if messageMenu}
@@ -5126,41 +5645,43 @@
     font-size: 16px;
   }
 
-  .keyboard {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    margin-top: 6px;
+  .bot-commands {
+    font-weight: 700;
+    font-size: 18px;
+    line-height: 1;
   }
 
-  .keyboard-row {
-    display: flex;
-    gap: 4px;
+  .bot-prompt {
+    padding: 18px;
   }
 
-  .keyboard-btn {
-    flex: 1;
-    padding: 8px 10px;
+  .bot-prompt-text {
+    margin: 0 0 16px;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+  }
+
+  .bot-prompt-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  .bot-prompt-cancel,
+  .bot-prompt-ok {
+    padding: 8px 14px;
     border: 1px solid var(--border);
     border-radius: 10px;
     background: var(--bg-elevated);
     color: var(--text);
-    font-size: 13px;
+    font: inherit;
     cursor: pointer;
   }
 
-  .keyboard-btn:hover:not(:disabled) {
-    border-color: var(--accent);
-  }
-
-  .keyboard-btn:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
-
-  .kb-icon {
-    color: var(--accent);
-    margin-right: 4px;
+  .bot-prompt-ok {
+    border-color: transparent;
+    background: var(--accent);
+    color: #fff;
   }
 
   .inline-switch {
