@@ -2,7 +2,7 @@
   import {loadInlineResultThumbnail, type InlineResultItem} from '$lib/telegram/settings';
   import {enqueueLoad} from '$lib/telegram/loadQueue';
 
-  let {result, size = 44}: {result: InlineResultItem; size?: number} = $props();
+  let {result, size = 44, isGrid = false}: {result: InlineResultItem; size?: number; isGrid?: boolean} = $props();
 
   let url = $state<string | null>(null);
   let el = $state<HTMLSpanElement | null>(null);
@@ -16,7 +16,7 @@
         seen = true;
         observer.disconnect();
       }
-    }, {rootMargin: '100px'});
+    }, {rootMargin: '120px'});
 
     observer.observe(el);
     return () => observer.disconnect();
@@ -34,9 +34,19 @@
   const fallback = $derived((result.title.trim() || result.type || '?')[0].toUpperCase());
 </script>
 
-<span class="inline-preview" bind:this={el} style="width: {size}px; height: {size}px">
+<span
+  class="inline-preview"
+  class:grid-mode={isGrid}
+  bind:this={el}
+  style={isGrid ? undefined : `width: ${size}px; height: ${size}px`}
+>
   {#if url}
-    <img src={url} alt={result.title} />
+    {#if result.isGif}
+      <!-- svelte-ignore a11y_media_has_caption -->
+      <video src={url} autoplay loop muted playsinline></video>
+    {:else}
+      <img src={url} alt={result.title} />
+    {/if}
   {:else}
     <span class="fallback">{fallback}</span>
   {/if}
@@ -52,7 +62,16 @@
     flex: none;
   }
 
-  img {
+  .inline-preview.grid-mode {
+    width: 100%;
+    height: 100%;
+    min-height: 80px;
+    aspect-ratio: 1;
+    border-radius: 6px;
+  }
+
+  img,
+  video {
     width: 100%;
     height: 100%;
     object-fit: cover;

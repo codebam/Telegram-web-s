@@ -216,6 +216,7 @@ export type InlineResultItem = {
   title: string;
   description: string;
   type: string;
+  isGif?: boolean;
   thumbDocId?: string;
   thumbPhotoId?: string;
   thumbUrl?: string;
@@ -223,6 +224,7 @@ export type InlineResultItem = {
 
 export type InlineQueryAnswer = {
   botId: number;
+  gallery: boolean;
   results: InlineResultItem[];
   /** `inlineBotWebView` — the "open app" button shown above the results. */
   switchWebView: {text: string; url: string} | null;
@@ -230,7 +232,7 @@ export type InlineQueryAnswer = {
   switchPm: {text: string; startParam: string} | null;
 };
 
-const emptyInlineAnswer: InlineQueryAnswer = {botId: 0, results: [], switchWebView: null, switchPm: null};
+const emptyInlineAnswer: InlineQueryAnswer = {botId: 0, gallery: false, results: [], switchWebView: null, switchPm: null};
 
 // Keep raw media outside Svelte state. `$state` turns nested objects into proxies,
 // which the worker cannot structured-clone when the thumbnail loader downloads it.
@@ -252,7 +254,12 @@ export async function loadInlineResultThumbnail(queryAndResultId: string): Promi
 
   try {
     const isPhoto = media._ === 'photo';
-    const thumbnail = isPhoto || media._ === 'document' ? choosePhotoSize(media, 96, 96, true) : undefined;
+    const isDocument = media._ === 'document';
+    const attributes = media.attributes ?? [];
+    const isGif = isDocument && (attributes.some((a: any) => a._ === 'documentAttributeAnimated') || media.type === 'gif' || media.mime_type === 'video/mp4');
+
+    // GIFs download the full video file so they can animate; other media gets a thumbnail.
+    const thumbnail = isGif ? undefined : (isPhoto || isDocument ? choosePhotoSize(media, 96, 96, true) : undefined);
     const url = await appDownloadManager.downloadMediaURL({media, thumb: thumbnail});
     inlineThumbnailUrls.set(queryAndResultId, url ?? null);
     return url ?? null;
@@ -282,17 +289,27 @@ export async function queryInlineBot(
       inlineResultMedia.set(`${result.query_id}_${item.id}`, item);
     }
 
+    const isGallery = !!(result?.pFlags?.gallery || result?.gallery);
+
     return {
       botId,
-      results: (result?.results ?? []).map((item: any) => ({
-        queryAndResultId: `${result.query_id}_${item.id}`,
-        title: item.title ?? item.send_message?.message?.slice(0, 40) ?? 'Result',
-        description: item.description ?? '',
-        type: item.type ?? '',
-        thumbDocId: item.document?.id ? String(item.document.id) : undefined,
-        thumbPhotoId: item.photo?.id ? String(item.photo.id) : undefined,
-        thumbUrl: item.thumb?.mime_type?.startsWith('image/') ? item.thumb.url : undefined
-      })),
+      gallery: isGallery,
+      results: (result?.results ?? []).map((item: any) => {
+        const doc = item.document;
+        const attributes = doc?.attributes ?? [];
+        const isGif = Boolean(item.type === 'gif' || (doc && (attributes.some((a: any) => a._ === 'documentAttributeAnimated') || doc.type === 'gif' || doc.mime_type === 'video/mp4')));
+
+        return {
+          queryAndResultId: `${result.query_id}_${item.id}`,
+          title: item.title ?? item.send_message?.message?.slice(0, 40) ?? 'Result',
+          description: item.description ?? '',
+          type: item.type ?? '',
+          isGif,
+          thumbDocId: doc?.id ? String(doc.id) : undefined,
+          thumbPhotoId: item.photo?.id ? String(item.photo.id) : undefined,
+          thumbUrl: item.thumb?.mime_type?.startsWith('image/') ? item.thumb.url : undefined
+        };
+      }),
       switchWebView: switchWebView ? {text: switchWebView.text ?? 'Open app', url: switchWebView.url ?? ''} : null,
       switchPm: switchPm ? {text: switchPm.text ?? 'Start', startParam: switchPm.start_param ?? ''} : null
     };
