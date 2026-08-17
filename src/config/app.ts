@@ -17,10 +17,13 @@ const App = {
   id: +import.meta.env.VITE_API_ID,
   hash: import.meta.env.VITE_API_HASH,
   pushServerKey: import.meta.env.VITE_PUSH_SERVER_KEY,
-  version: import.meta.env.VITE_VERSION,
-  versionFull: import.meta.env.VITE_VERSION_FULL,
-  build: +import.meta.env.VITE_BUILD,
-  langPackVersion: +import.meta.env.VITE_LANG_PACK_VERSION,
+  // A build without the root .env has no version vars, and an undefined version
+  // crashes loadState's migration step (compareVersion splits it) before the app
+  // can boot. Fall back rather than take the whole client down over metadata.
+  version: import.meta.env.VITE_VERSION || '1.0.0',
+  versionFull: import.meta.env.VITE_VERSION_FULL || '1.0.0',
+  build: +import.meta.env.VITE_BUILD || 1,
+  langPackVersion: +import.meta.env.VITE_LANG_PACK_VERSION || 1,
   langPackLocalVersion: langPackLocalVersion,
   langPack: 'webk',
   langPackCode: 'en',
