@@ -1,5 +1,7 @@
 <script lang="ts">
   import {onDestroy, untrack} from 'svelte';
+  import MediaEditor from './MediaEditor.svelte';
+  import {isEditableFile} from '$lib/telegram/mediaEditor';
 
   let {
     files,
@@ -17,15 +19,33 @@
   // The dialog is mounted fresh per batch, so seeding once is intended.
   let asPhoto = $state(untrack(() => files.every((file) => file.type.startsWith('image/'))));
 
-  const anyImage = $derived(files.some((file) => file.type.startsWith('image/')));
+  // The editor replaces entries in place, so the batch is a local copy rather
+  // than the prop array.
+  let current = $state<File[]>(untrack(() => [...files]));
+  let editing = $state<number | null>(null);
+
+  const anyImage = $derived(current.some((file) => file.type.startsWith('image/')));
 
   // Object URLs must be released or the blobs leak for the tab's lifetime.
-  const previews = untrack(() =>
-    files
-      .filter((file) => file.type.startsWith('image/'))
+  let previews = $state<{index: number; name: string; url: string}[]>([]);
+
+  function refreshPreviews() {
+    previews.forEach((preview) => URL.revokeObjectURL(preview.url));
+    previews = current
+      .map((file, index) => ({file, index}))
+      .filter((entry) => entry.file.type.startsWith('image/'))
       .slice(0, 6)
-      .map((file) => ({name: file.name, url: URL.createObjectURL(file)}))
-  );
+      .map((entry) => ({index: entry.index, name: entry.file.name, url: URL.createObjectURL(entry.file)}));
+  }
+
+  untrack(() => refreshPreviews());
+
+  function applyEdit(edited: File) {
+    if(editing === null) return;
+    current[editing] = edited;
+    editing = null;
+    refreshPreviews();
+  }
 
   onDestroy(() => previews.forEach((preview) => URL.revokeObjectURL(preview.url)));
 
@@ -42,7 +62,7 @@
 
   function submit(e: Event) {
     e.preventDefault();
-    onsend(files, anyImage && asPhoto, caption.trim());
+    onsend([...current], anyImage && asPhoto, caption.trim());
   }
 
   function onKey(e: KeyboardEvent) {
@@ -62,20 +82,26 @@
     {#if previews.length}
       <div class="previews" class:single={previews.length === 1}>
         {#each previews as preview (preview.url)}
-          <img src={preview.url} alt={preview.name} />
+          <div class="preview">
+            <img src={preview.url} alt={preview.name} />
+            <button type="button" class="edit" onclick={() => (editing = preview.index)}>Edit</button>
+          </div>
         {/each}
       </div>
     {/if}
 
     <div class="files">
-      {#each files.slice(0, 4) as file (file.name + file.size)}
+      {#each current.slice(0, 4) as file, index (index)}
         <div class="file">
           <span class="name">{file.name || 'Pasted image'}</span>
           <span class="size">{humanSize(file.size)}</span>
+          {#if isEditableFile(file)}
+            <button type="button" class="edit-link" onclick={() => (editing = index)}>Edit</button>
+          {/if}
         </div>
       {/each}
-      {#if files.length > 4}
-        <p class="muted">and {files.length - 4} more</p>
+      {#if current.length > 4}
+        <p class="muted">and {current.length - 4} more</p>
       {/if}
     </div>
 
@@ -102,6 +128,14 @@
   </form>
   </div>
 </div>
+
+{#if editing !== null && current[editing]}
+  <MediaEditor
+    file={current[editing]}
+    onapply={applyEdit}
+    oncancel={() => (editing = null)}
+  />
+{/if}
 
 <style>
   .backdrop {
@@ -145,12 +179,39 @@
     grid-template-columns: 1fr;
   }
 
+  .preview {
+    position: relative;
+  }
+
   .previews img {
     width: 100%;
     max-height: 240px;
     object-fit: cover;
     border-radius: 10px;
     display: block;
+  }
+
+  .edit {
+    position: absolute;
+    right: 6px;
+    bottom: 6px;
+    padding: 5px 10px;
+    border: none;
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.6);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .edit-link {
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--accent);
+    font-size: 12px;
+    cursor: pointer;
   }
 
   .files {
