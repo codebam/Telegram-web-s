@@ -6,7 +6,8 @@
  */
 
 import tsNow from '@helpers/tsNow';
-import {InputChannel, InputNotifyPeer, InputPeer, InputPeerNotifySettings, NotifyPeer, Peer, PeerNotifySettings, ReactionsNotifySettings, Update} from '@layer';
+import {InputChannel, InputNotifyPeer, InputPeer, InputPeerNotifySettings, NotifyPeer, Peer, PeerNotifySettings, ReactionsNotifySettings, Update, Updates} from '@layer';
+import type {MyDocument} from '@appManagers/appDocsManager';
 import {MUTE_UNTIL} from '@appManagers/constants';
 import throttle from '@helpers/schedulers/throttle';
 import convertInputKeyToKey from '@helpers/string/convertInputKeyToKey';
@@ -41,6 +42,8 @@ export class AppNotificationsManager extends AppManager {
   private notifyContactsSignUp: Promise<boolean>;
 
   private reactionsNotifySettings: Promise<ReactionsNotifySettings> | ReactionsNotifySettings;
+
+  private savedRingtones: Promise<MyDocument[]>;
 
   protected after() {
     this.checkMuteUntilThrottled = throttle(this.checkMuteUntil, 1000, false);
@@ -146,12 +149,58 @@ export class AppNotificationsManager extends AppManager {
     });
   }
 
-  // public getNotifyExceptions() {
-  //   apiManager.invokeApi('account.getNotifyExceptions', {compare_sound: true})
-  //   .then((updates) => {
-  //     apiUpdatesManager.processUpdateMessage(updates);
-  //   });
-  // }
+  /**
+   * Peers with their own notification settings. The server answers with an
+   * `Updates` carrying one `updateNotifySettings` per exception, so processing
+   * it fills both the peer cache and `peerSettings` — the returned ids are just
+   * a handle for the UI to read those settings back.
+   */
+  public getNotifyExceptions({compareSound, compareStories}: {
+    compareSound?: boolean,
+    compareStories?: boolean
+  } = {}): Promise<PeerId[]> {
+    return this.apiManager.invokeApi('account.getNotifyExceptions', {
+      compare_sound: compareSound,
+      compare_stories: compareStories
+    }).then((updates) => {
+      this.apiUpdatesManager.processUpdateMessage(updates);
+
+      const peerIds: PeerId[] = [];
+      const list = (updates as Updates.updates).updates ?? [];
+      list.forEach((update) => {
+        if(update._ !== 'updateNotifySettings') return;
+        const {peer} = update;
+        if(peer._ !== 'notifyPeer') return;
+        peerIds.push(this.appPeersManager.getPeerId(peer.peer));
+      });
+
+      return peerIds;
+    });
+  }
+
+  /** Wipes every per-peer override server-side, then re-reads the defaults. */
+  public resetNotifySettings() {
+    return this.apiManager.invokeApi('account.resetNotifySettings').then(() => {
+      this.peerSettings.notifyPeer = {};
+      this.peerSettings.notifyForumTopic = {};
+      this.peerSettings.notifyCommunity = {};
+      this.peerSettings.notifyUsers =
+        this.peerSettings.notifyChats =
+        this.peerSettings.notifyBroadcasts = null;
+      this.getNotifyPeerTypePromise = undefined;
+      return this.getNotifyPeerTypeSettings();
+    });
+  }
+
+  /** Ringtones the user uploaded, offered as notification sounds. */
+  public getSavedRingtones() {
+    if(this.savedRingtones) return this.savedRingtones;
+    return this.savedRingtones = this.apiManager.invokeApi('account.getSavedRingtones', {hash: 0})
+    .then((result) => {
+      const ringtones = result._ === 'account.savedRingtones' ? result.ringtones : [];
+      return ringtones.map((doc) => this.appDocsManager.saveDoc(doc)).filter(Boolean);
+    });
+  }
 
   public getContactSignUpNotification() {
     if(this.notifyContactsSignUp) return this.notifyContactsSignUp;
