@@ -50,6 +50,20 @@ export function subscribeConnection(onState: (state: ConnectionState) => void): 
     } catch(err) {
       return;
     }
+    if(!baseDcId) baseDcId = (await import('@config/app')).default.baseDcId;
+    if(cancelled) return;
+
+    /**
+     * The networkers live in the worker, so the statuses this tab has are only
+     * the ones it was listening for. The socket is normally up long before this
+     * subscribes — and a status that never changes never fires an event — so
+     * the map has to be seeded from the worker or the bar sits on
+     * "Waiting for network" for the whole session.
+     */
+    let statuses: Record<string, {status: number; name: string}> = {};
+    try {
+      statuses = {...((await managers.rootScope.getConnectionStatus()) as any)};
+    } catch(err) {}
     if(cancelled) return;
 
     let hadConnect = false;
@@ -82,7 +96,7 @@ export function subscribeConnection(onState: (state: ConnectionState) => void): 
     };
 
     const applyStatus = () => {
-      const status = rootScope.getConnectionStatus()['NET-' + baseDcId];
+      const status = statuses['NET-' + baseDcId];
       const online = !!status && status.status === ConnectionStatus.Connected;
 
       if(online) hadConnect = true;
@@ -91,7 +105,10 @@ export function subscribeConnection(onState: (state: ConnectionState) => void): 
       emit();
     };
 
-    const onStatusChange = () => applyStatus();
+    const onStatusChange = (status?: any) => {
+      if(status?.name) statuses[status.name] = status;
+      applyStatus();
+    };
     const onSyncing = () => {
       updating = true;
       emit();
