@@ -1,26 +1,21 @@
 <script lang="ts">
   import Avatar from './Avatar.svelte';
-  import PrivacySettings from './PrivacySettings.svelte';
-  import {
-    disableNotifications,
-    enableNotifications,
-    notificationsEnabled,
-    permission
-  } from '$lib/telegram/notifications';
+  import NotificationSettings from './NotificationSettings.svelte';
   import {
     loadAttachBots,
     loadBusiness,
-    loadNotifyScopes,
     loadProfile,
+    loadSessions,
     logOut,
     saveBusinessIntro,
     saveProfile,
     saveUsername,
-    setNotifyScope,
+    terminateOtherSessions,
+    terminateSession,
     type AttachBot,
     type BusinessInfo,
-    type NotifyScope,
-    type ProfileInfo
+    type ProfileInfo,
+    type SessionInfo
   } from '$lib/telegram/settings';
   import {
     ACCENTS,
@@ -41,8 +36,7 @@
     | 'profile'
     | 'appearance'
     | 'notifications'
-    | 'privacy'
-    | 'security'
+    | 'sessions'
     | 'premium'
     | 'stars'
     | 'business'
@@ -62,9 +56,7 @@
   let accent = $state(getAccent());
   let density = $state<Density>(getDensity());
 
-  let scopes = $state<Record<NotifyScope, boolean> | null>(null);
-  let desktopOn = $state(notificationsEnabled());
-
+  let sessions = $state<SessionInfo[]>([]);
   let business = $state<BusinessInfo | null>(null);
   let introTitle = $state('');
   let introDescription = $state('');
@@ -84,8 +76,8 @@
           lastName = profile.lastName;
           bio = profile.bio;
           username = profile.username;
-        } else if(current === 'notifications' && !scopes) {
-          scopes = await loadNotifyScopes();
+        } else if(current === 'sessions' && !sessions.length) {
+          sessions = await loadSessions();
         } else if(current === 'business' && !business) {
           business = await loadBusiness();
           introTitle = business.introTitle;
@@ -125,25 +117,22 @@
     }
   }
 
-  async function toggleDesktop() {
-    if(desktopOn) {
-      disableNotifications();
-      desktopOn = false;
-    } else {
-      desktopOn = await enableNotifications();
-      if(!desktopOn) error = 'Permission denied by the browser';
+  async function kill(session: SessionInfo) {
+    try {
+      await terminateSession(session.hash);
+      sessions = sessions.filter((s) => s.hash !== session.hash);
+    } catch(err: any) {
+      error = err?.type || err?.message || 'Failed to terminate';
     }
   }
 
-  async function toggleScope(scope: NotifyScope) {
-    if(!scopes) return;
-    const next = !scopes[scope];
-    scopes = {...scopes, [scope]: next};
+  async function killOthers() {
     try {
-      await setNotifyScope(scope, next);
+      await terminateOtherSessions();
+      sessions = sessions.filter((s) => s.current);
+      flash('Other sessions terminated');
     } catch(err: any) {
-      error = err?.type || err?.message || 'Failed to update';
-      scopes = {...scopes, [scope]: !next};
+      error = err?.type || err?.message || 'Failed to terminate';
     }
   }
 
@@ -181,7 +170,7 @@
   </header>
 
   <nav>
-    {#each [['profile', 'Profile'], ['appearance', 'Appearance'], ['notifications', 'Notifications'], ['privacy', 'Privacy'], ['security', 'Security'], ['premium', 'Premium'], ['stars', 'Stars'], ['business', 'Business'], ['bots', 'Bots']] as [key, label]}
+    {#each [['profile', 'Profile'], ['appearance', 'Appearance'], ['notifications', 'Notifications'], ['sessions', 'Devices'], ['premium', 'Premium'], ['stars', 'Stars'], ['business', 'Business'], ['bots', 'Bots']] as [key, label]}
       <button class:active={section === key} onclick={() => (section = key as Section)}>{label}</button>
     {/each}
   </nav>
@@ -250,30 +239,29 @@
       </div>
 
     {:else if section === 'notifications'}
-      <label class="toggle">
-        <input type="checkbox" checked={desktopOn} onchange={toggleDesktop} />
-        <span>Desktop notifications</span>
-      </label>
-      <p class="muted small">Browser permission: {permission()}</p>
+      <NotificationSettings />
 
-      <p class="label">Notify me about</p>
-      {#if !scopes}
+    {:else if section === 'sessions'}
+      {#if !sessions.length}
         <p class="muted">Loading…</p>
       {:else}
-        {#each [['users', 'Private chats'], ['groups', 'Groups'], ['channels', 'Channels']] as [key, label]}
-          <label class="toggle">
-            <input
-              type="checkbox"
-              checked={scopes[key as NotifyScope]}
-              onchange={() => toggleScope(key as NotifyScope)}
-            />
-            <span>{label}</span>
-          </label>
+        {#each sessions as session (session.hash)}
+          <div class="session">
+            <span class="session-name">
+              {session.appName} · {session.deviceModel}
+              {#if session.current}<span class="badge">this device</span>{/if}
+            </span>
+            <span class="muted small">
+              {session.platform} · {[session.ip, session.country].filter(Boolean).join(' · ')}
+            </span>
+            <span class="muted small">{dateOf(session.dateActive)}</span>
+            {#if !session.current}
+              <button class="danger small-btn" onclick={() => kill(session)}>Terminate</button>
+            {/if}
+          </div>
         {/each}
+        <button class="danger" onclick={killOthers}>Terminate all other sessions</button>
       {/if}
-
-    {:else if section === 'privacy' || section === 'security'}
-      <PrivacySettings view={section} />
 
     {:else if section === 'premium'}
       {#if !premium}
@@ -509,6 +497,27 @@
     font-size: 14px;
   }
 
+  .session {
+    display: grid;
+    gap: 2px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .session-name {
+    font-size: 14px;
+    font-weight: 500;
+  }
+
+  .badge {
+    margin-left: 6px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 11px;
+  }
+
   .bot {
     display: flex;
     align-items: center;
@@ -523,7 +532,8 @@
   }
 
   .primary,
-  .danger {
+  .danger,
+  .small-btn {
     padding: 10px 14px;
     border: 1px solid var(--border);
     border-radius: 10px;
@@ -541,6 +551,12 @@
 
   .danger {
     color: var(--danger);
+  }
+
+  .small-btn {
+    padding: 6px 10px;
+    font-size: 12px;
+    justify-self: start;
   }
 
   .status-line {
