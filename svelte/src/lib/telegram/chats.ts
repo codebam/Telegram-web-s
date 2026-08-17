@@ -1643,6 +1643,7 @@ export async function sendDocument(
 /* ------------------------------------------------------------------ */
 
 export type ReactionItem = {emoticon: string; count: number; chosen: boolean};
+export type ReactionParticipant = {peerId: number; title: string};
 
 function reactionsOf(message: any): ReactionItem[] {
   const results = message?.reactions?.results ?? [];
@@ -1665,6 +1666,36 @@ export async function availableReactions(limit = 12): Promise<string[]> {
       .map((r: any) => r.reaction);
   } catch(err) {
     return ['👍', '👎', '❤', '🔥', '🎉', '😁'];
+  }
+}
+
+export async function reactionParticipants(
+  peerId: number,
+  mid: number,
+  emoticon: string
+): Promise<ReactionParticipant[]> {
+  const {managers} = await bootTelegram();
+  const message = rawMessages.get(messageKey(peerId, mid)) ??
+    await managers.appMessagesManager.getMessageByPeer(peerId, mid);
+  if(!message?.reactions?.pFlags?.can_see_list && !peerId.isUser()) return [];
+
+  try {
+    const result: any = await managers.appReactionsManager.getMessageReactionsList(
+      peerId,
+      mid,
+      100,
+      {_: 'reactionEmoji', emoticon}
+    );
+    const selfId = await getSelfId();
+    return Promise.all((result?.reactions ?? []).map(async(reaction: any) => {
+      const peerId = Number(managers.appPeersManager.getPeerId(reaction.peer_id));
+      return {
+        peerId,
+        title: peerId === selfId ? 'You' : peerTitle(await getPeer(peerId), selfId)
+      };
+    }));
+  } catch(err) {
+    return [];
   }
 }
 
