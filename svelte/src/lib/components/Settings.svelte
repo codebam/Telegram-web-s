@@ -11,7 +11,6 @@
     loadBirthdayPrivacy,
     loadPersonalChannels,
     loadProfile,
-    logOut,
     removeProfilePhoto,
     saveBirthday,
     saveBirthdayPrivacy,
@@ -25,6 +24,7 @@
     type ProfileInfo
   } from '$lib/telegram/settings';
   import {invalidateAvatarUrl} from '$lib/telegram/chats';
+  import {logOutCurrentAccount} from '$lib/telegram/accounts';
   import {loadPremium, loadStars, type PremiumInfo, type StarsInfo} from '$lib/telegram/extras';
 
   let {onclose, onminiapp}: {onclose: () => void; onminiapp: (botId: number) => void} = $props();
@@ -218,13 +218,21 @@
     }
   }
 
+  let confirmingLogOut = $state(false);
+  let loggingOut = $state(false);
+
   async function doLogOut() {
-    if(!confirm('Log out of this account?')) return;
+    if(loggingOut) return;
+    loggingOut = true;
     try {
-      await logOut();
-      location.reload();
+      // Clean removal: this clears the account's storages, shifts the remaining
+      // accounts down a slot, and lets apiManagerProxy navigate to whichever
+      // account is active afterwards. Reloading here would race that redirect.
+      await logOutCurrentAccount();
     } catch(err: any) {
       error = err?.type || err?.message || 'Logout failed';
+      loggingOut = false;
+      confirmingLogOut = false;
     }
   }
 
@@ -328,7 +336,17 @@
           </label>
         {/if}
 
-        <button class="danger" onclick={doLogOut}>Log out</button>
+        {#if confirmingLogOut}
+          <p class="label">Log out of this account? Your other accounts stay signed in.</p>
+          <div class="confirm-row">
+            <button onclick={() => (confirmingLogOut = false)} disabled={loggingOut}>Cancel</button>
+            <button class="danger" onclick={doLogOut} disabled={loggingOut}>
+              {loggingOut ? 'Logging out…' : 'Log out'}
+            </button>
+          </div>
+        {:else}
+          <button class="danger" onclick={() => (confirmingLogOut = true)}>Log out</button>
+        {/if}
       {/if}
 
     {:else if section === 'appearance'}
@@ -586,6 +604,15 @@
 
   .danger {
     color: var(--danger);
+  }
+
+  .confirm-row {
+    display: flex;
+    gap: 8px;
+  }
+
+  .confirm-row button {
+    flex: 1;
   }
 
   .small-btn {
