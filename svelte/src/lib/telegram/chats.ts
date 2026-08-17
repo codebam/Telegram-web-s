@@ -151,13 +151,32 @@ export type MessageItem = {
 export type MessageButton = {
   row: number;
   column: number;
-  kind: 'url' | 'callback' | 'webview' | 'simpleWebView' | 'switchInline' | 'text' | 'copy' | 'unsupported';
+  kind:
+    | 'url'
+    | 'loginUrl'
+    | 'callback'
+    | 'webview'
+    | 'simpleWebView'
+    | 'switchInline'
+    | 'text'
+    | 'copy'
+    | 'buy'
+    | 'game'
+    | 'userProfile'
+    | 'requestPhone'
+    | 'requestGeo'
+    | 'requestPoll'
+    | 'unsupported';
   text: string;
   /** Web-app and link buttons carry their own URL. */
   url: string;
   /** `switchInline` query, `copy` payload. */
   payload: string;
   samePeer: boolean;
+  /** `userProfile` target, 0 for every other kind. */
+  userId: number;
+  /** `loginUrl` button id the server needs to authorise the link. */
+  buttonId: number;
 };
 
 export type WebPagePreview = {
@@ -708,12 +727,34 @@ function buttonsOf(message: any): MessageButton[][] {
 }
 
 function toButton(button: any, row: number, column: number): MessageButton {
-  const base = {row, column, text: button.text ?? '', url: '', payload: '', samePeer: false};
+  const base = {
+    row,
+    column,
+    text: button.text ?? '',
+    url: '',
+    payload: '',
+    samePeer: false,
+    userId: 0,
+    buttonId: 0
+  };
 
   switch(button._) {
     case 'keyboardButtonUrl':
-    case 'keyboardButtonUrlAuth':
       return {...base, kind: 'url', url: button.url ?? ''};
+    case 'keyboardButtonUrlAuth':
+      return {...base, kind: 'loginUrl', url: button.url ?? '', buttonId: button.button_id ?? 0};
+    case 'keyboardButtonBuy':
+      return {...base, kind: 'buy'};
+    case 'keyboardButtonGame':
+      return {...base, kind: 'game'};
+    case 'keyboardButtonUserProfile':
+      return {...base, kind: 'userProfile', userId: Number(button.user_id ?? 0)};
+    case 'keyboardButtonRequestPhone':
+      return {...base, kind: 'requestPhone'};
+    case 'keyboardButtonRequestGeoLocation':
+      return {...base, kind: 'requestGeo'};
+    case 'keyboardButtonRequestPoll':
+      return {...base, kind: 'requestPoll'};
     case 'keyboardButtonWebView':
       return {...base, kind: 'webview', url: button.url ?? ''};
     case 'keyboardButtonSimpleWebView':
@@ -744,7 +785,8 @@ export async function pressCallbackButton(
   peerId: number,
   mid: number,
   row: number,
-  column: number
+  column: number,
+  game = false
 ): Promise<{message: string; alert: boolean; url: string}> {
   const {managers} = await bootTelegram();
 
@@ -752,7 +794,7 @@ export async function pressCallbackButton(
     await managers.appMessagesManager.getMessageByPeer(peerId, mid);
   const button = message?.reply_markup?.rows?.[row]?.buttons?.[column];
 
-  const answer: any = await managers.appInlineBotsManager.callbackButtonClick(peerId, mid, button);
+  const answer: any = await managers.appInlineBotsManager.callbackButtonClick(peerId, mid, button, game);
   return {
     message: answer?.message ?? '',
     alert: !!answer?.pFlags?.alert,
