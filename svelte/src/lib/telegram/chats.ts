@@ -1,4 +1,5 @@
 import {bootTelegram} from './client';
+import {buildForwardInfo, buildReplyInfo, type ForwardInfo, type ReplyInfo} from './reply';
 import {peerRestrictionText, restrictionTextOf} from './restrictions';
 
 /**
@@ -66,11 +67,11 @@ export type MediaItem = {
   unread: boolean;
 };
 
-export type ReplyPreview = {
-  mid: number;
-  title: string;
-  text: string;
-};
+/**
+ * Reply headers carry more than an id — a quote, a cross-chat target, a media
+ * thumbnail — so their shape lives with the rest of the reply logic.
+ */
+export type ReplyPreview = ReplyInfo;
 
 export type TextPart = {
   text: string;
@@ -130,6 +131,8 @@ export type MessageItem = {
   views: number;
   /** Original author when the message was forwarded, '' otherwise. */
   forwardedFrom: string;
+  /** Full forward header — source peer, post link, hidden-sender handling. */
+  forward: ForwardInfo | null;
   webpage: WebPagePreview | null;
   poll: PollPreview | null;
   /**
@@ -667,6 +670,8 @@ async function toItem(message: any, peerId: number, selfId: number): Promise<Mes
   // channel posts), so fall back to comparing the sender with ourselves.
   const out = !!message.pFlags?.out || fromId === selfId;
 
+  const forward = await buildForwardInfo(message, selfId);
+
   return {
     mid: message.mid,
     text,
@@ -679,7 +684,7 @@ async function toItem(message: any, peerId: number, selfId: number): Promise<Mes
     fromId,
     service: message._ === 'messageService',
     media: mediaOf(message),
-    reply: await replyOf(message, peerId, selfId),
+    reply: await buildReplyInfo(message, peerId, selfId),
     repliesCount: message.replies?.replies ?? 0,
     reactions: reactionsOf(message),
     groupedId: message.grouped_id ? '' + message.grouped_id : '',
@@ -687,7 +692,8 @@ async function toItem(message: any, peerId: number, selfId: number): Promise<Mes
     stickerKind: isStickerMessage(message) ? stickerKind(message.media.document) : '',
     pending: !!message.pFlags?.is_outgoing,
     views: message.views ?? 0,
-    forwardedFrom: await forwardedTitle(message, selfId),
+    forwardedFrom: forward?.title ?? '',
+    forward,
     webpage: webpageOf(message),
     poll: pollOf(message),
     rich: richBlocksOf(message),
@@ -760,16 +766,6 @@ export async function pressCallbackButton(
   };
 }
 
-async function forwardedTitle(message: any, selfId: number): Promise<string> {
-  const header = message?.fwd_from;
-  if(!header) return '';
-
-  if(header.from_name) return header.from_name;
-  const fromId = Number(message.fwdFromId ?? header.from_id?.user_id ?? header.from_id?.channel_id ?? 0);
-  if(!fromId) return 'Unknown';
-  return peerTitle(await getPeer(fromId), selfId);
-}
-
 function webpageOf(message: any): WebPagePreview | null {
   const webpage = message?.media?.webpage;
   if(!webpage || webpage._ !== 'webPage') return null;
@@ -804,25 +800,6 @@ function pollOf(message: any): PollPreview | null {
         percent: totalVoters ? Math.round((voters / totalVoters) * 100) : 0
       };
     })
-  };
-}
-
-async function replyOf(message: any, peerId: number, selfId: number): Promise<ReplyPreview | null> {
-  const replyToMid = message.reply_to_mid;
-  if(!replyToMid) return null;
-
-  const {managers} = await bootTelegram();
-  const replyPeerId = Number(message.reply_to?.reply_to_peer_id?.user_id ?? peerId) || peerId;
-  const replied = await managers.appMessagesManager.getMessageByPeer(replyPeerId, replyToMid);
-  if(!replied) return {mid: replyToMid, title: '', text: 'Message'};
-
-  const fromId = Number(replied.fromId ?? replyPeerId);
-  const fromPeer = fromId === selfId ? null : await getPeer(fromId);
-
-  return {
-    mid: replyToMid,
-    title: fromId === selfId ? 'You' : peerTitle(fromPeer, selfId),
-    text: await messagePreview(replied)
   };
 }
 
@@ -890,7 +867,14 @@ export async function getMessage(peerId: number, mid: number): Promise<MessageIt
 export async function sendMessage(
   peerId: number,
   text: string,
-  options: {replyToMsgId?: number; threadId?: number} = {}
+  options: {
+    replyToMsgId?: number;
+    threadId?: number;
+    /** Set only when replying to a message in a different chat. */
+    replyToPeerId?: number;
+    /** Excerpt of the original the reply quotes, with its offset into it. */
+    replyToQuote?: {text: string; offset: number};
+  } = {}
 ): Promise<void> {
   const {managers} = await bootTelegram();
   await managers.appMessagesManager.sendText({
@@ -898,8 +882,10 @@ export async function sendMessage(
     text,
     clearDraft: true,
     replyToMsgId: options.replyToMsgId ?? options.threadId,
-    threadId: options.threadId
-  });
+    threadId: options.threadId,
+    replyToPeerId: options.replyToPeerId,
+    replyToQuote: options.replyToQuote
+  } as any);
 }
 
 /** Older page of history, for scrollback. `offsetId` is the oldest loaded mid. */

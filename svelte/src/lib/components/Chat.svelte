@@ -13,6 +13,9 @@
   import MiniApp from './MiniApp.svelte';
   import NewChat from './NewChat.svelte';
   import PeerPicker from './PeerPicker.svelte';
+  import ForwardSheet from './ForwardSheet.svelte';
+  import ForwardHeader from './ForwardHeader.svelte';
+  import ReplyHeader from './ReplyHeader.svelte';
   import SendFiles from './SendFiles.svelte';
   import Settings from './Settings.svelte';
   import Stories from './Stories.svelte';
@@ -25,7 +28,6 @@
     clickSponsored,
     deleteMessage,
     deleteMessages,
-    forwardMessage,
     getDraftText,
     editMessage,
     getMessage,
@@ -80,6 +82,16 @@
     type SponsoredItem,
     type TopicItem
   } from '$lib/telegram/chats';
+  import {
+    clearTrackedQuote,
+    forwardTo,
+    quoteFromSelection,
+    replySendOptions,
+    trackQuoteSelection,
+    trackedQuote,
+    type ForwardOptions,
+    type ReplyQuote
+  } from '$lib/telegram/reply';
   import {
     getBotMenuButton,
     openBotAppLink,
@@ -142,6 +154,23 @@
   let loadingHistory = $state(false);
   let draft = $state('');
   let replyTo = $state<MessageItem | null>(null);
+  /**
+   * Everything about the pending reply that a `MessageItem` cannot carry: the
+   * quoted excerpt and, for a reply into another chat, where the original
+   * lives. Kept beside `replyTo` rather than inside it because the reply target
+   * is cleared from a dozen places; `mid` is what ties the two together, so a
+   * stale context is simply ignored instead of attaching to the wrong message.
+   */
+  let replyContext = $state<{
+    mid: number;
+    peerId: number;
+    chatTitle: string;
+    quote: ReplyQuote | null;
+  } | null>(null);
+  /** The message a "Reply in…" pick is about to carry into another chat. */
+  let replyingElsewhere = $state<MessageItem | null>(null);
+  /** Its quote, captured before the picker took the selection away. */
+  let replyElsewhereQuote: ReplyQuote | null = null;
   let error = $state('');
   let scroller: HTMLDivElement | undefined = $state();
   /** First unread message id, used for the divider and the open position. */
@@ -197,7 +226,8 @@
   let activeRestriction = $state('');
   let businessBot = $state<BusinessBot | null>(null);
   let businessBotBusy = $state(false);
-  let forwarding = $state<MessageItem | null>(null);
+  /** Messages queued for the forward sheet, empty when it is closed. */
+  let forwarding = $state<MessageItem[]>([]);
   let atBottom = $state(true);
   let chatQuery = $state('');
   let chatResults = $state<MessageItem[] | null>(null);
@@ -684,7 +714,9 @@
 
   async function forwardSelected() {
     if (!selected.size) return;
-    forwarding = messages.find((m) => selected.has(m.mid)) ?? null;
+    // Oldest first, so the batch lands in the target chat in the order it was
+    // written rather than the order it happened to be clicked in.
+    forwarding = messages.filter((m) => selected.has(m.mid)).sort((a, b) => a.mid - b.mid);
     allDialogs = await loadDialogs(100, 0);
   }
 
@@ -754,23 +786,37 @@
     }, 1600);
   }
 
+  /**
+   * Jump from a reply header to the message it answers. A cross-chat reply
+   * points into another conversation, so that one is opened first.
+   */
+  async function jumpToReply(reply: NonNullable<MessageItem['reply']>) {
+    if (reply.deleted) return;
+
+    if (reply.peerId !== activePeerId) {
+      await openPeerChat(reply.peerId);
+    }
+
+    await jumpTo(reply.mid);
+  }
+
   /* ---------- forward and copy ---------- */
 
   async function openForward(message: MessageItem) {
-    forwarding = message;
+    forwarding = [message];
     allDialogs = await loadDialogs(100, 0);
   }
 
-  async function doForward(toPeerId: number) {
-    const message = forwarding;
-    const mids = selecting && selected.size ? [...selected] : message ? [message.mid] : [];
-    forwarding = null;
+  async function doForward(targets: number[], options: ForwardOptions) {
+    const mids = forwarding.map((m) => m.mid);
+    const fromPeerId = activePeerId;
+    forwarding = [];
     selecting = false;
     selected = new Set();
-    if (!mids.length || activePeerId === null) return;
+    if (!mids.length || !targets.length || fromPeerId === null) return;
 
     try {
-      await forwardMessage(activePeerId, mids, toPeerId);
+      await forwardTo(fromPeerId, mids, targets, options);
     } catch (err: any) {
       error = errorOf(err, 'Forward failed');
     }
@@ -1035,10 +1081,81 @@
     composer?.focus();
   }
 
+  /**
+   * The text currently selected inside a message's bubble, as a quote. Telegram
+   * attaches the excerpt the user highlighted, so replying while text is
+   * selected quotes exactly that fragment instead of the whole message.
+   */
+  function quoteOf(message: MessageItem): ReplyQuote | null {
+    if (!message.text) return null;
+
+    // Clicking the button collapses the live selection, so the tracked one is
+    // what survives that far; the live read is the fallback for a keyboard path.
+    const remembered = trackedQuote(message.mid);
+    if (remembered) return remembered;
+
+    const bubble = scroller?.querySelector<HTMLElement>(`[data-mid="${message.mid}"]`);
+    return bubble ? quoteFromSelection(bubble, message.text) : null;
+  }
+
+  // Quoting needs the selection as it was made, not as it survives the click
+  // that acts on it, so it is captured while it happens.
+  $effect(() => trackQuoteSelection((mid) => messages.find((m) => m.mid === mid)?.text ?? ''));
+
   function replyToMessage(message: MessageItem) {
+    const quote = quoteOf(message);
+    clearTrackedQuote();
     replyTo = message;
+    replyContext = activePeerId === null ?
+      null :
+      {mid: message.mid, peerId: activePeerId, chatTitle: '', quote};
     focusComposer();
   }
+
+  /**
+   * "Reply in…" — keep this message as the reply target but write the answer in
+   * a different chat. The reply then carries `replyToPeerId`, and the bubble it
+   * produces renders as a cross-chat reply on both sides.
+   */
+  async function openReplyElsewhere(message: MessageItem) {
+    // The selection is read now: picking a chat takes several clicks, and none
+    // of them leaves it intact.
+    replyElsewhereQuote = quoteOf(message);
+    clearTrackedQuote();
+    replyingElsewhere = message;
+    allDialogs = await loadDialogs(100, 0);
+  }
+
+  async function doReplyElsewhere(toPeerId: number) {
+    const message = replyingElsewhere;
+    const sourcePeerId = activePeerId;
+    const sourceTitle = activeTitle;
+    const quote = replyElsewhereQuote;
+    replyElsewhereQuote = null;
+    replyingElsewhere = null;
+    if (!message || sourcePeerId === null) return;
+
+    // Opening the chat clears the pending reply, so the target is set after.
+    await openPeerChat(toPeerId);
+    replyTo = message;
+    replyContext = {mid: message.mid, peerId: sourcePeerId, chatTitle: sourceTitle, quote};
+    focusComposer();
+  }
+
+  function cancelReply() {
+    replyTo = null;
+    replyContext = null;
+  }
+
+  /** Drops the quote but keeps replying, like Telegram's "remove quote". */
+  function dropQuote() {
+    if (replyContext) replyContext = {...replyContext, quote: null};
+  }
+
+  /** The reply context, but only while it still describes the reply target. */
+  const activeReplyContext = $derived(
+    replyTo && replyContext?.mid === replyTo.mid ? replyContext : null
+  );
 
   function startEdit(message: MessageItem) {
     editing = message;
@@ -1347,7 +1464,8 @@
       folderEditorOpen ||
       newChatOpen ||
       editingFolder ||
-      forwarding ||
+      forwarding.length ||
+      replyingElsewhere ||
       profilePeerId !== null ||
       showInfo ||
       document.querySelector('.viewer')
@@ -1728,12 +1846,25 @@
       return;
     }
 
-    const replyToMsgId = replyTo?.mid;
+    const context = activeReplyContext;
+    const reply = replyTo ?
+      replySendOptions(
+        {
+          mid: replyTo.mid,
+          peerId: context?.peerId ?? activePeerId,
+          title: replyTo.fromTitle,
+          text: replyTo.text,
+          chatTitle: context?.chatTitle ?? '',
+          quote: context?.quote ?? null
+        },
+        activePeerId
+      ) :
+      {};
     draft = '';
-    replyTo = null;
+    cancelReply();
 
     try {
-      await sendMessage(activePeerId, text, {replyToMsgId, threadId: activeThreadId});
+      await sendMessage(activePeerId, text, {...reply, threadId: activeThreadId});
       lastTypingSent = 0;
       sendTyping(activePeerId, activeThreadId, 'cancel').catch(() => {});
       // The outgoing message arrives back through history_multiappend.
@@ -2118,15 +2249,12 @@
                   </button>
                 {/if}
 
-                {#if message.forwardedFrom}
-                  <span class="forwarded">Forwarded from {message.forwardedFrom}</span>
+                {#if message.forward}
+                  <ForwardHeader forward={message.forward} onopenpeer={openPeerChat} />
                 {/if}
 
                 {#if message.reply}
-                  <button class="reply-quote jump" onclick={() => jumpTo(message.reply!.mid)}>
-                    <span class="reply-title">{message.reply.title}</span>
-                    <span class="reply-text">{message.reply.text}</span>
-                  </button>
+                  <ReplyHeader reply={message.reply} onjump={() => jumpToReply(message.reply!)} />
                 {/if}
 
                 {#if group.items.length > 1}
@@ -2356,13 +2484,27 @@
         <div class="reply-bar">
           <span class="reply-quote">
             <span class="reply-title">
-              {editing ? 'Editing message' : `Replying to ${replyTo?.fromTitle}`}
+              {#if editing}
+                Editing message
+              {:else}
+                {activeReplyContext?.quote ? 'Quoting' : 'Replying to'}
+                {replyTo?.fromTitle}
+                {#if activeReplyContext?.chatTitle}
+                  <!-- The original is in another chat; say which one. -->
+                  <span class="reply-in">in {activeReplyContext.chatTitle}</span>
+                {/if}
+              {/if}
             </span>
-            <span class="reply-text">{(editing ?? replyTo)?.text || 'Media'}</span>
+            <span class="reply-text">
+              {activeReplyContext?.quote?.text || (editing ?? replyTo)?.text || 'Media'}
+            </span>
           </span>
+          {#if activeReplyContext?.quote}
+            <button class="cancel" onclick={dropQuote} title="Reply without the quote">❝✕</button>
+          {/if}
           <button
             class="cancel"
-            onclick={() => (editing ? cancelEdit() : (replyTo = null))}
+            onclick={() => (editing ? cancelEdit() : cancelReply())}
             aria-label="Cancel"
           >✕</button>
         </div>
@@ -2511,7 +2653,12 @@
   <div class="menu-backdrop" onclick={() => (messageMenu = null)} role="presentation"></div>
   <div class="context-menu" style="left: {messageMenu.x}px; top: {messageMenu.y}px">
     {#if menuMessage}
-      <button onclick={() => { replyToMessage(menuMessage); messageMenu = null; }}>Reply</button>
+      <button onclick={() => { replyToMessage(menuMessage); messageMenu = null; }}>
+        {trackedQuote(menuMessage.mid) ? 'Reply with quote' : 'Reply'}
+      </button>
+      <button onclick={() => { openReplyElsewhere(menuMessage); messageMenu = null; }}>
+        Reply in…
+      </button>
       {#if menuMessage.text}
         <button onclick={() => { copyText(menuMessage); messageMenu = null; }}>Copy text</button>
       {/if}
@@ -2529,12 +2676,22 @@
   </div>
 {/if}
 
-{#if forwarding}
-  <PeerPicker
-    title="Forward to"
+{#if forwarding.length}
+  <ForwardSheet
     dialogs={allDialogs}
-    onpick={doForward}
-    onclose={() => (forwarding = null)}
+    count={forwarding.length}
+    hasCaptions={forwarding.some((m) => m.media && m.text)}
+    onforward={doForward}
+    onclose={() => (forwarding = [])}
+  />
+{/if}
+
+{#if replyingElsewhere}
+  <PeerPicker
+    title="Reply in…"
+    dialogs={allDialogs}
+    onpick={doReplyElsewhere}
+    onclose={() => (replyingElsewhere = null)}
   />
 {/if}
 
@@ -3519,23 +3676,6 @@
     }
   }
 
-  .forwarded {
-    font-size: 12px;
-    font-style: italic;
-    opacity: 0.8;
-  }
-
-  button.reply-quote.jump {
-    background: none;
-    font: inherit;
-    color: inherit;
-    text-align: left;
-    cursor: pointer;
-    border-top: none;
-    border-right: none;
-    border-bottom: none;
-  }
-
   .webpage {
     display: grid;
     gap: 2px;
@@ -3822,7 +3962,13 @@
 
   .reply-bar .reply-quote {
     flex: 1;
+    min-width: 0;
     border-left-color: var(--accent);
+  }
+
+  .reply-in {
+    font-weight: 400;
+    color: var(--text-dim);
   }
 
   form {
