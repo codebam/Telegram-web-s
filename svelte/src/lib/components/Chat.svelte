@@ -52,6 +52,7 @@
     onReadStateChange,
     readMediaContents,
     readParticipants,
+    reactionParticipants,
     onTyping,
     onUserUpdate,
     openDiscussion,
@@ -128,6 +129,13 @@
   let activeIsChannel = $state(false);
   /** Names of the people who have read a message, fetched on demand. */
   let readByFor = $state<{mid: number; names: string[]} | null>(null);
+  let reactionMenu = $state<{mid: number; emoticon: string; x: number; y: number} | null>(null);
+  let reactionParticipantsFor = $state<{
+    mid: number;
+    emoticon: string;
+    names: string[];
+    loading: boolean;
+  } | null>(null);
 
   let loadingChats = $state(true);
   let loadingHistory = $state(false);
@@ -553,6 +561,29 @@
       if (updated) messages = messages.map((m) => (m.mid === message.mid ? updated : m));
     } catch (err: any) {
       error = errorOf(err, 'Reaction failed');
+    }
+  }
+
+  function openReactionMenu(event: MouseEvent, message: MessageItem, emoticon: string) {
+    event.preventDefault();
+    event.stopPropagation();
+    reactionMenu = {mid: message.mid, emoticon, x: event.clientX, y: event.clientY};
+  }
+
+  async function showReactionParticipants() {
+    const menu = reactionMenu;
+    reactionMenu = null;
+    if (!menu || activePeerId === null) return;
+
+    reactionParticipantsFor = {mid: menu.mid, emoticon: menu.emoticon, names: [], loading: true};
+    const participants = await reactionParticipants(activePeerId, menu.mid, menu.emoticon);
+    if (reactionParticipantsFor?.mid === menu.mid && reactionParticipantsFor.emoticon === menu.emoticon) {
+      reactionParticipantsFor = {
+        mid: menu.mid,
+        emoticon: menu.emoticon,
+        names: participants.map((participant) => participant.title),
+        loading: false
+      };
     }
   }
 
@@ -2199,6 +2230,8 @@
                         class="chip"
                         class:chosen={reaction.chosen}
                         onclick={() => react(message, reaction.emoticon)}
+                        oncontextmenu={(event) => openReactionMenu(event, message, reaction.emoticon)}
+                        title="Right-click to see who reacted"
                       >{reaction.emoticon} {reaction.count}</button>
                     {/each}
                   </span>
@@ -2431,6 +2464,35 @@
       composer?.focus();
     }}
   />
+{/if}
+
+{#if reactionMenu}
+  <div class="menu-backdrop" onclick={() => (reactionMenu = null)} role="presentation"></div>
+  <div class="context-menu" style="left: {reactionMenu.x}px; top: {reactionMenu.y}px">
+    <button onclick={showReactionParticipants}>See who reacted {reactionMenu.emoticon}</button>
+  </div>
+{/if}
+
+{#if reactionParticipantsFor}
+  <div class="reactors-backdrop" onclick={() => (reactionParticipantsFor = null)} role="presentation">
+    <div class="reactors-dialog" onclick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="People who reacted">
+      <header>
+        <strong>Reactions {reactionParticipantsFor.emoticon}</strong>
+        <button onclick={() => (reactionParticipantsFor = null)} aria-label="Close">✕</button>
+      </header>
+      {#if reactionParticipantsFor.loading}
+        <p class="muted">Loading…</p>
+      {:else if reactionParticipantsFor.names.length}
+        <ul>
+          {#each reactionParticipantsFor.names as name}
+            <li>{name}</li>
+          {/each}
+        </ul>
+      {:else}
+        <p class="muted">The reaction list is unavailable for this message.</p>
+      {/if}
+    </div>
+  </div>
 {/if}
 
 {#if messageMenu}
@@ -3305,6 +3367,50 @@
     position: fixed;
     inset: 0;
     z-index: 60;
+  }
+
+  .reactors-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 70;
+    display: grid;
+    place-items: center;
+    padding: 16px;
+    background: rgba(0, 0, 0, 0.55);
+  }
+
+  .reactors-dialog {
+    width: min(360px, 100%);
+    max-height: min(480px, calc(100dvh - 32px));
+    overflow: auto;
+    padding: 16px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+  }
+
+  .reactors-dialog header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+  }
+
+  .reactors-dialog header button {
+    border: 0;
+    background: none;
+    color: inherit;
+    cursor: pointer;
+    font-size: 18px;
+  }
+
+  .reactors-dialog ul {
+    margin: 0;
+    padding-left: 20px;
+  }
+
+  .reactors-dialog li + li {
+    margin-top: 8px;
   }
 
   .context-menu {
