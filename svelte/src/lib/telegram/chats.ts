@@ -90,6 +90,8 @@ export type TextPart = {
    * which are searchable rather than clickable to a profile.
    */
   mentionKind?: 'username' | 'userId' | 'tag';
+  /** Document id of the custom emoji this run renders as, when it is one. */
+  customEmojiDocId?: string;
 };
 
 export type RichBlock =
@@ -323,6 +325,7 @@ function textParts(text: string, entities: any[] = []): TextPart[] {
         case 'messageEntityPre': part.pre = true; break;
         case 'messageEntitySpoiler': part.spoiler = true; break;
         case 'messageEntityBlockquote': part.blockquote = true; break;
+        case 'messageEntityCustomEmoji': part.customEmojiDocId = '' + entity.document_id; break;
         case 'messageEntityTextUrl': part.url = entity.url; break;
         case 'messageEntityUrl': part.url = part.text; break;
         case 'messageEntityEmail': part.url = `mailto:${part.text}`; break;

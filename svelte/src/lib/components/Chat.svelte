@@ -17,6 +17,12 @@
   import Settings from './Settings.svelte';
   import Stories from './Stories.svelte';
   import Picker from './Picker.svelte';
+  import EmojiStatus from './EmojiStatus.svelte';
+  import {
+    customEmojiEntities,
+    sendMessageWithEntities,
+    type PendingCustomEmoji
+  } from '$lib/telegram/emoji';
   import RichMessage from './RichMessage.svelte';
   import Sticker from './Sticker.svelte';
   import {GIT_COMMIT, GIT_COMMIT_SHORT, GIT_COMMIT_URL} from '$lib/buildInfo';
@@ -178,6 +184,11 @@
   /** Profile being viewed from a message sender or member list, if any. */
   let profilePeerId = $state<number | null>(null);
   let showPicker = $state(false);
+  /**
+   * Custom emoji sitting in the draft as their plain alt text; on send they
+   * become messageEntityCustomEmoji entities over those characters.
+   */
+  let pendingCustomEmoji = $state<PendingCustomEmoji[]>([]);
   let reactionPalette = $state<string[]>([]);
   let reactingTo = $state<number | null>(null);
   let lightboxIndex = $state<number | null>(null);
@@ -1729,11 +1740,16 @@
     }
 
     const replyToMsgId = replyTo?.mid;
+    // Custom emoji only exist as entities over the alt text already in `text`.
+    const entities = customEmojiEntities(text, pendingCustomEmoji);
+    pendingCustomEmoji = [];
     draft = '';
     replyTo = null;
 
     try {
-      await sendMessage(activePeerId, text, {replyToMsgId, threadId: activeThreadId});
+      await (entities.length
+        ? sendMessageWithEntities(activePeerId, text, entities, {replyToMsgId, threadId: activeThreadId})
+        : sendMessage(activePeerId, text, {replyToMsgId, threadId: activeThreadId}));
       lastTypingSent = 0;
       sendTyping(activePeerId, activeThreadId, 'cancel').catch(() => {});
       // The outgoing message arrives back through history_multiappend.
@@ -1912,7 +1928,8 @@
     {:else}
       <header>
         <button class="back-mobile" onclick={() => (showSidebarOnMobile = true)} aria-label="Back">←</button>
-        <button class="title-button" onclick={() => (showInfo = !showInfo)}>{activeTitle}</button>
+        <button class="title-button" onclick={() => (showInfo = !showInfo)}
+        >{activeTitle}{#if activePeerId !== null}<EmojiStatus peerId={activePeerId} size={16} />{/if}</button>
         {#if activeThreadId !== undefined}<span class="thread-tag">topic</span>{/if}
         <span class="presence">
           {typingNames.length
@@ -2114,7 +2131,7 @@
               >
                 {#if !message.out && message.fromTitle}
                   <button class="author" onclick={() => (profilePeerId = message.fromId)}>
-                    {message.fromTitle}
+                    {message.fromTitle}<EmojiStatus peerId={message.fromId} size={14} />
                   </button>
                 {/if}
 
@@ -2373,6 +2390,10 @@
           <Picker
             onemoji={(emoji) => (draft += emoji)}
             ondocument={pickDocument}
+            oncustomemoji={(item) => {
+              draft += item.emoji;
+              pendingCustomEmoji = [...pendingCustomEmoji, item];
+            }}
           />
         {/if}
         {#if botMenuButton}
