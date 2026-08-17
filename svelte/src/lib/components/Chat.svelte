@@ -6,6 +6,7 @@
   import ChatInfo from './ChatInfo.svelte';
   import FolderEditor from './FolderEditor.svelte';
   import FormattedText from './FormattedText.svelte';
+  import InlinePreview from './InlinePreview.svelte';
   import Lightbox from './Lightbox.svelte';
   import Media from './Media.svelte';
   import CallScreen from './CallScreen.svelte';
@@ -2332,10 +2333,13 @@
         <div class="inline-results">
           {#each inlineResults as result (result.queryAndResultId)}
             <button onclick={() => pickInline(result)}>
-              <span class="inline-title">{result.title}</span>
-              {#if result.description}
-                <span class="inline-desc">{result.description}</span>
-              {/if}
+              <InlinePreview {result} size={44} />
+              <div class="inline-text">
+                <span class="inline-title">{result.title}</span>
+                {#if result.description}
+                  <span class="inline-desc">{result.description}</span>
+                {/if}
+              </div>
             </button>
           {/each}
         </div>
@@ -3227,8 +3231,9 @@
   }
 
   .inline-results button {
-    display: grid;
-    gap: 2px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
     width: 100%;
     padding: 8px 18px;
     background: none;
@@ -3242,13 +3247,26 @@
     background: color-mix(in srgb, var(--text) 6%, transparent);
   }
 
+  .inline-text {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+    flex: 1;
+  }
+
   .inline-title {
     font-size: 14px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .inline-desc {
     font-size: 12px;
     color: var(--text-dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .chat-search {

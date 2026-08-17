@@ -20,7 +20,7 @@ export type ProfileInfo = {
 export async function loadProfile(): Promise<ProfileInfo> {
   const {managers} = await bootTelegram();
   const self: any = await managers.appUsersManager.getSelf();
-  const full: any = await managers.appProfileManager.getProfile(self.id).catch(() => null);
+  const full: any = await managers.appProfileManager.getProfile(self.id).catch((): null => null);
 
   return {
     userId: Number(self.id),
@@ -150,7 +150,7 @@ const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 export async function loadBusiness(): Promise<BusinessInfo> {
   const {managers} = await bootTelegram();
   const self: any = await managers.appUsersManager.getSelf();
-  const full: any = await managers.appProfileManager.getProfile(self.id, true).catch(() => null);
+  const full: any = await managers.appProfileManager.getProfile(self.id, true).catch((): null => null);
 
   const hours = full?.business_work_hours;
   const intervals: any[] = hours?.weekly_open ?? [];
@@ -215,6 +215,10 @@ export type InlineResultItem = {
   queryAndResultId: string;
   title: string;
   description: string;
+  type: string;
+  thumbDocId?: string;
+  thumbPhotoId?: string;
+  thumbUrl?: string;
 };
 
 export type InlineQueryAnswer = {
@@ -227,6 +231,36 @@ export type InlineQueryAnswer = {
 };
 
 const emptyInlineAnswer: InlineQueryAnswer = {botId: 0, results: [], switchWebView: null, switchPm: null};
+
+// Keep raw media outside Svelte state. `$state` turns nested objects into proxies,
+// which the worker cannot structured-clone when the thumbnail loader downloads it.
+const inlineResultMedia = new Map<string, any>();
+const inlineThumbnailUrls = new Map<string, string | null>();
+
+export async function loadInlineResultThumbnail(queryAndResultId: string): Promise<string | null> {
+  if(inlineThumbnailUrls.has(queryAndResultId)) return inlineThumbnailUrls.get(queryAndResultId)!;
+
+  const item = inlineResultMedia.get(queryAndResultId);
+  const media = item?._ === 'botInlineMediaResult' ? (item.document ?? item.photo) : item?.thumb;
+  if(!media) return null;
+
+  await bootTelegram();
+  const [{default: appDownloadManager}, {default: choosePhotoSize}] = await Promise.all([
+    import('@lib/appDownloadManager'),
+    import('@appManagers/utils/photos/choosePhotoSize')
+  ]);
+
+  try {
+    const isPhoto = media._ === 'photo';
+    const thumbnail = isPhoto || media._ === 'document' ? choosePhotoSize(media, 96, 96, true) : undefined;
+    const url = await appDownloadManager.downloadMediaURL({media, thumb: thumbnail});
+    inlineThumbnailUrls.set(queryAndResultId, url ?? null);
+    return url ?? null;
+  } catch(err) {
+    inlineThumbnailUrls.set(queryAndResultId, null);
+    return null;
+  }
+}
 
 /** Inline bot query: "@bot some text" typed into the composer. */
 export async function queryInlineBot(
@@ -244,13 +278,20 @@ export async function queryInlineBot(
     const result: any = await managers.appInlineBotsManager.getInlineResults(peerId, botId, query);
     const switchWebView = result?.switch_webview;
     const switchPm = result?.switch_pm;
+    for(const item of result?.results ?? []) {
+      inlineResultMedia.set(`${result.query_id}_${item.id}`, item);
+    }
 
     return {
       botId,
       results: (result?.results ?? []).map((item: any) => ({
         queryAndResultId: `${result.query_id}_${item.id}`,
         title: item.title ?? item.send_message?.message?.slice(0, 40) ?? 'Result',
-        description: item.description ?? ''
+        description: item.description ?? '',
+        type: item.type ?? '',
+        thumbDocId: item.document?.id ? String(item.document.id) : undefined,
+        thumbPhotoId: item.photo?.id ? String(item.photo.id) : undefined,
+        thumbUrl: item.thumb?.mime_type?.startsWith('image/') ? item.thumb.url : undefined
       })),
       switchWebView: switchWebView ? {text: switchWebView.text ?? 'Open app', url: switchWebView.url ?? ''} : null,
       switchPm: switchPm ? {text: switchPm.text ?? 'Start', startParam: switchPm.start_param ?? ''} : null
