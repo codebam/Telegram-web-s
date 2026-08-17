@@ -19,6 +19,7 @@
   import Picker from './Picker.svelte';
   import RichMessage from './RichMessage.svelte';
   import Sticker from './Sticker.svelte';
+  import VoiceRecorder from './VoiceRecorder.svelte';
   import {GIT_COMMIT, GIT_COMMIT_SHORT, GIT_COMMIT_URL} from '$lib/buildInfo';
   import {
     availableReactions,
@@ -2413,9 +2414,24 @@
           oninput={onDraftInput}
           onkeydown={onComposerKey}
         ></textarea>
-        <button type="submit" disabled={!draft.trim()} aria-label={editing ? 'Save' : 'Send'}>
-          <Glyph name={editing ? 'check' : 'send'} />
-        </button>
+        {#if !draft.trim() && !editing && activePeerId !== null}
+          <!-- Empty composer: the send button gives way to the recorder, the
+               same swap the official clients do. -->
+          <VoiceRecorder
+            peerId={activePeerId}
+            threadId={activeThreadId}
+            replyToMsgId={replyTo?.mid}
+            onsent={() => {
+              replyTo = null;
+              scrollToBottom();
+            }}
+            onerror={(message) => (error = message)}
+          />
+        {:else}
+          <button type="submit" disabled={!draft.trim()} aria-label={editing ? 'Save' : 'Send'}>
+            <Glyph name={editing ? 'check' : 'send'} />
+          </button>
+        {/if}
       </form>
     {/if}
   </section>
