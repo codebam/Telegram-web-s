@@ -1,6 +1,8 @@
 <script lang="ts">
   import {onDestroy, untrack} from 'svelte';
   import Glyph from './Glyph.svelte';
+  import MediaEditor from './MediaEditor.svelte';
+  import {isEditableFile} from '$lib/telegram/mediaEditor';
   import type {SendFileItem, UploadProgress} from '$lib/telegram/upload';
 
   let {
@@ -21,6 +23,8 @@
   const isVisual = (file: File) => file.type.startsWith('image/') || file.type.startsWith('video/');
 
   type Row = {
+    /** Stable across edits — the File is swapped when the editor applies. */
+    id: number;
     file: File;
     /** Object URL for the thumbnail, or '' for anything with no preview. */
     url: string;
@@ -32,7 +36,8 @@
   // The dialog is mounted fresh per batch, so seeding the rows once is intended.
   let rows = $state<Row[]>(
     untrack(() =>
-      files.map((file) => ({
+      files.map((file, index) => ({
+        id: index,
         file,
         url: file.type.startsWith('image/') || file.type.startsWith('video/') ?
           URL.createObjectURL(file) :
@@ -47,6 +52,9 @@
 
   let caption = $state('');
 
+  /** Index of the row open in the media editor, null when it is closed. */
+  let editing = $state<number | null>(null);
+
   const sending = $derived(!!progress);
 
   onDestroy(() => rows.forEach((row) => row.url && URL.revokeObjectURL(row.url)));
@@ -57,6 +65,26 @@
     rows = rows.filter((_, i) => i !== index);
     if (row?.url) URL.revokeObjectURL(row.url);
     if (!rows.length) onclose();
+  }
+
+  /**
+   * The editor hands back a freshly encoded File; it replaces that one item and
+   * nothing else — the row keeps its own photo/file and spoiler choice, and the
+   * batch caption is untouched.
+   */
+  function applyEdit(edited: File) {
+    const index = editing;
+    editing = null;
+    if (index === null) return;
+    const row = rows[index];
+    if (!row) return;
+    const previous = row.url;
+    row.file = edited;
+    row.url = isVisual(edited) ? URL.createObjectURL(edited) : '';
+    // Re-encoding a document into media would otherwise leave it going as a
+    // file; the editor only ever emits inline-capable media.
+    if (isVisual(edited) && !row.asPhoto) row.asPhoto = true;
+    if (previous) URL.revokeObjectURL(previous);
   }
 
   function humanSize(bytes: number) {
@@ -82,6 +110,8 @@
   }
 
   function onKey(e: KeyboardEvent) {
+    // The editor is modal on top of this dialog and runs its own Escape.
+    if (editing !== null) return;
     if (e.key === 'Escape') sending ? oncancelupload() : onclose();
   }
 
@@ -109,7 +139,7 @@
     </header>
 
     <div class="items">
-      {#each rows as row, index (row.file)}
+      {#each rows as row, index (row.id)}
         {@const up = progress?.[index]}
         <div class="item" class:failed={!!up?.error}>
           <div class="thumb" class:blurred={row.spoiler}>
@@ -165,6 +195,14 @@
                   onclick={() => (row.spoiler = !row.spoiler)}
                   title="Hide behind a spoiler until tapped"
                 >Spoiler</button>
+                {#if isEditableFile(row.file)}
+                  <button
+                    type="button"
+                    class="pill edit"
+                    onclick={() => (editing = index)}
+                    title="Crop, filter, draw, add text or stickers"
+                  >Edit</button>
+                {/if}
               </div>
             {/if}
           </div>
@@ -201,6 +239,14 @@
   </form>
   </div>
 </div>
+
+{#if editing !== null && rows[editing]}
+  <MediaEditor
+    file={rows[editing].file}
+    onapply={applyEdit}
+    oncancel={() => (editing = null)}
+  />
+{/if}
 
 <style>
   .backdrop {
@@ -336,6 +382,11 @@
     border-color: transparent;
     background: var(--accent);
     color: #fff;
+  }
+
+  .pill.edit {
+    color: var(--accent);
+    font-weight: 600;
   }
 
   .pill:disabled {
