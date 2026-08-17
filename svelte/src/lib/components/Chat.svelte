@@ -5,6 +5,7 @@
   import Glyph from './Glyph.svelte';
   import ChatInfo from './ChatInfo.svelte';
   import FolderEditor from './FolderEditor.svelte';
+  import FormatBar from './FormatBar.svelte';
   import FormattedText from './FormattedText.svelte';
   import InlinePreview from './InlinePreview.svelte';
   import Lightbox from './Lightbox.svelte';
@@ -104,6 +105,7 @@
     setActiveNotificationPeer,
     syncPushSubscription
   } from '$lib/telegram/notifications';
+  import {parseComposerText, partsToMarkdown} from '$lib/telegram/composerFormat';
   import {queryInlineBot, sendInlineResult, type InlineQueryAnswer, type InlineResultItem} from '$lib/telegram/settings';
   import {
     dialogTargetFor,
@@ -1385,7 +1387,9 @@
   function startEdit(message: MessageItem) {
     editing = message;
     replyTo = null;
-    draft = message.text;
+    // Markers back in, so the formatting the message already carries survives
+    // the round trip instead of being flattened by the save.
+    draft = message.parts?.length ? partsToMarkdown(message.parts) : message.text;
     focusComposer();
   }
 
@@ -2048,8 +2052,13 @@
 
   async function submit(e: Event) {
     e.preventDefault();
-    const text = draft.trim();
-    if (!text || activePeerId === null) return;
+    const typed = draft.trim();
+    if (!typed || activePeerId === null) return;
+
+    // Markdown markers become entities here; what goes to the API is the text
+    // with the markers stripped.
+    const {text, entities} = parseComposerText(typed);
+    if (!text) return;
 
     // The debounced draft save is still pending with the text being sent; let
     // it fire and it writes the message back as a draft right after sendText
@@ -2061,7 +2070,7 @@
       editing = null;
       draft = '';
       try {
-        await editMessage(activePeerId, target.mid, text);
+        await editMessage(activePeerId, target.mid, text, entities);
         const updated = await getMessage(activePeerId, target.mid);
         if (updated) messages = messages.map((m) => (m.mid === target.mid ? updated : m));
       } catch (err: any) {
@@ -2075,7 +2084,7 @@
     replyTo = null;
 
     try {
-      await sendMessage(activePeerId, text, {replyToMsgId, threadId: activeThreadId});
+      await sendMessage(activePeerId, text, {replyToMsgId, threadId: activeThreadId, entities});
       lastTypingSent = 0;
       sendTyping(activePeerId, activeThreadId, 'cancel').catch(() => {});
       // The outgoing message arrives back through history_multiappend.
@@ -2927,6 +2936,7 @@
           oninput={onDraftInput}
           onkeydown={onComposerKey}
         ></textarea>
+        <FormatBar textarea={composer} />
         <button type="submit" disabled={!draft.trim()} aria-label={editing ? 'Save' : 'Send'}>
           <Glyph name={editing ? 'check' : 'send'} />
         </button>
