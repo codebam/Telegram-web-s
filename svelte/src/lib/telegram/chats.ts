@@ -1,3 +1,5 @@
+import getPeerId from '@appManagers/utils/peers/getPeerId';
+
 import {bootTelegram} from './client';
 import {peerRestrictionText, restrictionTextOf} from './restrictions';
 
@@ -33,14 +35,6 @@ export type DialogItem = {
    * when it is not. Its content must not be rendered while this is set.
    */
   restrictionText: string;
-};
-
-export type TopicItem = {
-  threadId: number;
-  title: string;
-  preview: string;
-  date: number;
-  unread: number;
 };
 
 export type MediaItem = {
@@ -117,6 +111,8 @@ export type MessageItem = {
   reply: ReplyPreview | null;
   /** Comment thread (discussion) attached to this message, if any. */
   repliesCount: number;
+  /** Peer ids of the newest commenters, for the avatars on the comments button. */
+  commenters: number[];
   reactions: ReactionItem[];
   /** Album id — consecutive messages sharing one render as a single bubble. */
   groupedId: string;
@@ -188,14 +184,14 @@ const messageKey = (peerId: number, mid: number) => `${peerId}_${mid}`;
 
 let selfIdCache: number | null = null;
 
-async function getSelfId(): Promise<number> {
+export async function getSelfId(): Promise<number> {
   if(selfIdCache !== null) return selfIdCache;
   const {managers} = await bootTelegram();
   const self = await managers.appUsersManager.getSelf();
   return (selfIdCache = Number(self?.id ?? 0));
 }
 
-async function getPeer(peerId: number): Promise<any> {
+export async function getPeer(peerId: number): Promise<any> {
   const cached = rawPeers.get(peerId);
   if(cached) return cached;
 
@@ -219,7 +215,7 @@ function isTopicChat(peer: any): boolean {
   return !!peer?.pFlags?.forum || !!peer?.pFlags?.bot_forum_view;
 }
 
-function peerTitle(peer: any, selfId: number): string {
+export function peerTitle(peer: any, selfId: number): string {
   if(!peer) return 'Unknown';
   if(peer._ === 'user' && Number(peer.id) === selfId) return 'Saved Messages';
   if(peer._ === 'user') {
@@ -481,7 +477,7 @@ async function richBody(message: any): Promise<{text: string; entities: any[]} |
 }
 
 /** Preview text for the chat list, including rich messages. */
-async function previewOf(message: any): Promise<string> {
+export async function previewOf(message: any): Promise<string> {
   // A restricted message must not leak through the chat list either.
   const restricted = await restrictionTextOf(message?.restriction_reason);
   if(restricted) return restricted;
@@ -613,28 +609,6 @@ export async function loadDialogs(limit = 40, filterId = 0): Promise<DialogItem[
   );
 }
 
-/**
- * Forum topics are modelled as dialogs filtered by the forum's own peerId —
- * same call tweb's own topic list uses.
- */
-export async function loadTopics(peerId: number, limit = 30): Promise<TopicItem[]> {
-  const {managers} = await bootTelegram();
-  const {dialogs} = await managers.dialogsStorage.getDialogs({limit, filterId: peerId});
-
-  return Promise.all(
-    dialogs.map(async(topic: any) => {
-      const topMessage = await managers.appMessagesManager.getMessageByPeer(peerId, topic.top_message);
-      return {
-        threadId: Number(topic.id),
-        title: topic.title || 'Topic',
-        preview: await previewOf(topMessage),
-        date: topMessage?.date ?? 0,
-        unread: topic.unread_count ?? 0
-      };
-    })
-  );
-}
-
 /* ------------------------------------------------------------------ */
 /* History                                                             */
 /* ------------------------------------------------------------------ */
@@ -681,6 +655,9 @@ async function toItem(message: any, peerId: number, selfId: number): Promise<Mes
     media: mediaOf(message),
     reply: await replyOf(message, peerId, selfId),
     repliesCount: message.replies?.replies ?? 0,
+    commenters: (message.replies?.recent_repliers ?? [])
+      .map((peer: any) => Number(getPeerId(peer)))
+      .filter(Boolean),
     reactions: reactionsOf(message),
     groupedId: message.grouped_id ? '' + message.grouped_id : '',
     stickerDocId: isStickerMessage(message) ? '' + message.media.document.id : '',
@@ -855,17 +832,20 @@ async function fetchMessages(peerId: number, mids: number[]): Promise<any[]> {
 
 export async function loadHistory(
   peerId: number,
-  options: {threadId?: number; limit?: number; offsetId?: number} = {}
+  options: {threadId?: number; limit?: number; offsetId?: number; savedReaction?: string} = {}
 ): Promise<MessageItem[]> {
   const {managers} = await bootTelegram();
   const selfId = await getSelfId();
-  const {threadId, limit = 40, offsetId} = options;
+  const {threadId, limit = 40, offsetId, savedReaction} = options;
 
   const result = await managers.appMessagesManager.getHistory({
     peerId,
     limit,
     threadId,
     offsetId,
+    // Saved Messages filtered by tag. The manager turns this into a search
+    // rather than a plain history request.
+    savedReaction: savedReaction ? [{_: 'reactionEmoji', emoticon: savedReaction}] : undefined,
     fetchIfWasNotFetched: true
   });
 
@@ -975,26 +955,6 @@ export async function votePoll(peerId: number, mid: number, optionIndexes: numbe
     await managers.appMessagesManager.getMessageByPeer(peerId, mid);
   if(!message) throw new Error('Message not found');
   await managers.appPollsManager.sendVote(message, optionIndexes);
-}
-
-/**
- * Opens the comment thread attached to a channel post. The discussion lives in
- * the linked group, so this returns a different peer plus the thread id.
- */
-export async function openDiscussion(
-  peerId: number,
-  mid: number
-): Promise<{peerId: number; threadId: number} | null> {
-  const {managers} = await bootTelegram();
-
-  try {
-    const result: any = await managers.appMessagesManager.getDiscussionMessage(peerId, mid);
-    const message = result?.message ?? result;
-    if(!message?.mid) return null;
-    return {peerId: Number(message.peerId), threadId: message.mid};
-  } catch(err) {
-    return null;
-  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -1513,6 +1473,15 @@ function toSticker(doc: any): StickerItem {
     width: size?.w ?? 128,
     height: size?.h ?? 128
   };
+}
+
+/**
+ * Put a document that arrived from somewhere other than a sticker set into the
+ * cache `loadDocUrl` reads, so `Sticker` can render it. Topic icons are custom
+ * emoji fetched one at a time and take this route.
+ */
+export function registerDoc(doc: any): StickerItem {
+  return toSticker(doc);
 }
 
 export async function loadRecentStickers(): Promise<StickerItem[]> {
