@@ -46,6 +46,13 @@
     font-weight: 600;
     color: var(--peer-color);
     cursor: pointer;
+    /* A display name with no spaces in it has nothing to wrap on, and would
+       otherwise push the header past the bubble. */
+    max-width: 100%;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .who:hover {
