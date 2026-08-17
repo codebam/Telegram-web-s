@@ -7,6 +7,8 @@ import {bootTelegram} from './client';
  * module — nothing that reaches a Svelte `$state` may go back to the worker.
  */
 
+export type BirthdayValue = {day: number; month: number; year: number | null};
+
 export type ProfileInfo = {
   userId: number;
   firstName: string;
@@ -15,12 +17,18 @@ export type ProfileInfo = {
   phone: string;
   bio: string;
   isPremium: boolean;
+  birthday: BirthdayValue | null;
+  personalChannelId: number;
+  /** Id of the current profile photo, needed to remove it. */
+  photoId: string;
 };
 
 export async function loadProfile(): Promise<ProfileInfo> {
   const {managers} = await bootTelegram();
   const self: any = await managers.appUsersManager.getSelf();
   const full: any = await managers.appProfileManager.getProfile(self.id).catch((): null => null);
+
+  const birthday = full?.birthday;
 
   return {
     userId: Number(self.id),
@@ -29,7 +37,12 @@ export async function loadProfile(): Promise<ProfileInfo> {
     username: self.username ?? '',
     phone: self.phone ? `+${self.phone}` : '',
     bio: full?.about ?? '',
-    isPremium: !!self.pFlags?.premium
+    isPremium: !!self.pFlags?.premium,
+    birthday: birthday ?
+      {day: birthday.day, month: birthday.month, year: birthday.year ?? null} :
+      null,
+    personalChannelId: full?.personal_channel_id ? Number(full.personal_channel_id) : 0,
+    photoId: self.photo?.photo_id ? String(self.photo.photo_id) : ''
   };
 }
 
@@ -41,6 +54,149 @@ export async function saveProfile(firstName: string, lastName: string, bio: stri
 export async function saveUsername(username: string): Promise<void> {
   const {managers} = await bootTelegram();
   await managers.appUsersManager.updateUsername(username);
+}
+
+/* ------------------------------------------------------------------ */
+/* Birthday                                                            */
+/* ------------------------------------------------------------------ */
+
+/** Pass `null` to clear the birthday. Year is optional — Telegram allows hiding it. */
+export async function saveBirthday(value: BirthdayValue | null): Promise<void> {
+  const {managers} = await bootTelegram();
+
+  if(!value) {
+    await managers.appProfileManager.setMyBirthday(null);
+    return;
+  }
+
+  // Built fresh here so no `$state` proxy from the form reaches the worker.
+  const birthday: any = {_: 'birthday', day: value.day, month: value.month};
+  if(value.year) birthday.year = value.year;
+
+  await managers.appProfileManager.setMyBirthday(birthday);
+}
+
+export type BirthdayPrivacy = 'everybody' | 'contacts' | 'nobody';
+
+/**
+ * Who can see the birthday. Read straight off the privacy rules rather than
+ * `getPrivacyRulesDetails`, so nothing but a plain string crosses the seam.
+ */
+export async function loadBirthdayPrivacy(): Promise<BirthdayPrivacy> {
+  const {managers} = await bootTelegram();
+
+  try {
+    const rules: any[] = await managers.appPrivacyManager.getPrivacy('inputPrivacyKeyBirthday' as any);
+    const has = (type: string) => rules.some((rule) => rule._ === type);
+
+    if(has('privacyValueAllowAll')) return 'everybody';
+    if(has('privacyValueAllowContacts')) return 'contacts';
+    return 'nobody';
+  } catch(err) {
+    return 'nobody';
+  }
+}
+
+export async function saveBirthdayPrivacy(value: BirthdayPrivacy): Promise<void> {
+  const {managers} = await bootTelegram();
+
+  const rules: any[] =
+    value === 'everybody' ? [{_: 'inputPrivacyValueAllowAll'}] :
+    value === 'contacts' ? [{_: 'inputPrivacyValueAllowContacts'}, {_: 'inputPrivacyValueDisallowAll'}] :
+    [{_: 'inputPrivacyValueDisallowAll'}];
+
+  await managers.appPrivacyManager.setPrivacy('inputPrivacyKeyBirthday' as any, rules as any);
+}
+
+/* ------------------------------------------------------------------ */
+/* Personal channel                                                    */
+/* ------------------------------------------------------------------ */
+
+export type PersonalChannelOption = {
+  /** Negative peer id, the form the avatar and title helpers expect. */
+  peerId: number;
+  title: string;
+};
+
+export async function loadPersonalChannels(): Promise<PersonalChannelOption[]> {
+  const {managers} = await bootTelegram();
+
+  try {
+    const chatIds: any[] = await managers.appProfileManager.getAdminedPersonalChannels();
+    const options = await Promise.all(
+      (chatIds ?? []).map(async(chatId) => {
+        const chat: any = await managers.appChatsManager.getChat(chatId).catch((): null => null);
+        return {peerId: -Number(chatId), title: chat?.title ?? 'Channel'};
+      })
+    );
+    return options;
+  } catch(err) {
+    return [];
+  }
+}
+
+/** `peerId` is the negative channel peer id; 0 detaches the personal channel. */
+export async function savePersonalChannel(peerId: number): Promise<void> {
+  const {managers} = await bootTelegram();
+  await managers.appProfileManager.updatePersonalChannel(peerId ? -peerId : undefined);
+}
+
+/* ------------------------------------------------------------------ */
+/* Profile photo                                                       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Uploads a cropped square as the account's profile photo.
+ *
+ * The blob is produced by `ImageCropper.svelte`; `appDownloadManager.upload`
+ * turns it into the `InputFile` the manager wants.
+ */
+export async function uploadProfilePhoto(blob: Blob): Promise<void> {
+  const {managers} = await bootTelegram();
+  const {default: appDownloadManager} = await import('@lib/appDownloadManager');
+
+  const file = await appDownloadManager.upload(blob, 'avatar.jpg');
+  await managers.appProfileManager.uploadProfilePhoto({file} as any);
+}
+
+/** Same crop payload, but for a group or channel the user administers. */
+export async function uploadChatPhoto(peerId: number, blob: Blob): Promise<void> {
+  const {managers} = await bootTelegram();
+  const {default: appDownloadManager} = await import('@lib/appDownloadManager');
+
+  const file = await appDownloadManager.upload(blob, 'avatar.jpg');
+  await managers.appChatsManager.editPhoto(-peerId, {file} as any);
+}
+
+export async function removeProfilePhoto(photoId: string): Promise<void> {
+  if(!photoId) return;
+  const {managers} = await bootTelegram();
+  await managers.appProfileManager.deletePhotos([photoId]);
+}
+
+/* ------------------------------------------------------------------ */
+/* Account deletion                                                    */
+/* ------------------------------------------------------------------ */
+
+/** Days of inactivity after which Telegram deletes the account. */
+export async function loadAccountTTL(): Promise<number> {
+  const {managers} = await bootTelegram();
+
+  try {
+    return Number(await managers.appAccountManager.getAccountTTL()) || 0;
+  } catch(err) {
+    return 0;
+  }
+}
+
+export async function saveAccountTTL(days: number): Promise<void> {
+  const {managers} = await bootTelegram();
+  await managers.appAccountManager.setAccountTTL(days);
+}
+
+export async function deleteAccount(reason: string): Promise<void> {
+  const {managers} = await bootTelegram();
+  await managers.appAccountManager.deleteAccount(reason);
 }
 
 /* ------------------------------------------------------------------ */
@@ -131,61 +287,10 @@ export async function setNotifyScope(scope: NotifyScope, enabled: boolean): Prom
   );
 }
 
-/* ------------------------------------------------------------------ */
-/* Telegram Business                                                   */
-/* ------------------------------------------------------------------ */
-
-export type BusinessInfo = {
-  hasHours: boolean;
-  hoursText: string;
-  location: string;
-  greeting: boolean;
-  away: boolean;
-  introTitle: string;
-  introDescription: string;
-};
-
-const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-
-export async function loadBusiness(): Promise<BusinessInfo> {
-  const {managers} = await bootTelegram();
-  const self: any = await managers.appUsersManager.getSelf();
-  const full: any = await managers.appProfileManager.getProfile(self.id, true).catch((): null => null);
-
-  const hours = full?.business_work_hours;
-  const intervals: any[] = hours?.weekly_open ?? [];
-
-  return {
-    hasHours: !!hours,
-    hoursText: intervals.length ?
-      intervals.slice(0, 7).map((interval: any) => {
-        const day = Math.floor(interval.start_minute / (24 * 60));
-        const from = interval.start_minute % (24 * 60);
-        const to = interval.end_minute % (24 * 60);
-        const fmt = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
-        return `${WEEKDAYS[day] ?? '?'} ${fmt(from)}–${fmt(to)}`;
-      }).join(', ') :
-      '',
-    location: full?.business_location?.address ?? '',
-    greeting: !!full?.business_greeting_message,
-    away: !!full?.business_away_message,
-    introTitle: full?.business_intro?.title ?? '',
-    introDescription: full?.business_intro?.description ?? ''
-  };
-}
-
-/** Business intro is the one business object tweb exposes a manager call for. */
-export async function saveBusinessIntro(title: string, description: string): Promise<void> {
-  const {managers} = await bootTelegram();
-  const self: any = await managers.appUsersManager.getSelf();
-
-  await managers.appBusinessManager.saveBusinessIntro(self.id, {
-    _: 'businessIntro',
-    title,
-    description,
-    pFlags: {}
-  } as any);
-}
+/* Telegram Business now lives in `./business.ts`, which edits every field
+   rather than only reading it. The old read-only `loadBusiness` and the
+   `saveBusinessIntro` that called the manager's cache helper (and so never
+   reached the server) are gone with it. */
 
 /* ------------------------------------------------------------------ */
 /* Bots and mini apps                                                  */

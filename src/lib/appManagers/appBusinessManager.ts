@@ -3,10 +3,16 @@ import {
   BusinessBotRecipients,
   BusinessBotRights,
   BusinessIntro,
+  BusinessWorkHours,
   ConnectedBot,
+  InputBusinessAwayMessage,
   InputBusinessBotRecipients,
+  InputBusinessGreetingMessage,
+  InputBusinessIntro,
+  InputGeoPoint,
   InputUser,
   MessageEntity,
+  QuickReply,
   Update,
   User
 } from '@layer';
@@ -160,6 +166,121 @@ export default class AppBusinessManager extends AppManager {
 
     intro.sticker = this.appDocsManager.saveDoc(intro.sticker, {type: 'userFull', userId});
     return intro;
+  }
+
+  /**
+   * The `account.updateBusiness*` writes below all follow the same shape:
+   * send the new value (or nothing, which clears it), then patch the cached
+   * `userFull` so readers do not need a round trip to see the change.
+   */
+  public updateBusinessWorkHours(hours?: BusinessWorkHours) {
+    return this.apiManager.invokeApiSingleProcess({
+      method: 'account.updateBusinessWorkHours',
+      params: {
+        business_work_hours: hours
+      },
+      processResult: () => {
+        this.appProfileManager.modifyCachedFullUser(this.rootScope.myId.toUserId(), (userFull) => {
+          userFull.business_work_hours = hours;
+          return true;
+        });
+      }
+    });
+  }
+
+  public updateBusinessLocation(location?: {address: string, geoPoint?: InputGeoPoint}) {
+    return this.apiManager.invokeApiSingleProcess({
+      method: 'account.updateBusinessLocation',
+      params: {
+        address: location?.address,
+        geo_point: location?.geoPoint
+      },
+      processResult: () => {
+        this.appProfileManager.modifyCachedFullUser(this.rootScope.myId.toUserId(), (userFull) => {
+          userFull.business_location = location ?
+            {_: 'businessLocation', address: location.address} :
+            undefined;
+          return true;
+        });
+      }
+    });
+  }
+
+  public updateBusinessGreetingMessage(message?: InputBusinessGreetingMessage) {
+    return this.apiManager.invokeApiSingleProcess({
+      method: 'account.updateBusinessGreetingMessage',
+      params: {
+        message
+      },
+      // The server echoes nothing useful, so drop the cache and let the next
+      // read repopulate it with the canonical `businessGreetingMessage`.
+      processResult: () => {
+        this.appProfileManager.refreshFullPeer(this.rootScope.myId);
+      }
+    });
+  }
+
+  public updateBusinessAwayMessage(message?: InputBusinessAwayMessage) {
+    return this.apiManager.invokeApiSingleProcess({
+      method: 'account.updateBusinessAwayMessage',
+      params: {
+        message
+      },
+      processResult: () => {
+        this.appProfileManager.refreshFullPeer(this.rootScope.myId);
+      }
+    });
+  }
+
+  public updateBusinessIntro(intro?: InputBusinessIntro) {
+    return this.apiManager.invokeApiSingleProcess({
+      method: 'account.updateBusinessIntro',
+      params: {
+        intro
+      },
+      processResult: () => {
+        this.appProfileManager.modifyCachedFullUser(this.rootScope.myId.toUserId(), (userFull) => {
+          userFull.business_intro = intro ?
+            {_: 'businessIntro', title: intro.title, description: intro.description} :
+            undefined;
+          return true;
+        });
+      }
+    });
+  }
+
+  /* Quick replies — shortcut management. Creating a shortcut requires sending a
+     message into it, which the send path does not support yet. */
+
+  public getQuickReplies() {
+    return this.apiManager.invokeApiSingleProcess({
+      method: 'messages.getQuickReplies',
+      params: {hash: 0},
+      processResult: (result) => {
+        if(result._ === 'messages.quickRepliesNotModified') {
+          return [] as QuickReply.quickReply[];
+        }
+
+        this.appPeersManager.saveApiPeers(result);
+        return result.quick_replies as QuickReply.quickReply[];
+      }
+    });
+  }
+
+  public editQuickReplyShortcut(shortcutId: number, shortcut: string) {
+    return this.apiManager.invokeApiSingleProcess({
+      method: 'messages.editQuickReplyShortcut',
+      params: {shortcut_id: shortcutId, shortcut},
+      processResult: (result) => result
+    });
+  }
+
+  public deleteQuickReplyShortcut(shortcutId: number) {
+    return this.apiManager.invokeApiSingleProcess({
+      method: 'messages.deleteQuickReplyShortcut',
+      params: {shortcut_id: shortcutId},
+      processResult: (result) => result
+    });
   }
 
   public resolveBusinessChatLink(slug: string) {
