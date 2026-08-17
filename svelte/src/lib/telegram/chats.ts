@@ -64,6 +64,8 @@ export type MediaItem = {
    * sender is entitled to that receipt.
    */
   unread: boolean;
+  /** Document id for document-backed media ('' for photos) — used by saved GIFs. */
+  docId: string;
 };
 
 export type ReplyPreview = {
@@ -243,7 +245,8 @@ function mediaOf(message: any): MediaItem | null {
       size: media.photo.size ?? 0,
       duration: 0,
       selfDestruct: !!media.ttl_seconds,
-      unread: !!message.pFlags?.media_unread
+      unread: !!message.pFlags?.media_unread,
+      docId: ''
     };
   }
 
@@ -277,7 +280,8 @@ function mediaOf(message: any): MediaItem | null {
       // A one-time voice message or video note carries the same flag as a
       // self-destructing photo, plus `round_message` / `voice` once-flags.
       selfDestruct: !!media.ttl_seconds,
-      unread: !!message.pFlags?.media_unread
+      unread: !!message.pFlags?.media_unread,
+      docId: '' + document.id
     };
   }
 
@@ -1501,7 +1505,16 @@ function stickerKind(doc: any): StickerItem['kind'] {
   return 'static';
 }
 
-function toSticker(doc: any): StickerItem {
+/**
+ * Make a document reachable by `loadDocUrl` / `sendDocument`. Anything a sibling
+ * module pulls straight off a manager (GIF search results, set previews) has to
+ * pass through here first, or sending it later fails with "Document not found".
+ */
+export function registerDoc(doc: any): void {
+  if(doc?.id !== undefined) rawDocs.set('' + doc.id, doc);
+}
+
+export function toSticker(doc: any): StickerItem {
   rawDocs.set('' + doc.id, doc);
   const size = (doc.attributes ?? []).find((a: any) => a._ === 'documentAttributeImageSize' || a._ === 'documentAttributeVideo');
   const sticker = (doc.attributes ?? []).find((a: any) => a._ === 'documentAttributeSticker');
