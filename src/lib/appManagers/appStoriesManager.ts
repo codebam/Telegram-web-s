@@ -10,7 +10,9 @@ import deepEqual from '@helpers/object/deepEqual';
 import safeReplaceObject from '@helpers/object/safeReplaceObject';
 import pause from '@helpers/schedulers/pause';
 import tsNow from '@helpers/tsNow';
-import {Reaction, ReportReason, StoriesAllStories, StoriesStories, StoryItem, Update, PeerStories, User, Chat, StoryView, MediaArea, StoryAlbum, StoriesStealthMode} from '@layer';
+import getFileNameForUpload from '@helpers/getFileNameForUpload';
+import {randomLong} from '@helpers/random';
+import {Reaction, ReportReason, StoriesAllStories, StoriesStories, StoryItem, Update, PeerStories, User, Chat, StoryView, MediaArea, StoryAlbum, StoriesStealthMode, DocumentAttribute, InputMedia, InputPrivacyRule, MessageEntity} from '@layer';
 import {SERVICE_PEER_ID, TEST_NO_STORIES} from '@appManagers/constants';
 import {ReferenceContext} from '@lib/storages/references';
 import {AppManager} from '@appManagers/manager';
@@ -1574,6 +1576,117 @@ export default class AppStoriesManager extends AppManager {
 
   public getStealthMode() {
     return this.stealthMode || this.getAllStories().then(() => this.stealthMode);
+  }
+
+  /**
+   * Posts a story for `peerId`.
+   *
+   * The upload happens here rather than through `appMessagesManager` because a
+   * story never becomes a message: the uploaded file only ever feeds
+   * `stories.sendStory`, so routing it through the message sender would create
+   * a pending bubble nobody ever sees.
+   */
+  public async sendStory(options: {
+    peerId: PeerId,
+    file: File | Blob,
+    isVideo?: boolean,
+    duration?: number,
+    width?: number,
+    height?: number,
+    caption?: string,
+    entities?: MessageEntity[],
+    privacyRules: InputPrivacyRule[],
+    period?: number,
+    pinned?: boolean
+  }) {
+    const {peerId, file} = options;
+    const inputFile = await this.apiFileManager.upload({file, fileName: getFileNameForUpload(file)});
+
+    let media: InputMedia;
+    if(options.isVideo) {
+      const attributes: DocumentAttribute[] = [{
+        _: 'documentAttributeVideo',
+        duration: options.duration || 0,
+        w: options.width || 720,
+        h: options.height || 1280,
+        pFlags: {supports_streaming: true}
+      }];
+
+      const name = (file as File).name;
+      if(name) {
+        attributes.push({_: 'documentAttributeFilename', file_name: name});
+      }
+
+      media = {
+        _: 'inputMediaUploadedDocument',
+        file: inputFile,
+        mime_type: file.type || 'video/mp4',
+        attributes,
+        pFlags: {}
+      };
+    } else {
+      media = {
+        _: 'inputMediaUploadedPhoto',
+        file: inputFile,
+        pFlags: {}
+      };
+    }
+
+    return this.apiManager.invokeApiSingleProcess({
+      method: 'stories.sendStory',
+      params: {
+        peer: this.appPeersManager.getInputPeerById(peerId),
+        media,
+        caption: options.caption || undefined,
+        entities: options.entities,
+        privacy_rules: options.privacyRules,
+        random_id: randomLong(),
+        period: options.period,
+        pinned: options.pinned || undefined
+      },
+      processResult: (updates) => {
+        this.apiUpdatesManager.processUpdateMessage(updates);
+      }
+    });
+  }
+
+  /**
+   * Edits a posted story. Every field is optional and only what is passed is
+   * sent — `stories.editStory` treats an omitted flag as "leave alone", which
+   * is what lets the audience be changed without re-uploading the media.
+   */
+  public editStory(options: {
+    peerId: PeerId,
+    id: number,
+    caption?: string,
+    entities?: MessageEntity[],
+    privacyRules?: InputPrivacyRule[]
+  }) {
+    return this.apiManager.invokeApiSingleProcess({
+      method: 'stories.editStory',
+      params: {
+        peer: this.appPeersManager.getInputPeerById(options.peerId),
+        id: options.id,
+        caption: options.caption,
+        entities: options.entities,
+        privacy_rules: options.privacyRules
+      },
+      processResult: (updates) => {
+        this.apiUpdatesManager.processUpdateMessage(updates);
+      }
+    });
+  }
+
+  /** Public t.me link for a story, for the "copy link" action. */
+  public exportStoryLink(peerId: PeerId, id: number) {
+    return this.apiManager.invokeApiSingleProcess({
+      method: 'stories.exportStoryLink',
+      params: {
+        peer: this.appPeersManager.getInputPeerById(peerId),
+        id
+      },
+      processResult: (exportedStoryLink) => exportedStoryLink.link
+    });
   }
 
   protected onUpdateStory = (update: Update.updateStory) => {

@@ -480,6 +480,31 @@ export class AppUsersManager extends AppManager {
     });
   }
 
+  /**
+   * Replaces the close-friends list wholesale — `contacts.editCloseFriends`
+   * has no add/remove form, so the caller sends the list it wants to end up
+   * with. The local `close_friend` flags are rewritten to match so the story
+   * audience picker does not have to refetch the contact list.
+   */
+  public editCloseFriends(userIds: UserId[]) {
+    return this.apiManager.invokeApiSingle('contacts.editCloseFriends', {
+      id: userIds.map((userId) => userId.toString())
+    }).then(() => {
+      const wanted = new Set(userIds.map((userId) => userId.toString()));
+
+      for(const id in this.users) {
+        const user = this.users[id];
+        if(user?._ !== 'user' || !user.pFlags) continue;
+
+        const shouldBe = wanted.has(id);
+        if(!!user.pFlags.close_friend === shouldBe) continue;
+
+        if(shouldBe) user.pFlags.close_friend = true;
+        else delete user.pFlags.close_friend;
+      }
+    });
+  }
+
   public toggleBlock(peerId: PeerId, block: boolean, blockMyStoriesFrom?: boolean) {
     return this.apiManager.invokeApiSingle(block ? 'contacts.block' : 'contacts.unblock', {
       id: this.appPeersManager.getInputPeerById(peerId),
