@@ -1669,6 +1669,20 @@ export async function availableReactions(limit = 12): Promise<string[]> {
   }
 }
 
+export function reactionPeerFromResult(result: any, reaction: any): any {
+  const peer = reaction.peer_id;
+  if(peer._ === 'peerUser') {
+    return result.users?.find((user: any) => Number(user.id) === Number(peer.user_id));
+  }
+  if(peer._ === 'peerChannel') {
+    return result.chats?.find((chat: any) => Number(chat.id) === Number(peer.channel_id));
+  }
+  if(peer._ === 'peerChat') {
+    return result.chats?.find((chat: any) => Number(chat.id) === Number(peer.chat_id));
+  }
+  return undefined;
+}
+
 export async function reactionParticipants(
   peerId: number,
   mid: number,
@@ -1689,9 +1703,10 @@ export async function reactionParticipants(
     const selfId = await getSelfId();
     return Promise.all((result?.reactions ?? []).map(async(reaction: any) => {
       const peerId = Number(managers.appPeersManager.getPeerId(reaction.peer_id));
+      const peer = reactionPeerFromResult(result, reaction);
       return {
         peerId,
-        title: peerId === selfId ? 'You' : peerTitle(await getPeer(peerId), selfId)
+        title: peerId === selfId ? 'You' : peerTitle(peer ?? await getPeer(peerId), selfId)
       };
     }));
   } catch(err) {
