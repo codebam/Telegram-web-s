@@ -15,6 +15,7 @@
   import NewChat from './NewChat.svelte';
   import PeerPicker from './PeerPicker.svelte';
   import SendFiles from './SendFiles.svelte';
+  import {sendFilesGrouped, type SendFileItem, type UploadHandle, type UploadProgress} from '$lib/telegram/upload';
   import Settings from './Settings.svelte';
   import Stories from './Stories.svelte';
   import Picker from './Picker.svelte';
@@ -68,7 +69,6 @@
     saveDraftText,
     setOwnOnline,
     sendDocument,
-    sendFiles,
     sendMessage,
     sendTyping,
     toggleMute,
@@ -428,6 +428,18 @@
   let botMenuButton = $state<{text: string; url: string} | null>(null);
   /** Files queued by paste, drop or the attach button, pending confirmation. */
   let pendingFiles = $state<File[]>([]);
+  /** The batch currently uploading, null when nothing is in flight. */
+  let upload = $state<UploadHandle | null>(null);
+  let uploadProgress = $state<UploadProgress[] | null>(null);
+  /** Nesting depth of the drag currently over the pane — see onDragEnter. */
+  let dragDepth = 0;
+
+  /** Batch progress as one number, for the bar on the pending bubble. */
+  const uploadOverall = $derived(
+    uploadProgress?.length ?
+      uploadProgress.reduce((sum, item) => sum + item.progress, 0) / uploadProgress.length :
+      null
+  );
 
   /** Media messages in order — the lightbox pages through these. */
   const mediaMessages = $derived(
@@ -1316,35 +1328,83 @@
 
   /** Queue files for confirmation rather than sending them blind. */
   function attach(files: FileList | File[] | null) {
-    if (!files || activePeerId === null) return;
+    // Queuing a second batch over one that is mid-upload would strand the
+    // progress the dialog is showing; make the user finish or cancel first.
+    if (!files || activePeerId === null || upload) return;
     const list = Array.from(files);
     if (list.length) pendingFiles = list;
   }
 
-  async function confirmSend(files: File[], asPhoto: boolean, caption: string) {
-    pendingFiles = [];
-    if (activePeerId === null) return;
+  /**
+   * Upload the confirmed batch, keeping the dialog up while it runs so the
+   * progress bars and the cancel button have somewhere to live.
+   */
+  async function confirmSend(items: SendFileItem[], caption: string) {
+    if (activePeerId === null || upload) return;
 
     const replyToMsgId = replyTo?.mid;
     replyTo = null;
     draft = '';
 
+    uploadProgress = items.map(() => ({progress: 0, error: ''}));
+
+    const handle = sendFilesGrouped(activePeerId, items, {
+      caption,
+      threadId: activeThreadId,
+      replyToMsgId,
+      onprogress: (state) => (uploadProgress = state)
+    });
+    upload = handle;
+
     try {
-      await sendFiles(activePeerId, files, {
-        caption,
-        asPhoto,
-        threadId: activeThreadId,
-        replyToMsgId
-      });
+      await handle.promise;
     } catch (err: any) {
-      error = errorOf(err, 'Upload failed');
+      // A cancel rejects the same way a failure does; only a real failure is
+      // worth putting in front of the user.
+      if (upload === handle) error = errorOf(err, 'Upload failed');
+    } finally {
+      if (upload === handle) {
+        upload = null;
+        uploadProgress = null;
+        pendingFiles = [];
+      }
     }
+  }
+
+  /** Abort the batch in flight and put the dialog back to its editable state. */
+  function cancelUpload() {
+    upload?.cancel();
+    upload = null;
+    uploadProgress = null;
+    pendingFiles = [];
   }
 
   function onDrop(e: DragEvent) {
     e.preventDefault();
+    dragDepth = 0;
     dragging = false;
     attach(e.dataTransfer?.files ?? null);
+  }
+
+  /**
+   * `dragenter`/`dragleave` fire for every element the pointer crosses, so a
+   * bare `dragleave` handler flickers the overlay off over each child. Counting
+   * enters against leaves is what keeps it steady.
+   */
+  function onDragEnter(e: DragEvent) {
+    if (activePeerId === null || !hasFiles(e)) return;
+    dragDepth++;
+    dragging = true;
+  }
+
+  function onDragLeave() {
+    if (dragDepth > 0) dragDepth--;
+    if (!dragDepth) dragging = false;
+  }
+
+  /** Ignore drags of selected text or a link — only files open the dialog. */
+  function hasFiles(e: DragEvent) {
+    return Array.from(e.dataTransfer?.types ?? []).includes('Files');
   }
 
   /**
@@ -2337,14 +2397,25 @@
 
   <section
     class:dragging
+    ondragenter={onDragEnter}
     ondragover={(e) => {
-      e.preventDefault();
-      dragging = activePeerId !== null;
+      // Without preventDefault the browser refuses the drop and navigates to
+      // the file instead.
+      if (activePeerId !== null && hasFiles(e)) e.preventDefault();
     }}
-    ondragleave={() => (dragging = false)}
+    ondragleave={onDragLeave}
     ondrop={onDrop}
     aria-label="Conversation"
   >
+    {#if dragging}
+      <div class="drop-overlay">
+        <div class="drop-card">
+          <Glyph name="attach" size={28} />
+          <strong>Drop to send</strong>
+          <span class="muted">Photos and videos go as an album, anything else as a file</span>
+        </div>
+      </div>
+    {/if}
     {#if activePeerId === null || (activeIsForum && !topicOpen)}
       <div class="empty">
         <p class="muted">{activeIsForum ? 'Select a topic' : 'Select a chat'}</p>
@@ -2550,6 +2621,10 @@
           {/if}
           {#each rendered as group, groupIndex (group.key)}
             {@const message = group.items[0]}
+            <!-- An album carries one caption for the whole group, and the server
+                 is free to hang it off any item — so the bubble shows whichever
+                 item actually has the text. -->
+            {@const captioned = group.items.find((item) => item.rich || item.parts.length) ?? message}
             {#if startsNewDay(groupIndex)}
               <p class="day-divider">{dayLabel(message.date)}</p>
             {/if}
@@ -2668,10 +2743,13 @@
                 {/if}
 
                 {#if group.items.length > 1}
-                  <div class="album" style="--cols: {group.items.length > 2 ? 2 : group.items.length}">
-                    {#each group.items as item (item.mid)}
-                      <button class="album-item" onclick={() => openLightbox(item)}>
-                        <Media peerId={activePeerId} mid={item.mid} media={item.media!} />
+                  <!-- Album tiling, the way the official clients lay it out: a
+                       pair side by side, a hero plus a stack at three, a hero
+                       over a strip at four, an even grid beyond that. -->
+                  <div class="album" class:n2={group.items.length === 2} class:n3={group.items.length === 3} class:n4={group.items.length === 4} class:many={group.items.length > 4}>
+                    {#each group.items as item, tileIndex (item.mid)}
+                      <button class="album-item" class:first={tileIndex === 0} onclick={() => openLightbox(item)}>
+                        <Media peerId={activePeerId} mid={item.mid} media={item.media!} fill />
                       </button>
                     {/each}
                   </div>
@@ -2692,10 +2770,27 @@
                   {/if}
                 {/if}
 
-                {#if message.rich}
-                  <RichMessage blocks={message.rich} onmention={openMention} />
-                {:else if message.parts.length}
-                  <FormattedText parts={message.parts} onmention={openMention} onlink={openLink} />
+                {#if message.pending && message.media && uploadOverall !== null}
+                  <!-- The optimistic bubble shows the batch's progress; the
+                       cancel here is the same abort the dialog offers. -->
+                  <div class="upload-row">
+                    <div
+                      class="upload-bar"
+                      role="progressbar"
+                      aria-valuenow={Math.round(uploadOverall * 100)}
+                    >
+                      <div class="upload-fill" style="width: {Math.round(uploadOverall * 100)}%"></div>
+                    </div>
+                    <button class="upload-cancel" onclick={cancelUpload} aria-label="Cancel upload">
+                      <Glyph name="close" size={12} />
+                    </button>
+                  </div>
+                {/if}
+
+                {#if captioned.rich}
+                  <RichMessage blocks={captioned.rich} onmention={openMention} />
+                {:else if captioned.parts.length}
+                  <FormattedText parts={captioned.parts} onmention={openMention} onlink={openLink} />
                 {/if}
 
                 {#if message.webpage}
@@ -3016,11 +3111,17 @@
 {/if}
 
 {#if pendingFiles.length}
-  <SendFiles
-    files={pendingFiles}
-    onsend={confirmSend}
-    onclose={() => (pendingFiles = [])}
-  />
+  <!-- Keyed on the batch: the dialog seeds its per-item choices once, so a new
+       batch has to arrive as a new component rather than a stale one. -->
+  {#key pendingFiles}
+    <SendFiles
+      files={pendingFiles}
+      progress={uploadProgress}
+      onsend={confirmSend}
+      oncancelupload={cancelUpload}
+      onclose={() => (pendingFiles = [])}
+    />
+  {/key}
 {/if}
 
 {#if miniApp}
@@ -3245,6 +3346,31 @@
     outline-offset: -8px;
   }
 
+  .drop-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 40;
+    display: grid;
+    place-items: center;
+    background: color-mix(in srgb, var(--bg-solid, var(--bg-elevated)) 82%, transparent);
+    /* The overlay must not eat the dragenter/dragleave pair it depends on. */
+    pointer-events: none;
+  }
+
+  .drop-card {
+    display: grid;
+    justify-items: center;
+    gap: 6px;
+    padding: 24px 32px;
+    border: 2px dashed var(--accent);
+    border-radius: 16px;
+    text-align: center;
+  }
+
+  .drop-card strong {
+    font-size: 17px;
+  }
+
   .attach {
     background: none;
     border: none;
@@ -3434,8 +3560,44 @@
 
   .album {
     display: grid;
-    grid-template-columns: repeat(var(--cols), 1fr);
-    gap: 3px;
+    gap: 2px;
+    width: 100%;
+    max-width: 320px;
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  .album.n2 {
+    grid-template-columns: 1fr 1fr;
+    aspect-ratio: 2 / 1;
+  }
+
+  .album.n3 {
+    grid-template-columns: 2fr 1fr;
+    grid-template-rows: 1fr 1fr;
+    aspect-ratio: 3 / 2;
+  }
+
+  .album.n3 .first {
+    grid-row: span 2;
+  }
+
+  .album.n4 {
+    grid-template-columns: repeat(3, 1fr);
+    grid-template-rows: 2fr 1fr;
+    aspect-ratio: 1 / 1;
+  }
+
+  .album.n4 .first {
+    grid-column: span 3;
+  }
+
+  .album.many {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .album.many .album-item {
+    aspect-ratio: 1;
   }
 
   .album-item,
@@ -3446,6 +3608,45 @@
     cursor: zoom-in;
     display: block;
     min-width: 0;
+  }
+
+  .album-item {
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .upload-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 6px;
+  }
+
+  .upload-bar {
+    flex: 1;
+    height: 4px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--text) 15%, transparent);
+    overflow: hidden;
+  }
+
+  .upload-fill {
+    height: 100%;
+    background: var(--accent);
+    transition: width 0.15s linear;
+  }
+
+  .upload-cancel {
+    display: grid;
+    place-items: center;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--text) 10%, transparent);
+    color: inherit;
+    cursor: pointer;
   }
 
   .reactions {
