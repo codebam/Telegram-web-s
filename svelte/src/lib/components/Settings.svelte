@@ -1,27 +1,19 @@
 <script lang="ts">
   import Avatar from './Avatar.svelte';
-  import {
-    disableNotifications,
-    enableNotifications,
-    notificationsEnabled,
-    permission
-  } from '$lib/telegram/notifications';
+  import NotificationSettings from './NotificationSettings.svelte';
   import {
     loadAttachBots,
     loadBusiness,
-    loadNotifyScopes,
     loadProfile,
     loadSessions,
     logOut,
     saveBusinessIntro,
     saveProfile,
     saveUsername,
-    setNotifyScope,
     terminateOtherSessions,
     terminateSession,
     type AttachBot,
     type BusinessInfo,
-    type NotifyScope,
     type ProfileInfo,
     type SessionInfo
   } from '$lib/telegram/settings';
@@ -64,9 +56,6 @@
   let accent = $state(getAccent());
   let density = $state<Density>(getDensity());
 
-  let scopes = $state<Record<NotifyScope, boolean> | null>(null);
-  let desktopOn = $state(notificationsEnabled());
-
   let sessions = $state<SessionInfo[]>([]);
   let business = $state<BusinessInfo | null>(null);
   let introTitle = $state('');
@@ -87,8 +76,6 @@
           lastName = profile.lastName;
           bio = profile.bio;
           username = profile.username;
-        } else if(current === 'notifications' && !scopes) {
-          scopes = await loadNotifyScopes();
         } else if(current === 'sessions' && !sessions.length) {
           sessions = await loadSessions();
         } else if(current === 'business' && !business) {
@@ -127,28 +114,6 @@
       error = err?.type || err?.message || 'Failed to save';
     } finally {
       saving = false;
-    }
-  }
-
-  async function toggleDesktop() {
-    if(desktopOn) {
-      disableNotifications();
-      desktopOn = false;
-    } else {
-      desktopOn = await enableNotifications();
-      if(!desktopOn) error = 'Permission denied by the browser';
-    }
-  }
-
-  async function toggleScope(scope: NotifyScope) {
-    if(!scopes) return;
-    const next = !scopes[scope];
-    scopes = {...scopes, [scope]: next};
-    try {
-      await setNotifyScope(scope, next);
-    } catch(err: any) {
-      error = err?.type || err?.message || 'Failed to update';
-      scopes = {...scopes, [scope]: !next};
     }
   }
 
@@ -274,27 +239,7 @@
       </div>
 
     {:else if section === 'notifications'}
-      <label class="toggle">
-        <input type="checkbox" checked={desktopOn} onchange={toggleDesktop} />
-        <span>Desktop notifications</span>
-      </label>
-      <p class="muted small">Browser permission: {permission()}</p>
-
-      <p class="label">Notify me about</p>
-      {#if !scopes}
-        <p class="muted">Loading…</p>
-      {:else}
-        {#each [['users', 'Private chats'], ['groups', 'Groups'], ['channels', 'Channels']] as [key, label]}
-          <label class="toggle">
-            <input
-              type="checkbox"
-              checked={scopes[key as NotifyScope]}
-              onchange={() => toggleScope(key as NotifyScope)}
-            />
-            <span>{label}</span>
-          </label>
-        {/each}
-      {/if}
+      <NotificationSettings />
 
     {:else if section === 'sessions'}
       {#if !sessions.length}
