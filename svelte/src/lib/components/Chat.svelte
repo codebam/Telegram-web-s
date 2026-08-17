@@ -7,8 +7,10 @@
   import FolderEditor from './FolderEditor.svelte';
   import FormattedText from './FormattedText.svelte';
   import InlinePreview from './InlinePreview.svelte';
+  import BoostPanel from './BoostPanel.svelte';
   import Lightbox from './Lightbox.svelte';
   import Media from './Media.svelte';
+  import MessagePayment from './MessagePayment.svelte';
   import CallScreen from './CallScreen.svelte';
   import MiniApp from './MiniApp.svelte';
   import NewChat from './NewChat.svelte';
@@ -95,6 +97,7 @@
   } from '$lib/telegram/notifications';
   import {queryInlineBot, sendInlineResult, type InlineQueryAnswer, type InlineResultItem} from '$lib/telegram/settings';
   import {applyAccent, applyDensity, applyTheme} from '$lib/telegram/theme';
+  import {paidReactionsAvailable} from '$lib/telegram/payments';
   import {
     getBusinessBot,
     onPeerSettings,
@@ -128,6 +131,19 @@
    */
   let readOutboxMaxId = $state(0);
   let activeIsChannel = $state(false);
+  /** The channel accepts paid (star) reactions on its posts. */
+  let starReactionsOn = $state(false);
+  /** Peer whose boost page is open, null when closed. */
+  let boostPeerId = $state<number | null>(null);
+
+  $effect(() => {
+    const peerId = activePeerId;
+    starReactionsOn = false;
+    if(peerId === null || !activeIsChannel) return;
+    paidReactionsAvailable(peerId).then((available) => {
+      if(peerId === activePeerId) starReactionsOn = available;
+    });
+  });
   /** Names of the people who have read a message, fetched on demand. */
   let readByFor = $state<{mid: number; names: string[]} | null>(null);
   let reactionMenu = $state<{mid: number; emoticon: string; x: number; y: number} | null>(null);
@@ -2203,6 +2219,16 @@
                   </div>
                 {/if}
 
+                {#if message.payment || starReactionsOn}
+                  <MessagePayment
+                    peerId={activePeerId}
+                    mid={message.mid}
+                    payment={message.payment}
+                    paidReactions={starReactionsOn && !message.out}
+                    onboost={() => (boostPeerId = activePeerId)}
+                  />
+                {/if}
+
                 {#if message.buttons.length}
                   <div class="keyboard">
                     {#each message.buttons as row, rowIndex (rowIndex)}
@@ -2543,6 +2569,15 @@
     dialogs={allDialogs}
     onclose={() => (newChatOpen = false)}
     oncreated={onChatCreated}
+  />
+{/if}
+
+{#if boostPeerId !== null}
+  <BoostPanel
+    peerId={boostPeerId}
+    title={activeTitle}
+    canCreateGiveaway={activeIsChannel}
+    onclose={() => (boostPeerId = null)}
   />
 {/if}
 

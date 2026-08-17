@@ -1,4 +1,5 @@
 import {bootTelegram} from './client';
+import {paymentPreviewOf, type PaymentPreview} from './payments';
 import {peerRestrictionText, restrictionTextOf} from './restrictions';
 
 /**
@@ -145,6 +146,11 @@ export type MessageItem = {
    * not. Set means the body and media must stay hidden behind the reason.
    */
   restrictionText: string;
+  /**
+   * Invoice, paid media, giveaway or gift attached to this message — null for
+   * the overwhelming majority. Shaped and rendered by `$lib/telegram/payments`.
+   */
+  payment: PaymentPreview | null;
 };
 
 /** A single button from a message's `reply_markup`. */
@@ -692,7 +698,8 @@ async function toItem(message: any, peerId: number, selfId: number): Promise<Mes
     poll: pollOf(message),
     rich: richBlocksOf(message),
     buttons: buttonsOf(message),
-    restrictionText: await restrictionTextOf(message.restriction_reason)
+    restrictionText: await restrictionTextOf(message.restriction_reason),
+    payment: paymentPreviewOf(message)
   };
 }
 
@@ -1513,6 +1520,14 @@ function toSticker(doc: any): StickerItem {
     width: size?.w ?? 128,
     height: size?.h ?? 128
   };
+}
+
+/**
+ * Registers a sticker document that came from somewhere other than the sticker
+ * APIs — star gifts, for one — so `loadDocUrl` can resolve it like any other.
+ */
+export function adoptSticker(doc: any): StickerItem {
+  return toSticker(doc);
 }
 
 export async function loadRecentStickers(): Promise<StickerItem[]> {

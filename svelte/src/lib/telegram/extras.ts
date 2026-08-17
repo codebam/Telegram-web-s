@@ -2,106 +2,12 @@ import getPeerId from '@appManagers/utils/peers/getPeerId';
 import {bootTelegram} from './client';
 
 /**
- * Premium, Stars, Stories and Calls.
+ * Stories, business info and Calls. Premium, Stars and everything else that
+ * costs money live in `payments.ts`.
  *
  * Same discipline as the other modules: everything returned here is plain and
  * cloneable, raw objects stay behind module-level caches.
  */
-
-/* ------------------------------------------------------------------ */
-/* Premium                                                             */
-/* ------------------------------------------------------------------ */
-
-export type PremiumInfo = {
-  active: boolean;
-  features: {title: string; description: string}[];
-};
-
-export async function loadPremium(): Promise<PremiumInfo> {
-  const {managers} = await bootTelegram();
-  const self: any = await managers.appUsersManager.getSelf();
-
-  let features: PremiumInfo['features'] = [];
-  try {
-    const promo: any = await managers.appPaymentsManager.getPremiumPromo();
-    const descriptions: string[] = promo?.video_sections ?? [];
-    const texts: string[] = (promo?.status_text ?? '').split('\n').filter(Boolean);
-    features = descriptions.map((section: string, index: number) => ({
-      title: humanizeSection(section),
-      description: texts[index] ?? ''
-    }));
-  } catch(err) {
-    // The promo is optional; the status below is the part that matters.
-  }
-
-  if(!features.length) {
-    features = [
-      {title: 'Doubled limits', description: 'More channels, folders, pinned chats and saved GIFs.'},
-      {title: 'Larger uploads', description: 'Send files up to 4 GB.'},
-      {title: 'Faster downloads', description: 'No speed limits on media.'},
-      {title: 'Voice-to-text', description: 'Transcribe voice messages.'},
-      {title: 'Unique reactions and stickers', description: 'Premium-only packs and effects.'},
-      {title: 'No ads', description: 'Sponsored messages are hidden.'}
-    ];
-  }
-
-  return {active: !!self?.pFlags?.premium, features};
-}
-
-function humanizeSection(section: string): string {
-  return section
-    .replace(/_/g, ' ')
-    .replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-/* ------------------------------------------------------------------ */
-/* Stars                                                               */
-/* ------------------------------------------------------------------ */
-
-export type StarsInfo = {
-  balance: number;
-  transactions: {
-    id: string;
-    amount: number;
-    date: number;
-    title: string;
-    incoming: boolean;
-  }[];
-};
-
-export async function loadStars(): Promise<StarsInfo> {
-  const {managers} = await bootTelegram();
-
-  const status: any = await managers.appPaymentsManager.getStarsStatus();
-  const balance = Number(status?.balance?.amount ?? status?.balance ?? 0);
-
-  const transactions = (status?.history ?? []).slice(0, 40).map((entry: any) => {
-    const amount = Number(entry?.stars?.amount ?? entry?.stars ?? 0);
-    return {
-      id: String(entry.id ?? `${entry.date}`),
-      amount: Math.abs(amount),
-      date: entry.date ?? 0,
-      title: entry.title || entry.description || (amount >= 0 ? 'Top-up' : 'Purchase'),
-      incoming: amount >= 0
-    };
-  });
-
-  return {balance, transactions};
-}
-
-export async function loadStarsTopupOptions(): Promise<{stars: number; currency: string; amount: number}[]> {
-  const {managers} = await bootTelegram();
-  try {
-    const options: any = await managers.appPaymentsManager.getStarsTopupOptions();
-    return (options ?? []).map((option: any) => ({
-      stars: Number(option.stars ?? 0),
-      currency: option.currency ?? '',
-      amount: Number(option.amount ?? 0)
-    }));
-  } catch(err) {
-    return [];
-  }
-}
 
 /* ------------------------------------------------------------------ */
 /* Stories                                                             */

@@ -1,5 +1,6 @@
 <script lang="ts">
   import Avatar from './Avatar.svelte';
+  import BoostPanel from './BoostPanel.svelte';
   import {
     checkChatUsername,
     loadChatInfo,
@@ -26,6 +27,7 @@
 
   let info = $state<ChatInfo | null>(null);
   let error = $state('');
+  let boosting = $state(false);
 
   let editingLink = $state(false);
   let link = $state('');
@@ -132,6 +134,10 @@
             {info.isChannel || info.isGroup ? 'Open chat' : 'Send message'}
           </button>
         {/if}
+
+        {#if info.isChannel}
+          <button onclick={() => (boosting = true)}>Boosts</button>
+        {/if}
       </div>
 
       {#if info.canSetUsername}
@@ -197,6 +203,15 @@
     {/if}
   </div>
 </aside>
+
+{#if boosting && info}
+  <BoostPanel
+    peerId={info.peerId}
+    title={info.title}
+    canCreateGiveaway={info.isChannel}
+    onclose={() => (boosting = false)}
+  />
+{/if}
 
 <style>
   .info {

@@ -36,7 +36,8 @@
     type Density,
     type ThemeMode
   } from '$lib/telegram/theme';
-  import {loadPremium, loadStars, type PremiumInfo, type StarsInfo} from '$lib/telegram/extras';
+  import PremiumPanel from './PremiumPanel.svelte';
+  import StarsPanel from './StarsPanel.svelte';
 
   let {onclose, onminiapp}: {onclose: () => void; onminiapp: (botId: number) => void} = $props();
 
@@ -72,8 +73,6 @@
   let introTitle = $state('');
   let introDescription = $state('');
   let bots = $state<AttachBot[]>([]);
-  let premium = $state<PremiumInfo | null>(null);
-  let stars = $state<StarsInfo | null>(null);
 
   $effect(() => {
     const current = section;
@@ -81,7 +80,8 @@
 
     (async () => {
       try {
-        if(current === 'profile' && !profile) {
+        // The Stars panel needs our own id to list the gifts on this profile.
+        if((current === 'profile' || current === 'stars') && !profile) {
           profile = await loadProfile();
           firstName = profile.firstName;
           lastName = profile.lastName;
@@ -97,10 +97,6 @@
           introDescription = business.introDescription;
         } else if(current === 'bots' && !bots.length) {
           bots = await loadAttachBots();
-        } else if(current === 'premium' && !premium) {
-          premium = await loadPremium();
-        } else if(current === 'stars' && !stars) {
-          stars = await loadStars();
         }
       } catch(err: any) {
         error = err?.type || err?.message || 'Failed to load';
@@ -319,45 +315,13 @@
       {/if}
 
     {:else if section === 'premium'}
-      {#if !premium}
-        <p class="muted">Loading…</p>
-      {:else}
-        <p class="status-line">
-          {premium.active ? '★ Premium is active on this account' : 'Premium is not active'}
-        </p>
-        <p class="label">What Premium includes</p>
-        {#each premium.features as feature}
-          <div class="feature">
-            <span class="feature-title">{feature.title}</span>
-            {#if feature.description}
-              <span class="muted small">{feature.description}</span>
-            {/if}
-          </div>
-        {/each}
-        <p class="muted small">
-          Subscribing is not wired up — payments need the full invoice flow.
-        </p>
-      {/if}
+      <PremiumPanel />
 
     {:else if section === 'stars'}
-      {#if !stars}
-        <p class="muted">Loading…</p>
+      {#if profile}
+        <StarsPanel selfId={profile.userId} />
       {:else}
-        <p class="balance">★ {stars.balance.toLocaleString()}</p>
-        <p class="label">Recent transactions</p>
-        {#if !stars.transactions.length}
-          <p class="muted small">No transactions yet.</p>
-        {:else}
-          {#each stars.transactions as transaction (transaction.id)}
-            <div class="transaction">
-              <span>{transaction.title}</span>
-              <span class:incoming={transaction.incoming} class="amount">
-                {transaction.incoming ? '+' : '−'}{transaction.amount}
-              </span>
-              <span class="muted small">{dateOf(transaction.date)}</span>
-            </div>
-          {/each}
-        {/if}
+        <p class="muted">Loading…</p>
       {/if}
 
     {:else if section === 'business'}
@@ -612,48 +576,6 @@
     padding: 6px 10px;
     font-size: 12px;
     justify-self: start;
-  }
-
-  .status-line {
-    margin: 0;
-    font-size: 14px;
-  }
-
-  .feature {
-    display: grid;
-    gap: 2px;
-    padding: 8px 0;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .feature-title {
-    font-size: 14px;
-    font-weight: 500;
-  }
-
-  .balance {
-    margin: 0;
-    font-size: 30px;
-    font-weight: 700;
-    color: var(--accent);
-  }
-
-  .transaction {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    gap: 2px 10px;
-    padding: 8px 0;
-    border-bottom: 1px solid var(--border);
-    font-size: 13px;
-  }
-
-  .amount {
-    font-weight: 600;
-    color: var(--danger);
-  }
-
-  .amount.incoming {
-    color: #3aa657;
   }
 
   .muted {
