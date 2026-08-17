@@ -4,6 +4,7 @@
   import Lightbox from './Lightbox.svelte';
   import PeerPicker from './PeerPicker.svelte';
   import ChatAdmin from './ChatAdmin.svelte';
+  import BoostPanel from './BoostPanel.svelte';
   import {loadAdminAccess} from '$lib/telegram/admin';
   import {
     checkChatUsername,
@@ -96,6 +97,7 @@
 
   let info = $state<ProfileInfo | null>(null);
   let error = $state('');
+  let boosting = $state(false);
 
   let tab = $state<TabId>('media');
   let shared = $state<Record<SharedTab, SharedState>>(emptyShared());
@@ -607,6 +609,10 @@
         {#if canManage}
           <button class="link-btn" onclick={() => (managing = true)}>Manage</button>
         {/if}
+
+        {#if info.isChannel}
+          <button class="link-btn" onclick={() => (boosting = true)}>Boosts</button>
+        {/if}
       </div>
 
       {#if notice}<p class="notice">{notice}</p>{/if}
@@ -966,6 +972,15 @@
     }}
     onmigrated={(newPeerId) => (onmigrated ?? onpeer)?.(newPeerId)}
     {onpeer}
+  />
+{/if}
+
+{#if boosting && info}
+  <BoostPanel
+    peerId={info.peerId}
+    title={info.title}
+    canCreateGiveaway={info.isChannel}
+    onclose={() => (boosting = false)}
   />
 {/if}
 

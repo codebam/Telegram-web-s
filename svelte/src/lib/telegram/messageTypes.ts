@@ -798,26 +798,6 @@ export async function playGame(peerId: number, mid: number): Promise<string> {
 }
 
 /* ------------------------------------------------------------------ */
-/* Invoices                                                            */
-/* ------------------------------------------------------------------ */
-
-/**
- * Hands an invoice off to its provider's checkout page.
- *
- * Web S has no checkout of its own: there is no card form, no saved
- * credentials, and no Stars balance UI. What it can do honestly is fetch the
- * payment form and open the provider URL the API returns. Forms that have no
- * URL — Stars invoices, and anything that needs the native flow — cannot be
- * paid here, and say so rather than pretending to start.
- */
-export async function invoiceCheckoutUrl(peerId: number, mid: number): Promise<string> {
-  const {managers} = await bootTelegram();
-  const invoice = await managers.appPaymentsManager.getInputInvoiceByPeerId(peerId, mid);
-  const form: any = await managers.appPaymentsManager.getPaymentForm(invoice);
-  return form?.url ?? '';
-}
-
-/* ------------------------------------------------------------------ */
 /* Checklists                                                          */
 /* ------------------------------------------------------------------ */
 

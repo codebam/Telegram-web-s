@@ -17,9 +17,11 @@
   import FormatBar from './FormatBar.svelte';
   import FormattedText from './FormattedText.svelte';
   import InlinePreview from './InlinePreview.svelte';
+  import BoostPanel from './BoostPanel.svelte';
   import Lightbox from './Lightbox.svelte';
   import AudioPlayerBar from './AudioPlayerBar.svelte';
   import Media from './Media.svelte';
+  import MessagePayment from './MessagePayment.svelte';
   import CallScreen from './CallScreen.svelte';
   import MiniApp from './MiniApp.svelte';
   import AccountSwitcher from './AccountSwitcher.svelte';
@@ -304,6 +306,8 @@
   let topicListOpen = $derived(activeIsForum && activePeerId !== null && !forumAsMessages);
   let savedListOpen = $derived(activeIsSelf && activePeerId !== null && savedAsChats);
   let sublistOpen = $derived(topicListOpen || savedListOpen);
+  /** Peer whose boost page is open, null when closed. */
+  let boostPeerId = $state<number | null>(null);
   /** Names of the people who have read a message, fetched on demand. */
   let readByFor = $state<{mid: number; names: string[]} | null>(null);
   /** Open reaction picker, anchored where it was summoned from. */
@@ -4221,14 +4225,6 @@
                       checklist={message.extra}
                       onerror={(text) => (error = text)}
                     />
-                  {:else if message.extra.kind === 'paidMedia'}
-                    <!-- Paid media stays locked here: unlocking it is a Stars
-                         purchase, and this client has no checkout. -->
-                    <span class="paid-media">
-                      🔒 {message.extra.count} paid item{message.extra.count === 1 ? '' : 's'} ·
-                      {message.extra.stars} ⭐
-                      {message.extra.unlocked ? '' : '— unlock in an official Telegram app'}
-                    </span>
                   {/if}
                 {/if}
 
@@ -4302,6 +4298,17 @@
                       >View results</button>
                     {/if}
                   </div>
+                {/if}
+
+                <!-- Invoices render through InvoiceBubble above, which carries the
+                     cover photo; everything else that costs money lands here. -->
+                {#if message.payment && message.payment.kind !== 'invoice' && activePeerId !== null}
+                  <MessagePayment
+                    peerId={activePeerId}
+                    mid={message.mid}
+                    payment={message.payment}
+                    onboost={() => (boostPeerId = activePeerId)}
+                  />
                 {/if}
 
                 {#if message.buttons.length}
@@ -4957,6 +4964,15 @@
     dialogs={allDialogs}
     onclose={() => (newChatOpen = false)}
     oncreated={onChatCreated}
+  />
+{/if}
+
+{#if boostPeerId !== null}
+  <BoostPanel
+    peerId={boostPeerId}
+    title={activeTitle}
+    canCreateGiveaway={activeIsChannel}
+    onclose={() => (boostPeerId = null)}
   />
 {/if}
 
@@ -6258,12 +6274,6 @@
     color: var(--accent);
     font-size: 12px;
     cursor: pointer;
-  }
-
-  .paid-media {
-    display: block;
-    font-size: 13px;
-    color: var(--text-dim);
   }
 
   .service-card {
