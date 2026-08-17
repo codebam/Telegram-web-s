@@ -4,6 +4,15 @@
   import Avatar from './Avatar.svelte';
   import Glyph from './Glyph.svelte';
   import ChatInfo from './ChatInfo.svelte';
+  import ChecklistBubble from './ChecklistBubble.svelte';
+  import ContactBubble from './ContactBubble.svelte';
+  import GameBubble from './GameBubble.svelte';
+  import GiftBubble from './GiftBubble.svelte';
+  import InvoiceBubble from './InvoiceBubble.svelte';
+  import LocationBubble from './LocationBubble.svelte';
+  import LocationSender from './LocationSender.svelte';
+  import PollComposer from './PollComposer.svelte';
+  import PollResults from './PollResults.svelte';
   import FolderEditor from './FolderEditor.svelte';
   import FormattedText from './FormattedText.svelte';
   import InlinePreview from './InlinePreview.svelte';
@@ -77,9 +86,11 @@
     type FolderItem,
     type MessageButton,
     type MessageItem,
+    type PollPreview,
     type SponsoredItem,
     type TopicItem
   } from '$lib/telegram/chats';
+  import {sendContact} from '$lib/telegram/messageTypes';
   import {
     getBotMenuButton,
     openBotAppLink,
@@ -961,6 +972,34 @@
   }
 
   /* ---------- attachments ---------- */
+
+  let attachMenu = $state(false);
+  let locationSender = $state(false);
+  let pollComposer = $state(false);
+  /** Picking someone to share as a contact card, rather than to forward to. */
+  let contactPicking = $state(false);
+  let pollResults = $state<{mid: number; poll: PollPreview} | null>(null);
+
+  async function openContactPicker() {
+    attachMenu = false;
+    if (activePeerId === null) return;
+    allDialogs = await loadDialogs(100, 0);
+    contactPicking = true;
+  }
+
+  async function shareContact(contactPeerId: number) {
+    contactPicking = false;
+    if (activePeerId === null) return;
+
+    const replyToMsgId = replyTo?.mid;
+    replyTo = null;
+
+    try {
+      await sendContact(activePeerId, contactPeerId, {threadId: activeThreadId, replyToMsgId});
+    } catch (err: any) {
+      error = errorOf(err, 'Could not share the contact');
+    }
+  }
 
   /** Queue files for confirmation rather than sending them blind. */
   function attach(files: FileList | File[] | null) {
@@ -2018,7 +2057,13 @@
             {#if message.mid === firstUnreadMid}
               <p class="unread-divider" data-mid={message.mid}>Unread messages</p>
             {/if}
-            {#if message.service}
+            {#if message.service && message.extra?.kind === 'gift'}
+              <!-- A gift arrives as a service message, but it is a card: the
+                   sticker, who sent it and what it is worth. -->
+              <div class="service-card" data-mid={message.mid}>
+                <GiftBubble gift={message.extra} fromTitle={message.fromTitle} />
+              </div>
+            {:else if message.service}
               <p
                 class="service"
                 class:highlighted={highlightedMid === message.mid}
@@ -2154,6 +2199,52 @@
                   {/if}
                 {/if}
 
+                {#if message.extra && activePeerId !== null}
+                  {#if message.extra.kind === 'geo' || message.extra.kind === 'geoLive' || message.extra.kind === 'venue'}
+                    <LocationBubble
+                      peerId={activePeerId}
+                      mid={message.mid}
+                      location={message.extra}
+                      onerror={(text) => (error = text)}
+                    />
+                  {:else if message.extra.kind === 'contact'}
+                    <ContactBubble
+                      contact={message.extra}
+                      onmessage={openPeerChat}
+                      onerror={(text) => (error = text)}
+                    />
+                  {:else if message.extra.kind === 'game'}
+                    <GameBubble
+                      peerId={activePeerId}
+                      mid={message.mid}
+                      game={message.extra}
+                      onerror={(text) => (error = text)}
+                    />
+                  {:else if message.extra.kind === 'invoice'}
+                    <InvoiceBubble
+                      peerId={activePeerId}
+                      mid={message.mid}
+                      invoice={message.extra}
+                      onerror={(text) => (error = text)}
+                    />
+                  {:else if message.extra.kind === 'checklist'}
+                    <ChecklistBubble
+                      peerId={activePeerId}
+                      mid={message.mid}
+                      checklist={message.extra}
+                      onerror={(text) => (error = text)}
+                    />
+                  {:else if message.extra.kind === 'paidMedia'}
+                    <!-- Paid media stays locked here: unlocking it is a Stars
+                         purchase, and this client has no checkout. -->
+                    <span class="paid-media">
+                      🔒 {message.extra.count} paid item{message.extra.count === 1 ? '' : 's'} ·
+                      {message.extra.stars} ⭐
+                      {message.extra.unlocked ? '' : '— unlock in an official Telegram app'}
+                    </span>
+                  {/if}
+                {/if}
+
                 {#if message.rich}
                   <RichMessage blocks={message.rich} onmention={openMention} />
                 {:else if message.parts.length}
@@ -2200,6 +2291,12 @@
                     <span class="poll-total">
                       {message.poll.totalVoters} voters{message.poll.closed ? ' · closed' : ''}
                     </span>
+                    {#if message.poll.totalVoters}
+                      <button
+                        class="poll-results-btn"
+                        onclick={() => (pollResults = {mid: message.mid, poll: message.poll!})}
+                      >View results</button>
+                    {/if}
                   </div>
                 {/if}
 
@@ -2391,13 +2488,23 @@
           aria-label="Emoji, stickers and GIFs"
           disabled={!!editing}
         ><Glyph name="emoji" size={20} /></button>
-        <button
-          type="button"
-          class="attach"
-          onclick={() => fileInput?.click()}
-          aria-label="Attach file"
-          disabled={!!editing}
-        ><Glyph name="attach" size={20} /></button>
+        <div class="attach-wrap">
+          <button
+            type="button"
+            class="attach"
+            onclick={() => (attachMenu = !attachMenu)}
+            aria-label="Attach"
+            disabled={!!editing}
+          ><Glyph name="attach" size={20} /></button>
+          {#if attachMenu}
+            <div class="attach-menu">
+              <button type="button" onclick={() => { attachMenu = false; fileInput?.click(); }}>File</button>
+              <button type="button" onclick={() => { attachMenu = false; locationSender = true; }}>Location</button>
+              <button type="button" onclick={openContactPicker}>Contact</button>
+              <button type="button" onclick={() => { attachMenu = false; pollComposer = true; }}>Poll</button>
+            </div>
+          {/if}
+        </div>
         <input
           class="file"
           type="file"
@@ -2535,6 +2642,45 @@
     dialogs={allDialogs}
     onpick={doForward}
     onclose={() => (forwarding = null)}
+  />
+{/if}
+
+{#if contactPicking}
+  <PeerPicker
+    title="Share a contact"
+    dialogs={allDialogs.filter((dialog) => dialog.isUser)}
+    onpick={shareContact}
+    onclose={() => (contactPicking = false)}
+  />
+{/if}
+
+{#if locationSender && activePeerId !== null}
+  <LocationSender
+    peerId={activePeerId}
+    threadId={activeThreadId}
+    replyToMsgId={replyTo?.mid}
+    onclose={() => { locationSender = false; replyTo = null; }}
+    onerror={(text) => (error = text)}
+  />
+{/if}
+
+{#if pollComposer && activePeerId !== null}
+  <PollComposer
+    peerId={activePeerId}
+    threadId={activeThreadId}
+    replyToMsgId={replyTo?.mid}
+    onclose={() => { pollComposer = false; replyTo = null; }}
+    onerror={(text) => (error = text)}
+  />
+{/if}
+
+{#if pollResults && activePeerId !== null}
+  <PollResults
+    peerId={activePeerId}
+    mid={pollResults.mid}
+    poll={pollResults.poll}
+    onclose={() => (pollResults = null)}
+    onpeer={(id) => { pollResults = null; profilePeerId = id; }}
   />
 {/if}
 
@@ -3598,6 +3744,63 @@
   .poll-total {
     font-size: 11px;
     opacity: 0.7;
+  }
+
+  .poll-results-btn {
+    align-self: flex-start;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--accent);
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .paid-media {
+    display: block;
+    font-size: 13px;
+    color: var(--text-dim);
+  }
+
+  .service-card {
+    align-self: center;
+    display: flex;
+    justify-content: center;
+    margin: 4px 0;
+  }
+
+  .attach-wrap {
+    position: relative;
+    display: flex;
+  }
+
+  .attach-menu {
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 0;
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    min-width: 140px;
+    padding: 6px;
+    border-radius: var(--pane-radius);
+    border: 1px solid var(--border);
+    background: var(--bg-solid);
+  }
+
+  .attach-menu button {
+    padding: 8px 10px;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text);
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .attach-menu button:hover {
+    background: var(--bubble-in);
   }
 
   .pinned-bar {

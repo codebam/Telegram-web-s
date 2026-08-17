@@ -1,4 +1,5 @@
 import {bootTelegram} from './client';
+import {extraOf, type MessageExtra} from './messageTypes';
 import {peerRestrictionText, restrictionTextOf} from './restrictions';
 
 /**
@@ -132,6 +133,11 @@ export type MessageItem = {
   forwardedFrom: string;
   webpage: WebPagePreview | null;
   poll: PollPreview | null;
+  /**
+   * Location, venue, contact, game, invoice, checklist or gift body — the
+   * message types `media` cannot describe. Null for everything else.
+   */
+  extra: MessageExtra | null;
   /**
    * Structured body for messages that carry one. Newer messages can arrive as
    * `rich_message` blocks — headings, tables, lists — with `message` empty.
@@ -690,6 +696,7 @@ async function toItem(message: any, peerId: number, selfId: number): Promise<Mes
     forwardedFrom: await forwardedTitle(message, selfId),
     webpage: webpageOf(message),
     poll: pollOf(message),
+    extra: extraOf(message, peerId, selfId),
     rich: richBlocksOf(message),
     buttons: buttonsOf(message),
     restrictionText: await restrictionTextOf(message.restriction_reason)
@@ -1501,7 +1508,7 @@ function stickerKind(doc: any): StickerItem['kind'] {
   return 'static';
 }
 
-function toSticker(doc: any): StickerItem {
+export function toSticker(doc: any): StickerItem {
   rawDocs.set('' + doc.id, doc);
   const size = (doc.attributes ?? []).find((a: any) => a._ === 'documentAttributeImageSize' || a._ === 'documentAttributeVideo');
   const sticker = (doc.attributes ?? []).find((a: any) => a._ === 'documentAttributeSticker');
