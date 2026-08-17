@@ -17,18 +17,15 @@
   import Settings from './Settings.svelte';
   import Stories from './Stories.svelte';
   import Picker from './Picker.svelte';
-  import ReactionBar from './ReactionBar.svelte';
-  import ReactionPicker from './ReactionPicker.svelte';
-  import StarReactionSheet from './StarReactionSheet.svelte';
   import RichMessage from './RichMessage.svelte';
   import Sticker from './Sticker.svelte';
+  import StickerSetSheet from './StickerSetSheet.svelte';
+  import StickerSuggest from './StickerSuggest.svelte';
+  import GifSaveAction from './GifSaveAction.svelte';
+  import {parseStickerSetLink} from '$lib/telegram/stickers';
   import {GIT_COMMIT, GIT_COMMIT_SHORT, GIT_COMMIT_URL} from '$lib/buildInfo';
   import {
-    sendQuickReaction,
-    sendReaction as sendMessageReaction,
-    type ReactionOption
-  } from '$lib/telegram/reactions';
-  import {
+    availableReactions,
     clickSponsored,
     deleteMessage,
     deleteMessages,
@@ -60,6 +57,7 @@
     onReadStateChange,
     readMediaContents,
     readParticipants,
+    reactionParticipants,
     onTyping,
     onUserUpdate,
     openDiscussion,
@@ -76,6 +74,7 @@
     sendTyping,
     toggleMute,
     togglePin,
+    toggleReaction,
     viewSponsored,
     votePoll,
     type DialogItem,
@@ -108,21 +107,6 @@
     startCall,
     type BusinessBot
   } from '$lib/telegram/extras';
-  import EffectOverlay from './EffectOverlay.svelte';
-  import EffectPicker from './EffectPicker.svelte';
-  import ScheduledMessages from './ScheduledMessages.svelte';
-  import SendAsPicker from './SendAsPicker.svelte';
-  import SendOptionsSheet from './SendOptionsSheet.svelte';
-  import {
-    countScheduled,
-    getCurrentSendAs,
-    getSlowMode,
-    isSilentByDefault,
-    onChatFullUpdate,
-    onScheduledUpdate,
-    sendMessageWithOptions,
-    type SlowMode
-  } from '$lib/telegram/sendOptions';
 
   let dialogs = $state<DialogItem[]>([]);
   let topics = $state<TopicItem[]>([]);
@@ -150,20 +134,13 @@
   let activeIsChannel = $state(false);
   /** Names of the people who have read a message, fetched on demand. */
   let readByFor = $state<{mid: number; names: string[]} | null>(null);
-  /** Open reaction picker, anchored where it was summoned from. */
-  let reactionPickerFor = $state<{mid: number; x: number; y: number} | null>(null);
-  /** Message whose paid (star) reaction sheet is open. */
-  let starReactionFor = $state<number | null>(null);
-  /**
-   * Bumped per message whenever a reaction is sent from here, so that bubble's
-   * bar re-reads its counters even when the server update lands later. Keyed by
-   * mid so one reaction does not make every bubble re-read.
-   */
-  let reactionRevisions = $state<Record<number, number>>({});
-
-  function bumpReaction(mid: number) {
-    reactionRevisions = {...reactionRevisions, [mid]: (reactionRevisions[mid] ?? 0) + 1};
-  }
+  let reactionMenu = $state<{mid: number; emoticon: string; x: number; y: number} | null>(null);
+  let reactionParticipantsFor = $state<{
+    mid: number;
+    emoticon: string;
+    names: string[];
+    loading: boolean;
+  } | null>(null);
 
   let loadingChats = $state(true);
   let loadingHistory = $state(false);
@@ -205,6 +182,10 @@
   /** Profile being viewed from a message sender or member list, if any. */
   let profilePeerId = $state<number | null>(null);
   let showPicker = $state(false);
+  /** Sticker-pack preview, opened from an addstickers link or "View pack". */
+  let packSheet = $state<{setKey: string; docId: string} | null>(null);
+  let reactionPalette = $state<string[]>([]);
+  let reactingTo = $state<number | null>(null);
   let lightboxIndex = $state<number | null>(null);
   let highlightedMid = $state<number | null>(null);
   let pinnedMessage = $state<MessageItem | null>(null);
@@ -360,7 +341,11 @@
 
     (async () => {
       try {
-        [dialogs, folders] = await Promise.all([loadDialogs(), loadFolders()]);
+        [dialogs, folders, reactionPalette] = await Promise.all([
+          loadDialogs(),
+          loadFolders(),
+          availableReactions()
+        ]);
       } catch (err: any) {
         error = errorOf(err, 'Failed to load chats');
       } finally {
@@ -574,34 +559,38 @@
     }
   }
 
-  function openReactionPicker(event: MouseEvent, mid: number) {
-    event.preventDefault();
-    event.stopPropagation();
-    reactionPickerFor = {mid, x: event.clientX, y: event.clientY};
-  }
-
-  async function pickReaction(option: ReactionOption) {
-    const picker = reactionPickerFor;
-    reactionPickerFor = null;
-    if (!picker || activePeerId === null) return;
-
+  async function react(message: MessageItem, emoticon: string) {
+    if (activePeerId === null) return;
+    reactingTo = null;
     try {
-      await sendMessageReaction(activePeerId, picker.mid, option);
-      bumpReaction(picker.mid);
+      await toggleReaction(activePeerId, message.mid, emoticon);
+      const updated = await getMessage(activePeerId, message.mid);
+      if (updated) messages = messages.map((m) => (m.mid === message.mid ? updated : m));
     } catch (err: any) {
       error = errorOf(err, 'Reaction failed');
     }
   }
 
-  /** Double-click a bubble to send the configured quick reaction. */
-  async function quickReact(message: MessageItem) {
-    if (activePeerId === null || message.service || selecting) return;
+  function openReactionMenu(event: MouseEvent, message: MessageItem, emoticon: string) {
+    event.preventDefault();
+    event.stopPropagation();
+    reactionMenu = {mid: message.mid, emoticon, x: event.clientX, y: event.clientY};
+  }
 
-    try {
-      await sendQuickReaction(activePeerId, message.mid);
-      bumpReaction(message.mid);
-    } catch (err: any) {
-      error = errorOf(err, 'Reaction failed');
+  async function showReactionParticipants() {
+    const menu = reactionMenu;
+    reactionMenu = null;
+    if (!menu || activePeerId === null) return;
+
+    reactionParticipantsFor = {mid: menu.mid, emoticon: menu.emoticon, names: [], loading: true};
+    const participants = await reactionParticipants(activePeerId, menu.mid, menu.emoticon);
+    if (reactionParticipantsFor?.mid === menu.mid && reactionParticipantsFor.emoticon === menu.emoticon) {
+      reactionParticipantsFor = {
+        mid: menu.mid,
+        emoticon: menu.emoticon,
+        names: participants.map((participant) => participant.title),
+        loading: false
+      };
     }
   }
 
@@ -1144,6 +1133,13 @@
    * ordinary link.
    */
   function openLink(url: string): boolean {
+    // A t.me/addstickers link opens the pack in place instead of the browser.
+    const stickerSet = parseStickerSetLink(url);
+    if (stickerSet) {
+      packSheet = {setKey: stickerSet, docId: ''};
+      return true;
+    }
+
     const link = parseMiniAppLink(url);
     if (!link) return false;
 
@@ -1372,10 +1368,10 @@
       return;
     }
 
-    if (messageMenu) messageMenu = null;
+    if (packSheet) packSheet = null;
+    else if (messageMenu) messageMenu = null;
     else if (menuFor) menuFor = null;
-    else if (starReactionFor !== null) starReactionFor = null;
-    else if (reactionPickerFor) reactionPickerFor = null;
+    else if (reactingTo !== null) reactingTo = null;
     else if (readByFor) readByFor = null;
     else if (selecting) {
       selecting = false;
@@ -1722,173 +1718,10 @@
     maybeLoadOlder();
   }
 
-  /* ---------- send options: schedule, silent, effects, slow mode, send-as ---------- */
-
-  let sendOptionsOpen = $state(false);
-  let scheduledOpen = $state(false);
-  let effectPickerOpen = $state(false);
-  let sendAsPickerOpen = $state(false);
-
-  /** Effect armed for the next message, '' for none. */
-  let sendEffect = $state('');
-  /** Emoticon of the armed effect, for the button label. */
-  let sendEffectEmoticon = $state('');
-  /** Per-chat "send without sound" preference. */
-  let silentDefault = $state(false);
-  /** Identity we post as here, null when posting as ourselves. */
-  let sendAsPeerId = $state<number | null>(null);
-  let slowMode = $state<SlowMode | null>(null);
-  let scheduledCount = $state(0);
-  /** Ticks once a second, but only while a slow-mode cooldown is running. */
-  let nowSeconds = $state(Math.floor(Date.now() / 1000));
-  /** Long-press timer on the send button, for touch devices. */
-  let sendHoldTimer: ReturnType<typeof setTimeout> | undefined;
-  /** Set when a long press opened the sheet, so the release does not also send. */
-  let sendHeld = false;
-
-  const slowModeLeft = $derived(
-    slowMode?.nextSendDate ? Math.max(0, slowMode.nextSendDate - nowSeconds) : 0
-  );
-
-  function slowModeLabel(seconds: number) {
-    const minutes = Math.floor(seconds / 60);
-    return minutes ? `${minutes}:${`${seconds % 60}`.padStart(2, '0')}` : `${seconds}`;
-  }
-
-  /**
-   * Refresh slow mode and send-as from **cached** full-chat state only. Both
-   * readers are cache-only by design, so this never adds a request to the
-   * chat-open path; the real values land later through `chat_full_update`.
-   */
-  function refreshChatSendState(peer: number) {
-    getSlowMode(peer)
-    .then((state) => {
-      if (peer === activePeerId) slowMode = state;
-    })
-    .catch(() => {});
-
-    getCurrentSendAs(peer)
-    .then((id) => {
-      if (peer === activePeerId) sendAsPeerId = id;
-    })
-    .catch(() => {});
-  }
-
-  function refreshScheduledCount(peer: number) {
-    countScheduled(peer)
-    .then((count) => {
-      if (peer === activePeerId) scheduledCount = count;
-    })
-    .catch(() => {});
-  }
-
-  $effect(() => {
-    const peer = activePeerId;
-
-    sendOptionsOpen = false;
-    scheduledOpen = false;
-    effectPickerOpen = false;
-    sendAsPickerOpen = false;
-    sendEffect = '';
-    sendEffectEmoticon = '';
-    slowMode = null;
-    sendAsPeerId = null;
-    scheduledCount = 0;
-
-    if (peer === null) {
-      silentDefault = false;
-      return;
-    }
-
-    silentDefault = isSilentByDefault(peer);
-    refreshChatSendState(peer);
-    refreshScheduledCount(peer);
-  });
-
-  $effect(() => {
-    let unsubscribe: (() => void) | undefined;
-    let cancelled = false;
-
-    onChatFullUpdate((peer) => {
-      if (!cancelled && peer === activePeerId) refreshChatSendState(peer);
-    }).then((off) => {
-      if (cancelled) off();
-      else unsubscribe = off;
-    });
-
-    return () => {
-      cancelled = true;
-      unsubscribe?.();
-    };
-  });
-
-  $effect(() => {
-    let unsubscribe: (() => void) | undefined;
-    let cancelled = false;
-
-    onScheduledUpdate((peer) => {
-      if (!cancelled && peer === activePeerId) refreshScheduledCount(peer);
-    }).then((off) => {
-      if (cancelled) off();
-      else unsubscribe = off;
-    });
-
-    return () => {
-      cancelled = true;
-      unsubscribe?.();
-    };
-  });
-
-  // Only run a clock while there is a cooldown to count down.
-  $effect(() => {
-    if (!slowMode?.nextSendDate) return;
-    nowSeconds = Math.floor(Date.now() / 1000);
-    const timer = setInterval(() => (nowSeconds = Math.floor(Date.now() / 1000)), 1000);
-    return () => clearInterval(timer);
-  });
-
-  /** Right-click / long-press on the send button opens the options sheet. */
-  function openSendOptions(e: Event) {
-    e.preventDefault();
-    if (activePeerId === null || editing) return;
-    sendOptionsOpen = true;
-  }
-
-  function onSendPointerDown() {
-    if (activePeerId === null || editing) return;
-    clearTimeout(sendHoldTimer);
-    sendHeld = false;
-    sendHoldTimer = setTimeout(() => {
-      sendHeld = true;
-      sendOptionsOpen = true;
-    }, 450);
-  }
-
-  function cancelSendHold() {
-    clearTimeout(sendHoldTimer);
-  }
-
-  function pickEffect(effectId: string, emoticon: string) {
-    sendEffect = effectId;
-    sendEffectEmoticon = emoticon;
-    effectPickerOpen = false;
-  }
-
   async function submit(e: Event) {
     e.preventDefault();
-    // The release of a long press must not send as well as open the sheet.
-    if (sendHeld) {
-      sendHeld = false;
-      return;
-    }
-    await deliver();
-  }
-
-  async function deliver(options: {scheduleDate?: number; silent?: boolean} = {}) {
     const text = draft.trim();
     if (!text || activePeerId === null) return;
-    // Slow mode blocks sending now, but never blocks scheduling for later.
-    if (!editing && !options.scheduleDate && slowModeLeft > 0) return;
 
     // The debounced draft save is still pending with the text being sent; let
     // it fire and it writes the message back as a draft right after sendText
@@ -1910,39 +1743,15 @@
     }
 
     const replyToMsgId = replyTo?.mid;
-    const peer = activePeerId;
-    const scheduleDate = options.scheduleDate;
-    const effect = sendEffect;
     draft = '';
     replyTo = null;
-    sendEffect = '';
-    sendEffectEmoticon = '';
 
     try {
-      await sendMessageWithOptions(peer, text, {
-        replyToMsgId,
-        threadId: activeThreadId,
-        scheduleDate,
-        silent: options.silent ?? silentDefault,
-        effect: effect || undefined,
-        sendAsPeerId: sendAsPeerId ?? undefined
-      });
+      await sendMessage(activePeerId, text, {replyToMsgId, threadId: activeThreadId});
       lastTypingSent = 0;
-      sendTyping(peer, activeThreadId, 'cancel').catch(() => {});
-
-      if (scheduleDate) {
-        // A scheduled message never joins the timeline — it joins the queue.
-        refreshScheduledCount(peer);
-      } else {
-        // Start the next cooldown immediately; the server-side value arrives
-        // with the next chat_full_update and overwrites this.
-        if (slowMode?.seconds) {
-          nowSeconds = Math.floor(Date.now() / 1000);
-          slowMode = {...slowMode, nextSendDate: nowSeconds + slowMode.seconds};
-        }
-        // The outgoing message arrives back through history_multiappend.
-        await scrollToBottom();
-      }
+      sendTyping(activePeerId, activeThreadId, 'cancel').catch(() => {});
+      // The outgoing message arrives back through history_multiappend.
+      await scrollToBottom();
     } catch (err: any) {
       error = errorOf(err, 'Failed to send');
     }
@@ -2315,7 +2124,6 @@
                   messageMenu = {mid: message.mid, x: e.clientX, y: e.clientY};
                 }}
                 onclick={() => selecting && toggleSelected(message.mid)}
-                ondblclick={() => quickReact(message)}
                 role="presentation"
               >
                 {#if !message.out && message.fromTitle}
@@ -2430,16 +2238,26 @@
                   </div>
                 {/if}
 
-                {#if !message.service && activePeerId !== null}
-                  <ReactionBar
-                    peerId={activePeerId}
-                    mid={message.mid}
-                    count={message.reactions.length}
-                    revision={reactionRevisions[message.mid] ?? 0}
-                    onopenpicker={(event) => openReactionPicker(event, message.mid)}
-                    onopenstars={() => (starReactionFor = message.mid)}
-                    onerror={(text) => (error = text)}
-                  />
+                {#if message.reactions.length}
+                  <span class="reactions">
+                    {#each message.reactions as reaction (reaction.emoticon)}
+                      <button
+                        class="chip"
+                        class:chosen={reaction.chosen}
+                        onclick={() => react(message, reaction.emoticon)}
+                        oncontextmenu={(event) => openReactionMenu(event, message, reaction.emoticon)}
+                        title="Right-click to see who reacted"
+                      >{reaction.emoticon} {reaction.count}</button>
+                    {/each}
+                  </span>
+                {/if}
+
+                {#if reactingTo === message.mid}
+                  <span class="palette">
+                    {#each reactionPalette as emoticon}
+                      <button onclick={() => react(message, emoticon)}>{emoticon}</button>
+                    {/each}
+                  </span>
                 {/if}
 
                 {#if readByFor?.mid === message.mid}
@@ -2458,7 +2276,7 @@
                   {/if}
                   <button
                     class="reply-btn"
-                    onclick={(event) => openReactionPicker(event, message.mid)}
+                    onclick={() => (reactingTo = reactingTo === message.mid ? null : message.mid)}
                   >React</button>
                   <button class="reply-btn" onclick={() => replyToMessage(message)}>Reply</button>
                   <button class="reply-btn" onclick={() => openForward(message)}>Forward</button>
@@ -2548,6 +2366,16 @@
         </div>
       {/if}
 
+      {#if !editing}
+        <StickerSuggest
+          {draft}
+          onpick={(docId) => {
+            draft = '';
+            pickDocument(docId);
+          }}
+        />
+      {/if}
+
       {#if replyTo || editing}
         <div class="reply-bar">
           <span class="reply-quote">
@@ -2570,31 +2398,6 @@
             onemoji={(emoji) => (draft += emoji)}
             ondocument={pickDocument}
           />
-        {/if}
-        {#if sendAsPickerOpen && activePeerId !== null}
-          <SendAsPicker
-            peerId={activePeerId}
-            current={sendAsPeerId}
-            onpick={(id) => (sendAsPeerId = id)}
-            onclose={() => (sendAsPickerOpen = false)}
-          />
-        {/if}
-        {#if effectPickerOpen}
-          <EffectPicker
-            selected={sendEffect}
-            onpick={pickEffect}
-            onclose={() => (effectPickerOpen = false)}
-          />
-        {/if}
-        {#if sendAsPeerId !== null}
-          <button
-            type="button"
-            class="attach send-as"
-            onclick={() => (sendAsPickerOpen = !sendAsPickerOpen)}
-            title="Send message as…"
-            aria-label="Send message as…"
-            disabled={!!editing}
-          ><Avatar peerId={sendAsPeerId} title="" size={22} /></button>
         {/if}
         {#if botMenuButton}
           <button
@@ -2634,72 +2437,10 @@
           oninput={onDraftInput}
           onkeydown={onComposerKey}
         ></textarea>
-        {#if !editing}
-          <button
-            type="button"
-            class="attach effect-button"
-            class:armed={!!sendEffect}
-            onclick={() => (effectPickerOpen = !effectPickerOpen)}
-            title={sendEffect ? 'Message effect armed' : 'Add a message effect'}
-            aria-label="Add a message effect"
-          >{sendEffectEmoticon || '✨'}</button>
-        {/if}
-        {#if scheduledCount > 0 && !editing}
-          <button
-            type="button"
-            class="attach scheduled-button"
-            onclick={() => (scheduledOpen = true)}
-            title="Scheduled messages"
-            aria-label="Scheduled messages"
-          >🕑<span class="scheduled-count">{scheduledCount}</span></button>
-        {/if}
-        <button
-          type="submit"
-          class="send-button"
-          class:silent={silentDefault && !editing}
-          disabled={!draft.trim() || (!editing && slowModeLeft > 0)}
-          aria-label={editing ? 'Save' : 'Send'}
-          title={editing ?
-            'Save' :
-            slowModeLeft > 0 ?
-              `Slow mode — wait ${slowModeLabel(slowModeLeft)}` :
-              'Send. Right-click or hold for scheduled and silent send'}
-          oncontextmenu={openSendOptions}
-          onpointerdown={onSendPointerDown}
-          onpointerup={cancelSendHold}
-          onpointerleave={cancelSendHold}
-        >
-          {#if !editing && slowModeLeft > 0}
-            <span class="slowmode">{slowModeLabel(slowModeLeft)}</span>
-          {:else}
-            <Glyph name={editing ? 'check' : 'send'} />
-          {/if}
+        <button type="submit" disabled={!draft.trim()} aria-label={editing ? 'Save' : 'Send'}>
+          <Glyph name={editing ? 'check' : 'send'} />
         </button>
       </form>
-
-      {#if sendOptionsOpen && activePeerId !== null}
-        <SendOptionsSheet
-          peerId={activePeerId}
-          isUser={activeIsUser}
-          defaultSilent={silentDefault}
-          onsend={(options) => {
-            sendOptionsOpen = false;
-            silentDefault = isSilentByDefault(activePeerId!);
-            deliver(options);
-          }}
-          onclose={() => (sendOptionsOpen = false)}
-        />
-      {/if}
-
-      {#if scheduledOpen && activePeerId !== null}
-        <ScheduledMessages
-          peerId={activePeerId}
-          title={activeTitle}
-          onclose={() => (scheduledOpen = false)}
-        />
-      {/if}
-
-      <EffectOverlay peerId={activePeerId} />
     {/if}
   </section>
 
@@ -2760,28 +2501,33 @@
   />
 {/if}
 
-{#if reactionPickerFor && activePeerId !== null}
-  <ReactionPicker
-    peerId={activePeerId}
-    mid={reactionPickerFor.mid}
-    x={reactionPickerFor.x}
-    y={reactionPickerFor.y}
-    onpick={pickReaction}
-    onpaid={() => {
-      starReactionFor = reactionPickerFor?.mid ?? null;
-      reactionPickerFor = null;
-    }}
-    onclose={() => (reactionPickerFor = null)}
-  />
+{#if reactionMenu}
+  <div class="menu-backdrop" onclick={() => (reactionMenu = null)} role="presentation"></div>
+  <div class="context-menu" style="left: {reactionMenu.x}px; top: {reactionMenu.y}px">
+    <button onclick={showReactionParticipants}>See who reacted {reactionMenu.emoticon}</button>
+  </div>
 {/if}
 
-{#if starReactionFor !== null && activePeerId !== null}
-  <StarReactionSheet
-    peerId={activePeerId}
-    mid={starReactionFor}
-    onsent={() => bumpReaction(starReactionFor!)}
-    onclose={() => (starReactionFor = null)}
-  />
+{#if reactionParticipantsFor}
+  <div class="reactors-backdrop" onclick={() => (reactionParticipantsFor = null)} role="presentation">
+    <div class="reactors-dialog" onclick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="People who reacted">
+      <header>
+        <strong>Reactions {reactionParticipantsFor.emoticon}</strong>
+        <button onclick={() => (reactionParticipantsFor = null)} aria-label="Close">✕</button>
+      </header>
+      {#if reactionParticipantsFor.loading}
+        <p class="muted">Loading…</p>
+      {:else if reactionParticipantsFor.names.length}
+        <ul>
+          {#each reactionParticipantsFor.names as name}
+            <li>{name}</li>
+          {/each}
+        </ul>
+      {:else}
+        <p class="muted">The reaction list is unavailable for this message.</p>
+      {/if}
+    </div>
+  </div>
 {/if}
 
 {#if messageMenu}
@@ -2790,18 +2536,18 @@
   <div class="context-menu" style="left: {messageMenu.x}px; top: {messageMenu.y}px">
     {#if menuMessage}
       <button onclick={() => { replyToMessage(menuMessage); messageMenu = null; }}>Reply</button>
-      {#if !menuMessage.service}
-        <button
-          onclick={() => {
-            reactionPickerFor = {mid: menuMessage.mid, x: messageMenu!.x, y: messageMenu!.y};
-            messageMenu = null;
-          }}
-        >React…</button>
-      {/if}
       {#if menuMessage.text}
         <button onclick={() => { copyText(menuMessage); messageMenu = null; }}>Copy text</button>
       {/if}
       <button onclick={() => { openForward(menuMessage); messageMenu = null; }}>Forward</button>
+      {#if menuMessage.stickerDocId}
+        <button
+          onclick={() => { packSheet = {setKey: '', docId: menuMessage.stickerDocId}; messageMenu = null; }}
+        >View pack</button>
+      {/if}
+      {#if menuMessage.media?.kind === 'gif' && menuMessage.media.docId}
+        <GifSaveAction docId={menuMessage.media.docId} ondone={() => (messageMenu = null)} />
+      {/if}
       <button onclick={() => startSelecting(menuMessage.mid)}>Select</button>
       <!-- A sticker or a bare media message is editable in the API sense but
            has no text to edit; deleting it is still fair game. -->
@@ -2813,6 +2559,15 @@
       {/if}
     {/if}
   </div>
+{/if}
+
+{#if packSheet}
+  <StickerSetSheet
+    setKey={packSheet.setKey}
+    docId={packSheet.docId}
+    onsend={pickDocument}
+    onclose={() => (packSheet = null)}
+  />
 {/if}
 
 {#if forwarding}
@@ -3102,6 +2857,44 @@
     cursor: zoom-in;
     display: block;
     min-width: 0;
+  }
+
+  .reactions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .chip {
+    background: rgba(0, 0, 0, 0.28);
+    border: none;
+    border-radius: 999px;
+    padding: 2px 8px;
+    font-size: 12px;
+    color: inherit;
+    cursor: pointer;
+  }
+
+  .chip.chosen {
+    background: var(--action);
+    color: var(--action-ink);
+  }
+
+  .palette {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+    padding: 4px;
+    border-radius: 999px;
+    background: color-mix(in srgb, currentColor 10%, transparent);
+  }
+
+  .palette button {
+    background: none;
+    border: none;
+    font-size: 18px;
+    cursor: pointer;
+    padding: 2px;
   }
 
   form {
@@ -3656,6 +3449,50 @@
     z-index: 60;
   }
 
+  .reactors-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 70;
+    display: grid;
+    place-items: center;
+    padding: 16px;
+    background: rgba(0, 0, 0, 0.55);
+  }
+
+  .reactors-dialog {
+    width: min(360px, 100%);
+    max-height: min(480px, calc(100dvh - 32px));
+    overflow: auto;
+    padding: 16px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+  }
+
+  .reactors-dialog header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+  }
+
+  .reactors-dialog header button {
+    border: 0;
+    background: none;
+    color: inherit;
+    cursor: pointer;
+    font-size: 18px;
+  }
+
+  .reactors-dialog ul {
+    margin: 0;
+    padding-left: 20px;
+  }
+
+  .reactors-dialog li + li {
+    margin-top: 8px;
+  }
+
   .context-menu {
     position: fixed;
     z-index: 61;
@@ -4087,59 +3924,6 @@
 
   .attach:hover {
     opacity: 1;
-  }
-
-  /* ---------- send options ---------- */
-
-  .send-as {
-    display: grid;
-    place-items: center;
-    padding: 0;
-    opacity: 1;
-  }
-
-  .effect-button {
-    line-height: 1;
-  }
-
-  .effect-button.armed {
-    opacity: 1;
-    filter: drop-shadow(0 0 4px var(--accent));
-  }
-
-  .scheduled-button {
-    position: relative;
-    line-height: 1;
-  }
-
-  .scheduled-count {
-    position: absolute;
-    top: -2px;
-    right: -4px;
-    min-width: 14px;
-    padding: 0 3px;
-    border-radius: 999px;
-    background: var(--accent);
-    color: #fff;
-    font-size: 9px;
-    line-height: 14px;
-    text-align: center;
-  }
-
-  .send-button.silent {
-    /* A muted send reads as a quieter button, the way the official clients
-       swap the icon for the crossed-out bell. */
-    background: color-mix(in srgb, var(--action) 55%, transparent);
-  }
-
-  .send-button:disabled {
-    cursor: default;
-    opacity: 0.55;
-  }
-
-  .slowmode {
-    font-size: 11px;
-    font-variant-numeric: tabular-nums;
   }
 
   form button:disabled {
