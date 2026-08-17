@@ -405,3 +405,46 @@ button {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* Appearance                                                          */
+/*                                                                     */
+/* Settings → Appearance writes custom properties on <html>; these are */
+/* the rules that consume them. `data-appearance` is stamped by        */
+/* applyAppearance() purely so the selectors outrank Chat.svelte's     */
+/* scoped styles without touching the component. Console density keeps */
+/* its own geometry, so the spacing rules step aside there.            */
+/* ------------------------------------------------------------------ */
+:root[data-appearance] .messages {
+  font-size: var(--message-text-size, 15px);
+}
+
+:root[data-appearance]:not([data-density]) .messages {
+  gap: var(--bubble-gap, 8px);
+  padding: var(--messages-padding, 18px);
+}
+
+:root[data-appearance]:not([data-density]) .messages .bubble {
+  padding: var(--bubble-padding, 8px 12px);
+  gap: var(--bubble-inner-gap, 6px);
+}
+
+/* The wallpaper sits under the bubbles, fixed to the viewport so it does not
+   crawl as the thread scrolls. */
+:root[data-wallpaper] .messages {
+  background-image: var(--chat-wallpaper, none);
+  background-size: cover;
+  background-position: center;
+  background-attachment: fixed;
+}
+
+/* Power saving: the Svelte components do not read tweb's liteMode, so the two
+   flags that are purely visual are enforced here. */
+:root[data-lite-animations] * {
+  animation-duration: 0.01ms !important;
+  transition-duration: 0.01ms !important;
+}
+
+:root[data-lite-blur] {
+  --blur: 0px;
+}

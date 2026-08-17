@@ -21,6 +21,16 @@ export class AppLangPackManager extends AppManager {
     }, {override: ignoreCache});
   }
 
+  /**
+   * The languages the server offers for a lang pack. `'web'` is the pack this
+   * client uses; the caller needs the flags to know which codes are web-only.
+   */
+  public getLanguages(langPack: string = App.langPack, ignoreCache?: boolean) {
+    return this.apiManager.invokeApiCacheable('langpack.getLanguages', {
+      lang_pack: langPack
+    }, {override: ignoreCache});
+  }
+
   public getCountriesList(langCode: string, ignoreCache?: boolean) {
     return this.apiManager.invokeApiCacheable('help.getCountriesList', {
       lang_code: langCode,
