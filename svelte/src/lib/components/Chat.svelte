@@ -32,6 +32,10 @@
   import RichMessage from './RichMessage.svelte';
   import Sticker from './Sticker.svelte';
   import VoiceRecorder from './VoiceRecorder.svelte';
+  import StickerSetSheet from './StickerSetSheet.svelte';
+  import StickerSuggest from './StickerSuggest.svelte';
+  import GifSaveAction from './GifSaveAction.svelte';
+  import {parseStickerSetLink} from '$lib/telegram/stickers';
   import {GIT_COMMIT, GIT_COMMIT_SHORT, GIT_COMMIT_URL} from '$lib/buildInfo';
   import {
     sendQuickReaction,
@@ -432,6 +436,8 @@
    * become messageEntityCustomEmoji entities over those characters.
    */
   let pendingCustomEmoji = $state<PendingCustomEmoji[]>([]);
+  /** Sticker-pack preview, opened from an addstickers link or "View pack". */
+  let packSheet = $state<{setKey: string; docId: string} | null>(null);
   let lightboxIndex = $state<number | null>(null);
   let highlightedMid = $state<number | null>(null);
   let pinnedMessage = $state<MessageItem | null>(null);
@@ -1689,6 +1695,13 @@
    * ordinary link.
    */
   function openLink(url: string): boolean {
+    // A t.me/addstickers link opens the pack in place instead of the browser.
+    const stickerSet = parseStickerSetLink(url);
+    if (stickerSet) {
+      packSheet = {setKey: stickerSet, docId: ''};
+      return true;
+    }
+
     const link = parseMiniAppLink(url);
     if (!link) return false;
 
@@ -1918,7 +1931,8 @@
       return;
     }
 
-    if (messageMenu) messageMenu = null;
+    if (packSheet) packSheet = null;
+    else if (messageMenu) messageMenu = null;
     else if (menuFor) menuFor = null;
     else if (starReactionFor !== null) starReactionFor = null;
     else if (reactionPickerFor) reactionPickerFor = null;
@@ -3324,6 +3338,16 @@
         </div>
       {/if}
 
+      {#if !editing}
+        <StickerSuggest
+          {draft}
+          onpick={(docId) => {
+            draft = '';
+            pickDocument(docId);
+          }}
+        />
+      {/if}
+
       {#if replyTo || editing}
         <div class="reply-bar">
           <span class="reply-quote">
@@ -3630,6 +3654,14 @@
         <button onclick={() => { copyText(menuMessage); messageMenu = null; }}>Copy text</button>
       {/if}
       <button onclick={() => { openForward(menuMessage); messageMenu = null; }}>Forward</button>
+      {#if menuMessage.stickerDocId}
+        <button
+          onclick={() => { packSheet = {setKey: '', docId: menuMessage.stickerDocId}; messageMenu = null; }}
+        >View pack</button>
+      {/if}
+      {#if menuMessage.media?.kind === 'gif' && menuMessage.media.docId}
+        <GifSaveAction docId={menuMessage.media.docId} ondone={() => (messageMenu = null)} />
+      {/if}
       <button onclick={() => startSelecting(menuMessage.mid)}>Select</button>
       <!-- A sticker or a bare media message is editable in the API sense but
            has no text to edit; deleting it is still fair game. -->
@@ -3641,6 +3673,15 @@
       {/if}
     {/if}
   </div>
+{/if}
+
+{#if packSheet}
+  <StickerSetSheet
+    setKey={packSheet.setKey}
+    docId={packSheet.docId}
+    onsend={pickDocument}
+    onclose={() => (packSheet = null)}
+  />
 {/if}
 
 {#if forwarding.length}

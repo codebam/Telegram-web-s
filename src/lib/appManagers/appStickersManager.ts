@@ -564,6 +564,30 @@ export class AppStickersManager extends AppManager {
     return res.sets;
   }
 
+  /**
+   * Sets the user archived. They are not installed, so they only differ from a
+   * never-seen set in that the server keeps them in a separate list; restoring
+   * one is an ordinary install through `toggleStickerSet`, which reads the set
+   * out of the local cache — hence the `saveStickerSet` pass here.
+   */
+  public async getArchivedStickers(limit = 100) {
+    const res = await this.apiManager.invokeApi('messages.getArchivedStickers', {
+      offset_id: 0,
+      limit
+    });
+
+    res.sets.forEach((covered) => {
+      this.saveStickerSet({
+        documents: [],
+        packs: [],
+        keywords: [],
+        ...(covered as StickerSetCovered.stickerSetFullCovered)
+      }, this.getCacheKey(getStickerSetInputById(covered.set)));
+    });
+
+    return res.sets;
+  }
+
   public getPromoPremiumStickers() {
     return this.getStickersByEmoticon({
       emoticon: '⭐️⭐️',
