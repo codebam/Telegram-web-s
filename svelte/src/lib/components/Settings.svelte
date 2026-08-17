@@ -1,5 +1,8 @@
 <script lang="ts">
   import Avatar from './Avatar.svelte';
+  import BusinessSettings from './BusinessSettings.svelte';
+  import DataSettings from './DataSettings.svelte';
+  import ImageCropper from './ImageCropper.svelte';
   import {
     disableNotifications,
     enableNotifications,
@@ -8,23 +11,30 @@
   } from '$lib/telegram/notifications';
   import {
     loadAttachBots,
-    loadBusiness,
+    loadBirthdayPrivacy,
     loadNotifyScopes,
+    loadPersonalChannels,
     loadProfile,
     loadSessions,
     logOut,
-    saveBusinessIntro,
+    removeProfilePhoto,
+    saveBirthday,
+    saveBirthdayPrivacy,
+    savePersonalChannel,
     saveProfile,
     saveUsername,
     setNotifyScope,
     terminateOtherSessions,
     terminateSession,
+    uploadProfilePhoto,
     type AttachBot,
-    type BusinessInfo,
+    type BirthdayPrivacy,
     type NotifyScope,
+    type PersonalChannelOption,
     type ProfileInfo,
     type SessionInfo
   } from '$lib/telegram/settings';
+  import {invalidateAvatarUrl} from '$lib/telegram/chats';
   import {
     ACCENTS,
     getAccent,
@@ -45,6 +55,7 @@
     | 'appearance'
     | 'notifications'
     | 'sessions'
+    | 'data'
     | 'premium'
     | 'stars'
     | 'business'
@@ -68,10 +79,20 @@
   let desktopOn = $state(notificationsEnabled());
 
   let sessions = $state<SessionInfo[]>([]);
-  let business = $state<BusinessInfo | null>(null);
-  let introTitle = $state('');
-  let introDescription = $state('');
   let bots = $state<AttachBot[]>([]);
+
+  // Profile extras: birthday, personal channel, avatar.
+  let birthdayDate = $state('');
+  let birthdayPrivacy = $state<BirthdayPrivacy>('nobody');
+  let channels = $state<PersonalChannelOption[]>([]);
+  let personalChannelId = $state(0);
+  // Plain `let`, not `$state` — the File goes to the cropper and its Blob to the
+  // worker, and a proxy there would fail to clone.
+  let pendingPhoto: File | null = null;
+  let cropping = $state(false);
+  let photoBusy = $state('');
+  let avatarVersion = $state(0);
+  let photoInput: HTMLInputElement | null = $state(null);
   let premium = $state<PremiumInfo | null>(null);
   let stars = $state<StarsInfo | null>(null);
 
@@ -87,14 +108,18 @@
           lastName = profile.lastName;
           bio = profile.bio;
           username = profile.username;
+          personalChannelId = profile.personalChannelId;
+          birthdayDate = profile.birthday ?
+            `${String(profile.birthday.year ?? 1900).padStart(4, '0')}-${String(profile.birthday.month).padStart(2, '0')}-${String(profile.birthday.day).padStart(2, '0')}` :
+            '';
+
+          // Both are extras — a failure here must not blank the profile form.
+          loadBirthdayPrivacy().then((value) => (birthdayPrivacy = value)).catch(() => {});
+          loadPersonalChannels().then((value) => (channels = value)).catch(() => {});
         } else if(current === 'notifications' && !scopes) {
           scopes = await loadNotifyScopes();
         } else if(current === 'sessions' && !sessions.length) {
           sessions = await loadSessions();
-        } else if(current === 'business' && !business) {
-          business = await loadBusiness();
-          introTitle = business.introTitle;
-          introDescription = business.introDescription;
         } else if(current === 'bots' && !bots.length) {
           bots = await loadAttachBots();
         } else if(current === 'premium' && !premium) {
@@ -171,15 +196,98 @@
     }
   }
 
-  async function submitIntro() {
+  /** `<input type="date">` gives `YYYY-MM-DD`; a blank value clears the birthday. */
+  async function submitBirthday() {
     saving = true;
+    error = '';
     try {
-      await saveBusinessIntro(introTitle.trim(), introDescription.trim());
-      flash('Intro saved');
+      if(!birthdayDate) {
+        await saveBirthday(null);
+      } else {
+        const [year, month, day] = birthdayDate.split('-').map(Number);
+        if(!day || !month) throw new Error('That date is not valid');
+        // Telegram treats the year as optional; 1900 is our "not given" marker.
+        await saveBirthday({day, month, year: year && year > 1900 ? year : null});
+      }
+
+      profile = await loadProfile();
+      flash('Birthday saved');
     } catch(err: any) {
-      error = err?.type || err?.message || 'Failed to save intro';
+      error = err?.type || err?.message || 'Failed to save birthday';
     } finally {
       saving = false;
+    }
+  }
+
+  async function changeBirthdayPrivacy(value: BirthdayPrivacy) {
+    const previous = birthdayPrivacy;
+    birthdayPrivacy = value;
+    try {
+      await saveBirthdayPrivacy(value);
+    } catch(err: any) {
+      birthdayPrivacy = previous;
+      error = err?.type || err?.message || 'Failed to update birthday privacy';
+    }
+  }
+
+  async function changePersonalChannel(peerId: number) {
+    const previous = personalChannelId;
+    personalChannelId = peerId;
+    try {
+      await savePersonalChannel(peerId);
+      flash(peerId ? 'Personal channel set' : 'Personal channel removed');
+    } catch(err: any) {
+      personalChannelId = previous;
+      error = err?.type || err?.message || 'Failed to set the personal channel';
+    }
+  }
+
+  function pickPhoto(event: Event) {
+    const input = event.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = '';
+    if(!file) return;
+
+    pendingPhoto = file;
+    cropping = true;
+  }
+
+  async function commitPhoto(blob: Blob) {
+    cropping = false;
+    pendingPhoto = null;
+    photoBusy = 'upload';
+    error = '';
+
+    try {
+      await uploadProfilePhoto(blob);
+      if(profile) invalidateAvatarUrl(profile.userId);
+      profile = await loadProfile();
+      // Bumping the key remounts <Avatar/>, which re-reads the freshly
+      // invalidated URL rather than showing the old cached one.
+      ++avatarVersion;
+      flash('Profile photo updated');
+    } catch(err: any) {
+      error = err?.type || err?.message || 'Failed to upload the photo';
+    } finally {
+      photoBusy = '';
+    }
+  }
+
+  async function dropPhoto() {
+    if(!profile?.photoId || !confirm('Remove your profile photo?')) return;
+
+    photoBusy = 'remove';
+    error = '';
+    try {
+      await removeProfilePhoto(profile.photoId);
+      invalidateAvatarUrl(profile.userId);
+      profile = await loadProfile();
+      ++avatarVersion;
+      flash('Profile photo removed');
+    } catch(err: any) {
+      error = err?.type || err?.message || 'Failed to remove the photo';
+    } finally {
+      photoBusy = '';
     }
   }
 
@@ -205,7 +313,7 @@
   </header>
 
   <nav>
-    {#each [['profile', 'Profile'], ['appearance', 'Appearance'], ['notifications', 'Notifications'], ['sessions', 'Devices'], ['premium', 'Premium'], ['stars', 'Stars'], ['business', 'Business'], ['bots', 'Bots']] as [key, label]}
+    {#each [['profile', 'Profile'], ['appearance', 'Appearance'], ['notifications', 'Notifications'], ['sessions', 'Devices'], ['data', 'Data'], ['premium', 'Premium'], ['stars', 'Stars'], ['business', 'Business'], ['bots', 'Bots']] as [key, label]}
       <button class:active={section === key} onclick={() => (section = key as Section)}>{label}</button>
     {/each}
   </nav>
@@ -219,8 +327,27 @@
         <p class="muted">Loading…</p>
       {:else}
         <div class="head">
-          <Avatar peerId={profile.userId} title={firstName || 'Me'} size={84} />
+          {#key avatarVersion}
+            <Avatar peerId={profile.userId} title={firstName || 'Me'} size={84} />
+          {/key}
           <p class="phone">{profile.phone}{profile.isPremium ? ' · Premium' : ''}</p>
+          <div class="photo-actions">
+            <button class="small-btn" onclick={() => photoInput?.click()} disabled={!!photoBusy}>
+              {photoBusy === 'upload' ? 'Uploading…' : profile.photoId ? 'Change photo' : 'Set photo'}
+            </button>
+            {#if profile.photoId}
+              <button class="danger small-btn" onclick={dropPhoto} disabled={!!photoBusy}>
+                {photoBusy === 'remove' ? 'Removing…' : 'Remove'}
+              </button>
+            {/if}
+          </div>
+          <input
+            class="file-input"
+            type="file"
+            accept="image/*"
+            bind:this={photoInput}
+            onchange={pickPhoto}
+          />
         </div>
         <label class="field"><span>First name</span><input bind:value={firstName} /></label>
         <label class="field"><span>Last name</span><input bind:value={lastName} /></label>
@@ -229,6 +356,51 @@
         <button class="primary" onclick={submitProfile} disabled={saving}>
           {saving ? 'Saving…' : 'Save'}
         </button>
+
+        <p class="label">Birthday</p>
+        <label class="field">
+          <span>Date</span>
+          <input type="date" bind:value={birthdayDate} />
+        </label>
+        <label class="field">
+          <span>Who can see it</span>
+          <select
+            value={birthdayPrivacy}
+            onchange={(e) => changeBirthdayPrivacy(e.currentTarget.value as BirthdayPrivacy)}
+          >
+            <option value="everybody">Everybody</option>
+            <option value="contacts">My contacts</option>
+            <option value="nobody">Nobody</option>
+          </select>
+        </label>
+        <p class="muted small">
+          Setting a birthday does not reveal it on its own — the privacy above
+          decides who sees it, and contacts who share theirs with you see yours.
+        </p>
+        <button class="small-btn" onclick={submitBirthday} disabled={saving}>
+          {birthdayDate ? 'Save birthday' : 'Clear birthday'}
+        </button>
+
+        <p class="label">Personal channel</p>
+        {#if !channels.length}
+          <p class="muted small">
+            You do not administer any channel that can be shown on your profile.
+          </p>
+        {:else}
+          <label class="field">
+            <span>Shown on your profile</span>
+            <select
+              value={personalChannelId}
+              onchange={(e) => changePersonalChannel(Number(e.currentTarget.value))}
+            >
+              <option value={0}>None</option>
+              {#each channels as channel (channel.peerId)}
+                <option value={channel.peerId}>{channel.title}</option>
+              {/each}
+            </select>
+          </label>
+        {/if}
+
         <button class="danger" onclick={doLogOut}>Log out</button>
       {/if}
 
@@ -360,27 +532,11 @@
         {/if}
       {/if}
 
-    {:else if section === 'business'}
-      {#if !business}
-        <p class="muted">Loading…</p>
-      {:else}
-        <p class="label">Current business setup</p>
-        <p class="muted small">Working hours: {business.hoursText || 'not set'}</p>
-        <p class="muted small">Location: {business.location || 'not set'}</p>
-        <p class="muted small">Greeting message: {business.greeting ? 'on' : 'off'}</p>
-        <p class="muted small">Away message: {business.away ? 'on' : 'off'}</p>
+    {:else if section === 'data'}
+      <DataSettings onerror={(message) => (error = message)} />
 
-        <p class="label">Intro</p>
-        <label class="field"><span>Title</span><input bind:value={introTitle} /></label>
-        <label class="field"><span>Description</span><input bind:value={introDescription} /></label>
-        <button class="primary" onclick={submitIntro} disabled={saving}>
-          {saving ? 'Saving…' : 'Save intro'}
-        </button>
-        <p class="muted small">
-          Hours, location, greeting and away messages are read-only here — editing them
-          needs Premium and the full business editor.
-        </p>
-      {/if}
+    {:else if section === 'business'}
+      <BusinessSettings onerror={(message) => (error = message)} />
 
     {:else}
       {#if !bots.length}
@@ -399,6 +555,18 @@
     {/if}
   </div>
 </aside>
+
+{#if cropping && pendingPhoto}
+  <ImageCropper
+    file={pendingPhoto}
+    title="Crop your profile photo"
+    onconfirm={commitPhoto}
+    oncancel={() => {
+      cropping = false;
+      pendingPhoto = null;
+    }}
+  />
+{/if}
 
 <style>
   .settings {
@@ -496,6 +664,28 @@
 
   .field input:focus {
     border-color: var(--accent);
+  }
+
+  .field select {
+    padding: 9px 12px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: transparent;
+    color: var(--text);
+    outline: none;
+  }
+
+  .field select:focus {
+    border-color: var(--accent);
+  }
+
+  .photo-actions {
+    display: flex;
+    gap: 6px;
+  }
+
+  .file-input {
+    display: none;
   }
 
   .label {
