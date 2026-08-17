@@ -1794,7 +1794,7 @@
           onkeydown={onQueryKey}
         />
       </div>
-      <Stories />
+      <Stories {dialogs} />
       {#if folders.length > 1}
         <div class="folders">
           {#each folders as folder (folder.id)}
