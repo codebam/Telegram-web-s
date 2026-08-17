@@ -2443,6 +2443,7 @@
       onclose={() => (showInfo = false)}
       onpeer={(id) => (profilePeerId = id)}
       onmigrated={openPeerChat}
+      onjump={(mid) => { showInfo = false; jumpTo(mid); }}
     />
   {/if}
 </div>
