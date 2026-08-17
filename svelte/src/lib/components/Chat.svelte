@@ -5,7 +5,6 @@
   import Glyph from './Glyph.svelte';
   import ChatInfo from './ChatInfo.svelte';
   import FolderEditor from './FolderEditor.svelte';
-  import FormatBar from './FormatBar.svelte';
   import FormattedText from './FormattedText.svelte';
   import InlinePreview from './InlinePreview.svelte';
   import Lightbox from './Lightbox.svelte';
@@ -18,7 +17,12 @@
   import Settings from './Settings.svelte';
   import Stories from './Stories.svelte';
   import Picker from './Picker.svelte';
-  import GlobalSearch from './GlobalSearch.svelte';
+  import EmojiStatus from './EmojiStatus.svelte';
+  import {
+    customEmojiEntities,
+    sendMessageWithEntities,
+    type PendingCustomEmoji
+  } from '$lib/telegram/emoji';
   import RichMessage from './RichMessage.svelte';
   import Sticker from './Sticker.svelte';
   import {GIT_COMMIT, GIT_COMMIT_SHORT, GIT_COMMIT_URL} from '$lib/buildInfo';
@@ -63,7 +67,9 @@
     readUpTo,
     resolveUsername,
     saveDraftText,
+    searchMessages,
     setOwnOnline,
+    searchDialogs,
     sendDocument,
     sendFiles,
     sendMessage,
@@ -81,18 +87,6 @@
     type TopicItem
   } from '$lib/telegram/chats';
   import {
-    FOLDER_ID_ARCHIVE,
-    getArchiveSummary,
-    isPeerOnline,
-    loadArchivedDialogs,
-    loadFolderMemberships,
-    reorderPinnedDialogs,
-    setDialogArchived,
-    toggleFolderMembership,
-    type ArchiveSummary,
-    type FolderMembership
-  } from '$lib/telegram/archive';
-  import {
     getBotMenuButton,
     openBotAppLink,
     parseMiniAppLink,
@@ -105,17 +99,7 @@
     setActiveNotificationPeer,
     syncPushSubscription
   } from '$lib/telegram/notifications';
-  import {parseComposerText, partsToMarkdown} from '$lib/telegram/composerFormat';
   import {queryInlineBot, sendInlineResult, type InlineQueryAnswer, type InlineResultItem} from '$lib/telegram/settings';
-  import {
-    dialogTargetFor,
-    findMessageIdByDate,
-    searchChatMembers,
-    searchChatMessages,
-    MEDIA_FILTERS,
-    type MediaFilter,
-    type SearchPeerItem
-  } from '$lib/telegram/search';
   import {applyAccent, applyDensity, applyTheme} from '$lib/telegram/theme';
   import {
     getBusinessBot,
@@ -173,8 +157,7 @@
   let observer: ResizeObserver | undefined;
 
   let query = $state('');
-  /** True while the sidebar search pane replaces the chat list. */
-  let searchOpen = $state(false);
+  let searching = $state(false);
   let loadingOlder = $state(false);
   let reachedStart = $state(false);
   // False while the loaded window is centred on an older message (a jump), when
@@ -188,6 +171,7 @@
   let searchBox: HTMLInputElement | undefined = $state();
   let dragging = $state(false);
   let typingTimer: ReturnType<typeof setTimeout> | undefined;
+  let searchTimer: ReturnType<typeof setTimeout> | undefined;
 
   let folders = $state<FolderItem[]>([]);
   let activeFolder = $state(0);
@@ -196,176 +180,15 @@
   let folderEditorOpen = $state(false);
   let newChatOpen = $state(false);
   let menuFor = $state<DialogItem | null>(null);
-
-  /* ---------- archive, folder membership, presence, pinned order ---------- */
-
-  /** True while the list shows folder 1 instead of the current folder. */
-  let archiveOpen = $state(false);
-  let archivedDialogs = $state<DialogItem[]>([]);
-  let archiveSummary = $state<ArchiveSummary>({total: 0, unread: 0});
-  let loadingArchive = $state(false);
-  /** Peer ids currently online, for the dot on private rows. */
-  let onlinePeerIds = $state<number[]>([]);
-  /** peerId → names typing in that chat right now, for the row preview. */
-  let typingByPeer = $state<Record<number, string[]>>({});
-  /** Peer whose "Add to folder" submenu is open, if any. */
-  let folderMenuFor = $state<number | null>(null);
-  let folderMemberships = $state<FolderMembership[]>([]);
-  let dragPeerId = $state<number | null>(null);
-  let dragOverPeerId = $state<number | null>(null);
-
-  /** The rows on screen: the archive when it is open, the folder otherwise. */
-  let listedDialogs = $derived(archiveOpen ? archivedDialogs : dialogs);
-
-  onMount(() => {
-    let unsubscribe: (() => void) | undefined;
-    let disposed = false;
-
-    (async () => {
-      archiveSummary = await getArchiveSummary();
-
-      const offDialogs = await onDialogsUpdate(async () => {
-        archiveSummary = await getArchiveSummary();
-        if (archiveOpen) archivedDialogs = await loadArchivedDialogs();
-      });
-
-      // The list shows "typing…" for any chat, not just the open one, so it
-      // keeps its own subscription rather than widening the header's.
-      const offTyping = await onTyping((peerId, _threadId, names) => {
-        typingByPeer = {...typingByPeer, [peerId]: names};
-      });
-
-      const offUsers = await onUserUpdate(async (userId) => {
-        const online = await isPeerOnline(userId);
-        const has = onlinePeerIds.includes(userId);
-        if (online && !has) onlinePeerIds = [...onlinePeerIds, userId];
-        else if (!online && has) onlinePeerIds = onlinePeerIds.filter((id) => id !== userId);
-      });
-
-      const all = () => {
-        offDialogs();
-        offTyping();
-        offUsers();
-      };
-
-      if (disposed) all();
-      else unsubscribe = all;
-    })();
-
-    return () => {
-      disposed = true;
-      unsubscribe?.();
-    };
-  });
-
-  // Presence for the rows on screen. Statuses are already cached with the peer,
-  // so this costs a worker round-trip per row and nothing on the network.
-  $effect(() => {
-    const peerIds = listedDialogs.filter((d) => d.isUser && !d.isSelf).map((d) => d.peerId);
-    let cancelled = false;
-
-    (async () => {
-      const states = await Promise.all(peerIds.map((peerId) => isPeerOnline(peerId)));
-      if (!cancelled) onlinePeerIds = peerIds.filter((_, index) => states[index]);
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  });
-
-  function typingTextFor(peerId: number): string {
-    const names = typingByPeer[peerId] ?? [];
-    if (!names.length) return '';
-    return `${names.join(', ')} ${names.length > 1 ? 'are' : 'is'} typing…`;
-  }
-
-  async function openArchive() {
-    archiveOpen = true;
-    menuFor = null;
-    folderMenuFor = null;
-    loadingArchive = true;
-    try {
-      archivedDialogs = await loadArchivedDialogs();
-    } catch (err: any) {
-      error = errorOf(err, 'Failed to load the archive');
-    } finally {
-      loadingArchive = false;
-    }
-  }
-
-  function closeArchive() {
-    archiveOpen = false;
-    menuFor = null;
-    folderMenuFor = null;
-  }
-
-  async function openFolderMenu(dialog: DialogItem) {
-    if (folderMenuFor === dialog.peerId) {
-      folderMenuFor = null;
-      return;
-    }
-
-    folderMenuFor = dialog.peerId;
-    folderMemberships = await loadFolderMemberships(dialog.peerId);
-  }
-
-  /* ---------- drag-to-reorder pinned chats ---------- */
-
-  function onRowDragStart(event: DragEvent, dialog: DialogItem) {
-    if (!dialog.pinned) return;
-    dragPeerId = dialog.peerId;
-    event.dataTransfer?.setData('text/plain', String(dialog.peerId));
-    if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
-  }
-
-  function onRowDragOver(event: DragEvent, dialog: DialogItem) {
-    if (dragPeerId === null || !dialog.pinned) return;
-    // Only a prevented dragover marks the row as a valid drop target.
-    event.preventDefault();
-    dragOverPeerId = dialog.peerId;
-  }
-
-  function onRowDragEnd() {
-    dragPeerId = null;
-    dragOverPeerId = null;
-  }
-
-  async function onRowDrop(event: DragEvent, dialog: DialogItem) {
-    const from = dragPeerId;
-    dragPeerId = null;
-    dragOverPeerId = null;
-    if (from === null || !dialog.pinned || from === dialog.peerId) return;
-    event.preventDefault();
-
-    const list = listedDialogs;
-    const order = list.filter((d) => d.pinned).map((d) => d.peerId);
-    const fromIndex = order.indexOf(from);
-    const toIndex = order.indexOf(dialog.peerId);
-    if (fromIndex === -1 || toIndex === -1) return;
-    order.splice(toIndex, 0, ...order.splice(fromIndex, 1));
-
-    // Show the new order straight away; the server confirms it right after.
-    const byPeerId = new Map(list.map((d) => [d.peerId, d]));
-    const reordered = [
-      ...order.map((peerId) => byPeerId.get(peerId)!),
-      ...list.filter((d) => !d.pinned)
-    ];
-    if (archiveOpen) archivedDialogs = reordered;
-    else dialogs = reordered;
-
-    try {
-      await reorderPinnedDialogs(order, archiveOpen ? FOLDER_ID_ARCHIVE : activeFolder);
-    } catch (err: any) {
-      error = errorOf(err, 'Failed to reorder pinned chats');
-      if (archiveOpen) archivedDialogs = await loadArchivedDialogs();
-      else dialogs = await loadDialogs(40, activeFolder);
-    }
-  }
   let showInfo = $state(false);
   /** Profile being viewed from a message sender or member list, if any. */
   let profilePeerId = $state<number | null>(null);
   let showPicker = $state(false);
+  /**
+   * Custom emoji sitting in the draft as their plain alt text; on send they
+   * become messageEntityCustomEmoji entities over those characters.
+   */
+  let pendingCustomEmoji = $state<PendingCustomEmoji[]>([]);
   let reactionPalette = $state<string[]>([]);
   let reactingTo = $state<number | null>(null);
   let lightboxIndex = $state<number | null>(null);
@@ -391,19 +214,6 @@
   let chatResults = $state<MessageItem[] | null>(null);
   let chatSearchOpen = $state(false);
   let chatSearchTimer: ReturnType<typeof setTimeout> | undefined;
-  /** Server-side total for the current in-chat search — the M in "N of M". */
-  let chatResultCount = $state(0);
-  let chatResultIndex = $state(-1);
-  let chatResultsEnd = $state(true);
-  let chatSearching = $state(false);
-  /** Sender filter: groups and channels only, a DM has just two of them. */
-  let chatFrom = $state<SearchPeerItem | null>(null);
-  let chatFromOpen = $state(false);
-  let chatFromQuery = $state('');
-  let chatMembers = $state<SearchPeerItem[]>([]);
-  let chatFilter = $state<MediaFilter>('all');
-  let chatDate = $state('');
-  let chatFiltersOpen = $state(false);
   let selecting = $state(false);
   let selected = $state<Set<number>>(new Set());
   let messageMenu = $state<{mid: number; x: number; y: number} | null>(null);
@@ -731,12 +541,9 @@
 
   async function runDialogAction(action: () => Promise<void>) {
     menuFor = null;
-    folderMenuFor = null;
     try {
       await action();
       dialogs = await loadDialogs(40, activeFolder);
-      archiveSummary = await getArchiveSummary();
-      if (archiveOpen) archivedDialogs = await loadArchivedDialogs();
     } catch (err: any) {
       error = errorOf(err, 'Action failed');
     }
@@ -835,152 +642,25 @@
 
   /* ---------- in-chat search ---------- */
 
-  /** Filters narrow the search on their own — an empty query is fine with one. */
-  const chatSearchNarrowed = $derived(
-    !!chatQuery.trim() || chatFilter !== 'all' || !!chatFrom
-  );
-
-  /** Sender picking only makes sense where there is more than one sender. */
-  const canFilterBySender = $derived(activePeerId !== null && activePeerId < 0);
-
-  function chatSearchOptions(offsetId = 0) {
-    return {
-      threadId: activeThreadId,
-      fromPeerId: chatFrom?.peerId,
-      filter: chatFilter,
-      offsetId
-    };
-  }
-
-  async function runChatSearch() {
-    if (activePeerId === null || !chatSearchNarrowed) {
-      chatResults = null;
-      chatResultCount = 0;
-      chatResultIndex = -1;
-      chatResultsEnd = true;
-      return;
-    }
-
-    const peerId = activePeerId;
-    chatSearching = true;
-    try {
-      const page = await searchChatMessages(peerId, chatQuery, chatSearchOptions());
-      if (activePeerId !== peerId) return;
-      chatResults = page.items.map((item) => item.message);
-      chatResultCount = page.count;
-      chatResultIndex = page.items.length ? 0 : -1;
-      chatResultsEnd = page.isEnd;
-    } catch (err: any) {
-      error = errorOf(err, 'Search failed');
-    } finally {
-      chatSearching = false;
-    }
-  }
-
   function onChatQueryInput() {
     clearTimeout(chatSearchTimer);
-    chatSearchTimer = setTimeout(runChatSearch, 300);
-  }
-
-  /** A filter change is a deliberate click, so it searches without the debounce. */
-  function applyChatFilter(filter: MediaFilter) {
-    chatFilter = filter;
-    clearTimeout(chatSearchTimer);
-    runChatSearch();
-  }
-
-  async function openFromPicker() {
-    chatFromOpen = !chatFromOpen;
-    if (chatFromOpen && activePeerId !== null) {
-      chatMembers = await searchChatMembers(activePeerId, chatFromQuery);
-    }
-  }
-
-  async function onFromQueryInput() {
-    if (activePeerId === null) return;
-    chatMembers = await searchChatMembers(activePeerId, chatFromQuery);
-  }
-
-  function pickFrom(member: SearchPeerItem | null) {
-    chatFrom = member;
-    chatFromOpen = false;
-    chatFromQuery = '';
-    clearTimeout(chatSearchTimer);
-    runChatSearch();
-  }
-
-  /** Older results, pulled in when the user pages past the loaded ones. */
-  async function loadMoreChatResults() {
-    if (activePeerId === null || chatResultsEnd || chatSearching || !chatResults?.length) return;
-
-    const peerId = activePeerId;
-    chatSearching = true;
-    try {
-      const page = await searchChatMessages(
-        peerId,
-        chatQuery,
-        chatSearchOptions(chatResults[chatResults.length - 1].mid)
-      );
-      if (activePeerId !== peerId) return;
-
-      const known = new Set(chatResults.map((m) => m.mid));
-      const fresh = page.items.map((item) => item.message).filter((m) => !known.has(m.mid));
-      chatResults = [...chatResults, ...fresh];
-      chatResultsEnd = page.isEnd || !fresh.length;
-    } catch (err: any) {
-      error = errorOf(err, 'Search failed');
-    } finally {
-      chatSearching = false;
-    }
-  }
-
-  /** Step through results newest-first; `step` of 1 goes towards older ones. */
-  async function stepResult(step: number) {
-    if (!chatResults?.length) return;
-
-    const next = chatResultIndex + step;
-    if (next < 0) return;
-
-    if (next >= chatResults.length) {
-      await loadMoreChatResults();
-      if (next >= (chatResults?.length ?? 0)) return;
-    }
-
-    chatResultIndex = next;
-    jumpTo(chatResults[next].mid);
-  }
-
-  function selectResult(index: number) {
-    chatResultIndex = index;
-    if (chatResults?.[index]) jumpTo(chatResults[index].mid);
-  }
-
-  /** Jump the timeline to the first message on the picked day. */
-  async function jumpToDate(value: string) {
-    chatDate = value;
-    if (!value || activePeerId === null) return;
-
-    // The day's last second: the server answers with the newest message at or
-    // before the offset, which is the bottom of that day.
-    const end = new Date(`${value}T23:59:59`);
-    const mid = await findMessageIdByDate(activePeerId, Math.floor(end.getTime() / 1000), activeThreadId);
-    if (mid) jumpTo(mid);
-    else error = 'No messages on that day';
+    chatSearchTimer = setTimeout(async () => {
+      if (activePeerId === null || !chatQuery.trim()) {
+        chatResults = null;
+        return;
+      }
+      try {
+        chatResults = await searchMessages(activePeerId, chatQuery, {threadId: activeThreadId});
+      } catch (err: any) {
+        error = errorOf(err, 'Search failed');
+      }
+    }, 300);
   }
 
   function closeChatSearch() {
     chatSearchOpen = false;
     chatQuery = '';
     chatResults = null;
-    chatResultCount = 0;
-    chatResultIndex = -1;
-    chatResultsEnd = true;
-    chatFrom = null;
-    chatFromOpen = false;
-    chatFromQuery = '';
-    chatFilter = 'all';
-    chatDate = '';
-    chatFiltersOpen = false;
   }
 
   /* ---------- selection ---------- */
@@ -1229,50 +909,37 @@
     }
   }
 
-  /* ---------- global search ---------- */
+  /* ---------- search ---------- */
+
+  async function runSearch() {
+    searching = true;
+    try {
+      dialogs = await searchDialogs(query);
+    } catch (err: any) {
+      error = errorOf(err, 'Search failed');
+    } finally {
+      searching = false;
+    }
+  }
+
+  function onQueryInput() {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(runSearch, 250);
+  }
 
   /**
-   * The search pane owns its own results and debounce; the box here only holds
-   * the query and decides when the pane replaces the chat list.
+   * Enter opens the first result. The keystroke can beat the debounce, so run
+   * the pending search first rather than acting on the previous query's list.
    */
-  function openSearch() {
-    searchOpen = true;
-  }
+  async function onQueryKey(e: KeyboardEvent) {
+    if (e.key !== 'Enter' || e.isComposing || !query.trim()) return;
+    e.preventDefault();
 
-  function closeSearch() {
-    searchOpen = false;
-    query = '';
-    searchBox?.blur();
-  }
+    clearTimeout(searchTimer);
+    await runSearch();
 
-  function onQueryKey(e: KeyboardEvent) {
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      closeSearch();
-    }
-  }
-
-  /** A search result opens like a chat-list row, dialog or not. */
-  async function openSearchPeer(peerId: number) {
-    try {
-      const target = await dialogTargetFor(peerId);
-      closeSearch();
-      await openChat(target);
-    } catch (err: any) {
-      error = errorOf(err, 'Could not open that chat');
-    }
-  }
-
-  /** Open the chat a found message lives in, then jump to the message itself. */
-  async function openSearchMessage(peerId: number, mid: number) {
-    try {
-      const target = await dialogTargetFor(peerId);
-      closeSearch();
-      await openChat(target);
-      if (activePeerId === peerId) await jumpTo(mid);
-    } catch (err: any) {
-      error = errorOf(err, 'Could not open that message');
-    }
+    const first = dialogs[0];
+    if (first) openChat(first);
   }
 
   /* ---------- scrollback ---------- */
@@ -1387,9 +1054,7 @@
   function startEdit(message: MessageItem) {
     editing = message;
     replyTo = null;
-    // Markers back in, so the formatting the message already carries survives
-    // the round trip instead of being flattened by the save.
-    draft = message.parts?.length ? partsToMarkdown(message.parts) : message.text;
+    draft = message.text;
     focusComposer();
   }
 
@@ -2052,13 +1717,8 @@
 
   async function submit(e: Event) {
     e.preventDefault();
-    const typed = draft.trim();
-    if (!typed || activePeerId === null) return;
-
-    // Markdown markers become entities here; what goes to the API is the text
-    // with the markers stripped.
-    const {text, entities} = parseComposerText(typed);
-    if (!text) return;
+    const text = draft.trim();
+    if (!text || activePeerId === null) return;
 
     // The debounced draft save is still pending with the text being sent; let
     // it fire and it writes the message back as a draft right after sendText
@@ -2070,7 +1730,7 @@
       editing = null;
       draft = '';
       try {
-        await editMessage(activePeerId, target.mid, text, entities);
+        await editMessage(activePeerId, target.mid, text);
         const updated = await getMessage(activePeerId, target.mid);
         if (updated) messages = messages.map((m) => (m.mid === target.mid ? updated : m));
       } catch (err: any) {
@@ -2080,11 +1740,16 @@
     }
 
     const replyToMsgId = replyTo?.mid;
+    // Custom emoji only exist as entities over the alt text already in `text`.
+    const entities = customEmojiEntities(text, pendingCustomEmoji);
+    pendingCustomEmoji = [];
     draft = '';
     replyTo = null;
 
     try {
-      await sendMessage(activePeerId, text, {replyToMsgId, threadId: activeThreadId, entities});
+      await (entities.length
+        ? sendMessageWithEntities(activePeerId, text, entities, {replyToMsgId, threadId: activeThreadId})
+        : sendMessage(activePeerId, text, {replyToMsgId, threadId: activeThreadId}));
       lastTypingSent = 0;
       sendTyping(activePeerId, activeThreadId, 'cancel').catch(() => {});
       // The outgoing message arrives back through history_multiappend.
@@ -2121,14 +1786,11 @@
       <div class="search">
         <input
           bind:this={searchBox}
-          placeholder="Search chats, channels and messages"
+          placeholder="Search chats"
           bind:value={query}
-          onfocus={openSearch}
+          oninput={onQueryInput}
           onkeydown={onQueryKey}
         />
-        {#if searchOpen}
-          <button class="search-cancel" onclick={closeSearch} aria-label="Close search">✕</button>
-        {/if}
       </div>
       <Stories />
       {#if folders.length > 1}
@@ -2150,11 +1812,8 @@
       {/if}
     {/if}
 
-    {#if searchOpen}
-      <GlobalSearch {query} onOpenPeer={openSearchPeer} onOpenMessage={openSearchMessage} />
-    {:else}
     <div class="list">
-      {#if loadingChats}
+      {#if loadingChats || searching}
         <p class="muted">Loading chats…</p>
       {:else if activeIsForum && activePeerId !== null}
         {#each [{threadId: 0, title: 'All messages', preview: 'Everything in this chat', date: 0, unread: 0}, ...topics] as topic (topic.threadId)}
@@ -2176,69 +1835,20 @@
               </span>
             </button>
         {/each}
-      {:else if archiveOpen && loadingArchive}
-        <p class="muted">Loading archive…</p>
-      {:else if !listedDialogs.length}
-        {#if archiveOpen}
-          <button class="row-button archive-row" onclick={closeArchive}>
-            <span class="topic-glyph">←</span>
-            <span class="meta"><span class="title">Back to chats</span></span>
-          </button>
-        {/if}
-        <p class="muted">{archiveOpen ? 'The archive is empty.' : 'No chats yet.'}</p>
+      {:else if !dialogs.length}
+        <p class="muted">No chats yet.</p>
       {:else}
-        {#if archiveOpen}
-          <button class="row-button archive-row" onclick={closeArchive}>
-            <span class="topic-glyph">←</span>
-            <span class="meta">
-              <span class="row">
-                <span class="title">Archived chats</span>
-              </span>
-              <span class="row">
-                <span class="preview">Back to chats</span>
-              </span>
-            </span>
-          </button>
-        {:else if archiveSummary.total && !query && activeFolder === 0}
-          <button class="row-button archive-row" onclick={openArchive}>
-            <span class="topic-glyph"><Glyph name="archive" size={18} /></span>
-            <span class="meta">
-              <span class="row">
-                <span class="title">Archived chats</span>
-              </span>
-              <span class="row">
-                <span class="preview">
-                  {archiveSummary.total} chat{archiveSummary.total === 1 ? '' : 's'}
-                </span>
-                {#if archiveSummary.unread}<span class="badge">{archiveSummary.unread}</span>{/if}
-              </span>
-            </span>
-          </button>
-        {/if}
-
-        {#each listedDialogs as dialog (dialog.peerId)}
+        {#each dialogs as dialog (dialog.peerId)}
           <button
             class="row-button"
             class:active={dialog.peerId === activePeerId}
-            class:drag-over={dragOverPeerId === dialog.peerId}
-            draggable={dialog.pinned}
-            ondragstart={(e) => onRowDragStart(e, dialog)}
-            ondragover={(e) => onRowDragOver(e, dialog)}
-            ondragend={onRowDragEnd}
-            ondrop={(e) => onRowDrop(e, dialog)}
             onclick={() => openChat(dialog)}
             oncontextmenu={(e) => {
               e.preventDefault();
-              folderMenuFor = null;
               menuFor = menuFor?.peerId === dialog.peerId ? null : dialog;
             }}
           >
-            <span class="avatar-wrap">
-              <Avatar peerId={dialog.peerId} title={dialog.title} />
-              {#if dialog.isUser && !dialog.isSelf && onlinePeerIds.includes(dialog.peerId)}
-                <span class="online-dot" title="Online"></span>
-              {/if}
-            </span>
+            <Avatar peerId={dialog.peerId} title={dialog.title} />
             <span class="meta">
               <span class="row">
                 <span class="title">
@@ -2253,11 +1863,7 @@
                 <span class="time">{timeOf(dialog.date)}</span>
               </span>
               <span class="row">
-                {#if typingTextFor(dialog.peerId)}
-                  <span class="preview typing">{typingTextFor(dialog.peerId)}</span>
-                {:else}
-                  <span class="preview">{dialog.preview}</span>
-                {/if}
+                <span class="preview">{dialog.preview}</span>
                 {#if dialog.unread}<span class="badge">{dialog.unread}</span>{/if}
               </span>
             </span>
@@ -2265,12 +1871,7 @@
 
           {#if menuFor?.peerId === dialog.peerId}
             <div class="menu">
-              <button
-                onclick={() =>
-                  runDialogAction(() =>
-                    togglePin(dialog.peerId, archiveOpen ? FOLDER_ID_ARCHIVE : activeFolder)
-                  )}
-              >
+              <button onclick={() => runDialogAction(() => togglePin(dialog.peerId, activeFolder))}>
                 {dialog.pinned ? 'Unpin' : 'Pin'}
               </button>
               <button onclick={() => runDialogAction(() => toggleMute(dialog.peerId, !dialog.muted))}>
@@ -2284,32 +1885,6 @@
               >
                 {dialog.unread ? 'Mark as read' : 'Mark as unread'}
               </button>
-              <button onclick={() => runDialogAction(() => setDialogArchived(dialog.peerId, !archiveOpen))}>
-                {archiveOpen ? 'Unarchive' : 'Archive'}
-              </button>
-              <button class="submenu-trigger" onclick={() => openFolderMenu(dialog)}>
-                Add to folder
-                <span class="chevron">{folderMenuFor === dialog.peerId ? '▾' : '▸'}</span>
-              </button>
-              {#if folderMenuFor === dialog.peerId}
-                {#if !folderMemberships.length}
-                  <span class="submenu-empty">No folders yet</span>
-                {:else}
-                  {#each folderMemberships as membership (membership.folderId)}
-                    <button
-                      class="submenu-item"
-                      onclick={() =>
-                        runDialogAction(() =>
-                          toggleFolderMembership(membership.folderId, dialog.peerId, !membership.included)
-                        )}
-                    >
-                      <span class="check">{membership.included ? '✓' : ''}</span>
-                      {membership.emoticon}
-                      {membership.title}
-                    </button>
-                  {/each}
-                {/if}
-              {/if}
               <button class="danger" onclick={() => runDialogAction(() => leaveOrDelete(dialog.peerId))}>
                 Delete / Leave
               </button>
@@ -2318,7 +1893,6 @@
         {/each}
       {/if}
     </div>
-    {/if}
   </aside>
 
   <section
@@ -2354,7 +1928,8 @@
     {:else}
       <header>
         <button class="back-mobile" onclick={() => (showSidebarOnMobile = true)} aria-label="Back">←</button>
-        <button class="title-button" onclick={() => (showInfo = !showInfo)}>{activeTitle}</button>
+        <button class="title-button" onclick={() => (showInfo = !showInfo)}
+        >{activeTitle}{#if activePeerId !== null}<EmojiStatus peerId={activePeerId} size={16} />{/if}</button>
         {#if activeThreadId !== undefined}<span class="thread-tag">topic</span>{/if}
         <span class="presence">
           {typingNames.length
@@ -2370,100 +1945,19 @@
       {#if chatSearchOpen}
         <div class="chat-search">
           <input placeholder="Search in chat" bind:value={chatQuery} oninput={onChatQueryInput} />
-          {#if chatResults?.length}
-            <span class="result-counter">
-              {chatResultIndex + 1} of {Math.max(chatResultCount, chatResults.length)}
-            </span>
-            <button
-              class="step"
-              onclick={() => stepResult(1)}
-              disabled={chatResultIndex + 1 >= chatResults.length && chatResultsEnd}
-              aria-label="Older result"
-            >↓</button>
-            <button
-              class="step"
-              onclick={() => stepResult(-1)}
-              disabled={chatResultIndex <= 0}
-              aria-label="Newer result"
-            >↑</button>
-          {/if}
-          <button
-            class="filters-toggle"
-            class:on={chatFiltersOpen || chatFilter !== 'all' || !!chatFrom || !!chatDate}
-            onclick={() => (chatFiltersOpen = !chatFiltersOpen)}
-          >Filters</button>
           <button onclick={closeChatSearch} aria-label="Close search">✕</button>
         </div>
-
-        {#if chatFiltersOpen}
-          <div class="chat-filters">
-            <div class="filter-chips">
-              {#each MEDIA_FILTERS as option (option.value)}
-                <button
-                  class="chip"
-                  class:on={chatFilter === option.value}
-                  onclick={() => applyChatFilter(option.value)}
-                >{option.label}</button>
-              {/each}
-            </div>
-
-            <div class="filter-row">
-              {#if canFilterBySender}
-                <button class="chip" class:on={!!chatFrom} onclick={openFromPicker}>
-                  {chatFrom ? `From: ${chatFrom.title}` : 'From sender'}
-                </button>
-                {#if chatFrom}
-                  <button class="chip" onclick={() => pickFrom(null)} aria-label="Clear sender">✕</button>
-                {/if}
-              {/if}
-              <label class="date-jump">
-                Jump to date
-                <input type="date" value={chatDate} onchange={(e) => jumpToDate(e.currentTarget.value)} />
-              </label>
-            </div>
-
-            {#if chatFromOpen}
-              <div class="from-picker">
-                <input
-                  placeholder="Search members"
-                  bind:value={chatFromQuery}
-                  oninput={onFromQueryInput}
-                />
-                {#if !chatMembers.length}
-                  <p class="muted">No members found.</p>
-                {:else}
-                  {#each chatMembers as member (member.peerId)}
-                    <button class="from-row" onclick={() => pickFrom(member)}>
-                      <Avatar peerId={member.peerId} title={member.title} size={28} />
-                      <span class="from-name">{member.title}</span>
-                    </button>
-                  {/each}
-                {/if}
-              </div>
-            {/if}
-          </div>
-        {/if}
-
         {#if chatResults}
           <div class="results">
             {#if !chatResults.length}
-              <p class="muted">{chatSearching ? 'Searching…' : 'Nothing found.'}</p>
+              <p class="muted">Nothing found.</p>
             {:else}
-              {#each chatResults as result, index (result.mid)}
-                <button
-                  class="result"
-                  class:current={index === chatResultIndex}
-                  onclick={() => selectResult(index)}
-                >
+              {#each chatResults as result (result.mid)}
+                <button class="result" onclick={() => { closeChatSearch(); jumpTo(result.mid); }}>
                   <span class="result-from">{result.fromTitle}</span>
                   <span class="result-text">{result.text || 'Media'}</span>
                 </button>
               {/each}
-              {#if !chatResultsEnd}
-                <button class="result more" onclick={loadMoreChatResults} disabled={chatSearching}>
-                  {chatSearching ? 'Loading…' : 'Load more'}
-                </button>
-              {/if}
             {/if}
           </div>
         {/if}
@@ -2637,7 +2131,7 @@
               >
                 {#if !message.out && message.fromTitle}
                   <button class="author" onclick={() => (profilePeerId = message.fromId)}>
-                    {message.fromTitle}
+                    {message.fromTitle}<EmojiStatus peerId={message.fromId} size={14} />
                   </button>
                 {/if}
 
@@ -2896,6 +2390,10 @@
           <Picker
             onemoji={(emoji) => (draft += emoji)}
             ondocument={pickDocument}
+            oncustomemoji={(item) => {
+              draft += item.emoji;
+              pendingCustomEmoji = [...pendingCustomEmoji, item];
+            }}
           />
         {/if}
         {#if botMenuButton}
@@ -2936,7 +2434,6 @@
           oninput={onDraftInput}
           onkeydown={onComposerKey}
         ></textarea>
-        <FormatBar textarea={composer} />
         <button type="submit" disabled={!draft.trim()} aria-label={editing ? 'Save' : 'Send'}>
           <Glyph name={editing ? 'check' : 'send'} />
         </button>
@@ -2967,7 +2464,6 @@
       onclose={() => (showInfo = false)}
       onpeer={(id) => (profilePeerId = id)}
       onmigrated={openPeerChat}
-      onjump={(mid) => { showInfo = false; jumpTo(mid); }}
     />
   {/if}
 </div>
@@ -3168,26 +2664,13 @@
   }
 
   .search {
-    display: flex;
-    align-items: center;
-    gap: 6px;
     padding: 10px 14px;
     border-bottom: 1px solid var(--border);
     flex: none;
   }
 
-  .search-cancel {
-    background: none;
-    border: 0;
-    color: var(--text-dim);
-    cursor: pointer;
-    padding: 4px;
-    flex: none;
-  }
-
   .search input {
     width: 100%;
-    min-width: 0;
     padding: 9px 12px;
     border: 1px solid var(--border);
     border-radius: 999px;
@@ -3317,64 +2800,6 @@
     display: inline-flex;
     color: var(--text-dim);
     flex: none;
-  }
-
-  .menu .submenu-trigger {
-    display: flex;
-    justify-content: space-between;
-    gap: 8px;
-  }
-
-  .menu .submenu-item {
-    display: flex;
-    gap: 6px;
-    padding-left: 20px;
-  }
-
-  .menu .check {
-    width: 12px;
-    flex: none;
-    color: var(--accent);
-  }
-
-  .submenu-empty {
-    padding: 9px 12px 9px 20px;
-    font-size: 12px;
-    color: var(--text-dim);
-  }
-
-  .chevron {
-    color: var(--text-dim);
-  }
-
-  .archive-row .topic-glyph {
-    color: var(--text-dim);
-  }
-
-  .avatar-wrap {
-    position: relative;
-    display: flex;
-    flex: none;
-  }
-
-  .online-dot {
-    position: absolute;
-    right: 0;
-    bottom: 0;
-    width: 11px;
-    height: 11px;
-    border-radius: 50%;
-    background: #4dcb5f;
-    border: 2px solid var(--bg);
-  }
-
-  .preview.typing {
-    color: var(--accent);
-  }
-
-  .row-button.drag-over {
-    border-left-color: var(--accent);
-    background: color-mix(in srgb, var(--text) 10%, transparent);
   }
 
   .title-button {
@@ -3951,133 +3376,6 @@
   }
 
   .result-text {
-    font-size: 13px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .result.current {
-    background: var(--row-active);
-  }
-
-  .result.more {
-    color: var(--accent);
-    font-size: 13px;
-    text-align: center;
-  }
-
-  .result-counter {
-    font-size: 12px;
-    color: var(--text-dim);
-    align-self: center;
-    white-space: nowrap;
-  }
-
-  .step:disabled {
-    opacity: 0.35;
-    cursor: default;
-  }
-
-  .filters-toggle {
-    font-size: 12px !important;
-    padding: 4px 10px !important;
-    border: 1px solid var(--border) !important;
-    border-radius: 999px !important;
-  }
-
-  .filters-toggle.on {
-    border-color: var(--accent) !important;
-    color: var(--accent);
-  }
-
-  .chat-filters {
-    padding: 8px 18px 10px;
-    border-bottom: 1px solid var(--border);
-    flex: none;
-    display: grid;
-    gap: 8px;
-  }
-
-  .filter-chips,
-  .filter-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    align-items: center;
-  }
-
-  .chip {
-    background: none;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    padding: 4px 10px;
-    font-size: 12px;
-    color: inherit;
-    cursor: pointer;
-  }
-
-  .chip.on {
-    border-color: var(--accent);
-    color: var(--accent);
-  }
-
-  .date-jump {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 12px;
-    color: var(--text-dim);
-  }
-
-  .date-jump input {
-    background: transparent;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    color: inherit;
-    padding: 3px 6px;
-    font: inherit;
-    font-size: 12px;
-  }
-
-  .from-picker {
-    max-height: 220px;
-    overflow-y: auto;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 6px;
-  }
-
-  .from-picker input {
-    width: 100%;
-    padding: 6px 10px;
-    margin-bottom: 4px;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    background: transparent;
-    color: inherit;
-    outline: none;
-  }
-
-  .from-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    padding: 5px 6px;
-    background: none;
-    border: 0;
-    border-radius: 8px;
-    color: inherit;
-    text-align: left;
-    cursor: pointer;
-  }
-
-  .from-row:hover {
-    background: var(--bg-elevated);
-  }
-
-  .from-name {
     font-size: 13px;
     overflow: hidden;
     text-overflow: ellipsis;
