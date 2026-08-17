@@ -11,6 +11,9 @@
   import Media from './Media.svelte';
   import CallScreen from './CallScreen.svelte';
   import MiniApp from './MiniApp.svelte';
+  import AccountSwitcher from './AccountSwitcher.svelte';
+  import ConnectionStatus from './ConnectionStatus.svelte';
+  import LinkSheet from './LinkSheet.svelte';
   import NewChat from './NewChat.svelte';
   import PeerPicker from './PeerPicker.svelte';
   import SendFiles from './SendFiles.svelte';
@@ -20,6 +23,13 @@
   import RichMessage from './RichMessage.svelte';
   import Sticker from './Sticker.svelte';
   import {GIT_COMMIT, GIT_COMMIT_SHORT, GIT_COMMIT_URL} from '$lib/buildInfo';
+  import {
+    parseTelegramLink,
+    resolveLink,
+    takeLaunchLink,
+    type LinkAction,
+    type TelegramLink
+  } from '$lib/telegram/links';
   import {
     availableReactions,
     clickSponsored,
@@ -209,6 +219,9 @@
   let lastTypingSent = 0;
   let showSidebarOnMobile = $state(true);
   let showSettings = $state(false);
+  let showAccounts = $state(false);
+  /** A join-chat / add-folder invite awaiting confirmation. */
+  let linkSheet = $state<Extract<LinkAction, {type: 'joinChat'} | {type: 'addList'}> | null>(null);
   /** The mini app currently hosted in an iframe, null when none is open. */
   let miniApp = $state<MiniAppRequest | null>(null);
   let inlineResults = $state<InlineResultItem[]>([]);
@@ -345,6 +358,12 @@
       } finally {
         loadingChats = false;
       }
+
+      // A shared t.me link opened the app: `static/_redirects` serves the SPA
+      // for every path, so the link is sitting in `location`. Handle it after
+      // the dialog list is up so the chat it opens has somewhere to land.
+      const launchLink = takeLaunchLink();
+      if (launchLink) handleTelegramLink(launchLink);
 
       // Re-register the push subscription on every boot: the browser can drop
       // one, and the token Telegram pushes to has to be the current one.
@@ -1128,16 +1147,80 @@
    */
   function openLink(url: string): boolean {
     const link = parseMiniAppLink(url);
-    if (!link) return false;
+    if (link) {
+      const peerId = activePeerId;
+      openBotAppLink(link, peerId ?? 0)
+        .then((request) => {
+          if (activePeerId === peerId) miniApp = request;
+        })
+        .catch(() => window.open(url, '_blank', 'noopener,noreferrer'));
 
-    const peerId = activePeerId;
-    openBotAppLink(link, peerId ?? 0)
-      .then((request) => {
-        if (activePeerId === peerId) miniApp = request;
-      })
-      .catch(() => window.open(url, '_blank', 'noopener,noreferrer'));
+      return true;
+    }
 
+    // Anything else that is a Telegram link stays in the app: usernames,
+    // message links, invites, folder invites, stickers, phone and share links.
+    const telegramLink = parseTelegramLink(url);
+    if (!telegramLink) return false;
+
+    handleTelegramLink(telegramLink);
     return true;
+  }
+
+  /**
+   * Resolve a parsed deep link and act on it. Everything the app cannot render
+   * itself (a sticker set, a share sheet) falls back to opening the original
+   * link rather than dead-ending.
+   */
+  async function handleTelegramLink(link: TelegramLink) {
+    let action: LinkAction;
+    try {
+      action = await resolveLink(link);
+    } catch (err: any) {
+      error = errorOf(err, 'Could not open that link');
+      return;
+    }
+
+    switch (action.type) {
+      case 'openPeer':
+        await openPeerChat(action.peerId);
+        if (action.mid) await jumpTo(action.mid);
+        break;
+
+      case 'openChat':
+        await openPeerChat(action.peerId);
+        break;
+
+      case 'joinChat':
+      case 'addList':
+        linkSheet = action;
+        break;
+
+      case 'share':
+        if (action.url) window.open(action.url, '_blank', 'noopener,noreferrer');
+        break;
+
+      case 'stickerSet':
+        // No in-app sticker-set viewer yet — hand it to the official client.
+        window.open(
+          `https://t.me/${action.isEmoji ? 'addemoji' : 'addstickers'}/${action.set}`,
+          '_blank',
+          'noopener,noreferrer'
+        );
+        break;
+
+      case 'webApp':
+        window.open(
+          `https://t.me/${action.domain}${action.appname ? '/' + action.appname : ''}`,
+          '_blank',
+          'noopener,noreferrer'
+        );
+        break;
+
+      case 'error':
+        error = action.message;
+        break;
+    }
   }
 
   /** Same rule, for places that must open the link themselves when it is not an app. */
@@ -1344,6 +1427,8 @@
       pendingFiles.length ||
       miniApp ||
       showSettings ||
+      showAccounts ||
+      linkSheet ||
       folderEditorOpen ||
       newChatOpen ||
       editingFolder ||
@@ -1763,8 +1848,16 @@
       {:else}
         <span>Chats</span>
         <button class="icon-button new-chat" onclick={openNewChat} aria-label="New group or channel" title="New group or channel"><Glyph name="edit" /></button>
+        <button
+          class="icon-button accounts-open"
+          onclick={() => (showAccounts = true)}
+          aria-label="Accounts"
+          title="Switch account"
+        >@</button>
       {/if}
     </header>
+
+    <ConnectionStatus />
 
     {#if !(activeIsForum && activePeerId !== null)}
       <div class="search">
@@ -2427,6 +2520,18 @@
         miniApp = {botId, peerId: activePeerId ?? botId, fromAttachMenu: true};
         showSettings = false;
       }}
+    />
+  {/if}
+
+  {#if showAccounts}
+    <AccountSwitcher onclose={() => (showAccounts = false)} />
+  {/if}
+
+  {#if linkSheet}
+    <LinkSheet
+      action={linkSheet}
+      onclose={() => (linkSheet = null)}
+      onopenpeer={openPeerChat}
     />
   {/if}
 
@@ -3172,6 +3277,11 @@
   .new-chat {
     margin-left: auto;
     font-size: 16px;
+  }
+
+  .accounts-open {
+    font-size: 16px;
+    font-weight: 600;
   }
 
   .keyboard {
