@@ -8,15 +8,11 @@
   import FormattedText from './FormattedText.svelte';
   import InlinePreview from './InlinePreview.svelte';
   import Lightbox from './Lightbox.svelte';
-  import AudioPlayerBar from './AudioPlayerBar.svelte';
   import Media from './Media.svelte';
   import CallScreen from './CallScreen.svelte';
   import MiniApp from './MiniApp.svelte';
   import NewChat from './NewChat.svelte';
   import PeerPicker from './PeerPicker.svelte';
-  import ForwardSheet from './ForwardSheet.svelte';
-  import ForwardHeader from './ForwardHeader.svelte';
-  import ReplyHeader from './ReplyHeader.svelte';
   import SendFiles from './SendFiles.svelte';
   import Settings from './Settings.svelte';
   import Stories from './Stories.svelte';
@@ -29,6 +25,7 @@
     clickSponsored,
     deleteMessage,
     deleteMessages,
+    forwardMessage,
     getDraftText,
     editMessage,
     getMessage,
@@ -84,16 +81,6 @@
     type TopicItem
   } from '$lib/telegram/chats';
   import {
-    clearTrackedQuote,
-    forwardTo,
-    quoteFromSelection,
-    replySendOptions,
-    trackQuoteSelection,
-    trackedQuote,
-    type ForwardOptions,
-    type ReplyQuote
-  } from '$lib/telegram/reply';
-  import {
     getBotMenuButton,
     openBotAppLink,
     parseMiniAppLink,
@@ -108,7 +95,6 @@
   } from '$lib/telegram/notifications';
   import {queryInlineBot, sendInlineResult, type InlineQueryAnswer, type InlineResultItem} from '$lib/telegram/settings';
   import {applyAccent, applyDensity, applyTheme} from '$lib/telegram/theme';
-  import {playAudioMessage} from '$lib/telegram/player';
   import {
     getBusinessBot,
     onPeerSettings,
@@ -117,6 +103,21 @@
     startCall,
     type BusinessBot
   } from '$lib/telegram/extras';
+  import EffectOverlay from './EffectOverlay.svelte';
+  import EffectPicker from './EffectPicker.svelte';
+  import ScheduledMessages from './ScheduledMessages.svelte';
+  import SendAsPicker from './SendAsPicker.svelte';
+  import SendOptionsSheet from './SendOptionsSheet.svelte';
+  import {
+    countScheduled,
+    getCurrentSendAs,
+    getSlowMode,
+    isSilentByDefault,
+    onChatFullUpdate,
+    onScheduledUpdate,
+    sendMessageWithOptions,
+    type SlowMode
+  } from '$lib/telegram/sendOptions';
 
   let dialogs = $state<DialogItem[]>([]);
   let topics = $state<TopicItem[]>([]);
@@ -156,23 +157,6 @@
   let loadingHistory = $state(false);
   let draft = $state('');
   let replyTo = $state<MessageItem | null>(null);
-  /**
-   * Everything about the pending reply that a `MessageItem` cannot carry: the
-   * quoted excerpt and, for a reply into another chat, where the original
-   * lives. Kept beside `replyTo` rather than inside it because the reply target
-   * is cleared from a dozen places; `mid` is what ties the two together, so a
-   * stale context is simply ignored instead of attaching to the wrong message.
-   */
-  let replyContext = $state<{
-    mid: number;
-    peerId: number;
-    chatTitle: string;
-    quote: ReplyQuote | null;
-  } | null>(null);
-  /** The message a "Reply in…" pick is about to carry into another chat. */
-  let replyingElsewhere = $state<MessageItem | null>(null);
-  /** Its quote, captured before the picker took the selection away. */
-  let replyElsewhereQuote: ReplyQuote | null = null;
   let error = $state('');
   let scroller: HTMLDivElement | undefined = $state();
   /** First unread message id, used for the divider and the open position. */
@@ -228,8 +212,7 @@
   let activeRestriction = $state('');
   let businessBot = $state<BusinessBot | null>(null);
   let businessBotBusy = $state(false);
-  /** Messages queued for the forward sheet, empty when it is closed. */
-  let forwarding = $state<MessageItem[]>([]);
+  let forwarding = $state<MessageItem | null>(null);
   let atBottom = $state(true);
   let chatQuery = $state('');
   let chatResults = $state<MessageItem[] | null>(null);
@@ -716,9 +699,7 @@
 
   async function forwardSelected() {
     if (!selected.size) return;
-    // Oldest first, so the batch lands in the target chat in the order it was
-    // written rather than the order it happened to be clicked in.
-    forwarding = messages.filter((m) => selected.has(m.mid)).sort((a, b) => a.mid - b.mid);
+    forwarding = messages.find((m) => selected.has(m.mid)) ?? null;
     allDialogs = await loadDialogs(100, 0);
   }
 
@@ -788,37 +769,23 @@
     }, 1600);
   }
 
-  /**
-   * Jump from a reply header to the message it answers. A cross-chat reply
-   * points into another conversation, so that one is opened first.
-   */
-  async function jumpToReply(reply: NonNullable<MessageItem['reply']>) {
-    if (reply.deleted) return;
-
-    if (reply.peerId !== activePeerId) {
-      await openPeerChat(reply.peerId);
-    }
-
-    await jumpTo(reply.mid);
-  }
-
   /* ---------- forward and copy ---------- */
 
   async function openForward(message: MessageItem) {
-    forwarding = [message];
+    forwarding = message;
     allDialogs = await loadDialogs(100, 0);
   }
 
-  async function doForward(targets: number[], options: ForwardOptions) {
-    const mids = forwarding.map((m) => m.mid);
-    const fromPeerId = activePeerId;
-    forwarding = [];
+  async function doForward(toPeerId: number) {
+    const message = forwarding;
+    const mids = selecting && selected.size ? [...selected] : message ? [message.mid] : [];
+    forwarding = null;
     selecting = false;
     selected = new Set();
-    if (!mids.length || !targets.length || fromPeerId === null) return;
+    if (!mids.length || activePeerId === null) return;
 
     try {
-      await forwardTo(fromPeerId, mids, targets, options);
+      await forwardMessage(activePeerId, mids, toPeerId);
     } catch (err: any) {
       error = errorOf(err, 'Forward failed');
     }
@@ -933,18 +900,6 @@
 
     const names = await readParticipants(activePeerId, message.mid);
     readByFor = {mid: message.mid, names};
-  }
-
-  /**
-   * Music and voice play in the persistent bar rather than in the bubble, so
-   * playback survives leaving the chat. The bar is the single audio source:
-   * starting a track stops anything else the page is playing.
-   */
-  function openInPlayer(message: MessageItem) {
-    const kind = message.media?.kind;
-    if (kind !== 'audio' && kind !== 'voice') return;
-    if (message.media?.selfDestruct || activePeerId === null) return;
-    playAudioMessage(activePeerId, message.mid).catch(() => {});
   }
 
   function openLightbox(message: MessageItem) {
@@ -1095,81 +1050,10 @@
     composer?.focus();
   }
 
-  /**
-   * The text currently selected inside a message's bubble, as a quote. Telegram
-   * attaches the excerpt the user highlighted, so replying while text is
-   * selected quotes exactly that fragment instead of the whole message.
-   */
-  function quoteOf(message: MessageItem): ReplyQuote | null {
-    if (!message.text) return null;
-
-    // Clicking the button collapses the live selection, so the tracked one is
-    // what survives that far; the live read is the fallback for a keyboard path.
-    const remembered = trackedQuote(message.mid);
-    if (remembered) return remembered;
-
-    const bubble = scroller?.querySelector<HTMLElement>(`[data-mid="${message.mid}"]`);
-    return bubble ? quoteFromSelection(bubble, message.text) : null;
-  }
-
-  // Quoting needs the selection as it was made, not as it survives the click
-  // that acts on it, so it is captured while it happens.
-  $effect(() => trackQuoteSelection((mid) => messages.find((m) => m.mid === mid)?.text ?? ''));
-
   function replyToMessage(message: MessageItem) {
-    const quote = quoteOf(message);
-    clearTrackedQuote();
     replyTo = message;
-    replyContext = activePeerId === null ?
-      null :
-      {mid: message.mid, peerId: activePeerId, chatTitle: '', quote};
     focusComposer();
   }
-
-  /**
-   * "Reply in…" — keep this message as the reply target but write the answer in
-   * a different chat. The reply then carries `replyToPeerId`, and the bubble it
-   * produces renders as a cross-chat reply on both sides.
-   */
-  async function openReplyElsewhere(message: MessageItem) {
-    // The selection is read now: picking a chat takes several clicks, and none
-    // of them leaves it intact.
-    replyElsewhereQuote = quoteOf(message);
-    clearTrackedQuote();
-    replyingElsewhere = message;
-    allDialogs = await loadDialogs(100, 0);
-  }
-
-  async function doReplyElsewhere(toPeerId: number) {
-    const message = replyingElsewhere;
-    const sourcePeerId = activePeerId;
-    const sourceTitle = activeTitle;
-    const quote = replyElsewhereQuote;
-    replyElsewhereQuote = null;
-    replyingElsewhere = null;
-    if (!message || sourcePeerId === null) return;
-
-    // Opening the chat clears the pending reply, so the target is set after.
-    await openPeerChat(toPeerId);
-    replyTo = message;
-    replyContext = {mid: message.mid, peerId: sourcePeerId, chatTitle: sourceTitle, quote};
-    focusComposer();
-  }
-
-  function cancelReply() {
-    replyTo = null;
-    replyContext = null;
-  }
-
-  /** Drops the quote but keeps replying, like Telegram's "remove quote". */
-  function dropQuote() {
-    if (replyContext) replyContext = {...replyContext, quote: null};
-  }
-
-  /** The reply context, but only while it still describes the reply target. */
-  const activeReplyContext = $derived(
-    replyTo && replyContext?.mid === replyTo.mid ? replyContext : null
-  );
 
   function startEdit(message: MessageItem) {
     editing = message;
@@ -1478,8 +1362,7 @@
       folderEditorOpen ||
       newChatOpen ||
       editingFolder ||
-      forwarding.length ||
-      replyingElsewhere ||
+      forwarding ||
       profilePeerId !== null ||
       showInfo ||
       document.querySelector('.viewer')
@@ -1836,10 +1719,173 @@
     maybeLoadOlder();
   }
 
+  /* ---------- send options: schedule, silent, effects, slow mode, send-as ---------- */
+
+  let sendOptionsOpen = $state(false);
+  let scheduledOpen = $state(false);
+  let effectPickerOpen = $state(false);
+  let sendAsPickerOpen = $state(false);
+
+  /** Effect armed for the next message, '' for none. */
+  let sendEffect = $state('');
+  /** Emoticon of the armed effect, for the button label. */
+  let sendEffectEmoticon = $state('');
+  /** Per-chat "send without sound" preference. */
+  let silentDefault = $state(false);
+  /** Identity we post as here, null when posting as ourselves. */
+  let sendAsPeerId = $state<number | null>(null);
+  let slowMode = $state<SlowMode | null>(null);
+  let scheduledCount = $state(0);
+  /** Ticks once a second, but only while a slow-mode cooldown is running. */
+  let nowSeconds = $state(Math.floor(Date.now() / 1000));
+  /** Long-press timer on the send button, for touch devices. */
+  let sendHoldTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Set when a long press opened the sheet, so the release does not also send. */
+  let sendHeld = false;
+
+  const slowModeLeft = $derived(
+    slowMode?.nextSendDate ? Math.max(0, slowMode.nextSendDate - nowSeconds) : 0
+  );
+
+  function slowModeLabel(seconds: number) {
+    const minutes = Math.floor(seconds / 60);
+    return minutes ? `${minutes}:${`${seconds % 60}`.padStart(2, '0')}` : `${seconds}`;
+  }
+
+  /**
+   * Refresh slow mode and send-as from **cached** full-chat state only. Both
+   * readers are cache-only by design, so this never adds a request to the
+   * chat-open path; the real values land later through `chat_full_update`.
+   */
+  function refreshChatSendState(peer: number) {
+    getSlowMode(peer)
+    .then((state) => {
+      if (peer === activePeerId) slowMode = state;
+    })
+    .catch(() => {});
+
+    getCurrentSendAs(peer)
+    .then((id) => {
+      if (peer === activePeerId) sendAsPeerId = id;
+    })
+    .catch(() => {});
+  }
+
+  function refreshScheduledCount(peer: number) {
+    countScheduled(peer)
+    .then((count) => {
+      if (peer === activePeerId) scheduledCount = count;
+    })
+    .catch(() => {});
+  }
+
+  $effect(() => {
+    const peer = activePeerId;
+
+    sendOptionsOpen = false;
+    scheduledOpen = false;
+    effectPickerOpen = false;
+    sendAsPickerOpen = false;
+    sendEffect = '';
+    sendEffectEmoticon = '';
+    slowMode = null;
+    sendAsPeerId = null;
+    scheduledCount = 0;
+
+    if (peer === null) {
+      silentDefault = false;
+      return;
+    }
+
+    silentDefault = isSilentByDefault(peer);
+    refreshChatSendState(peer);
+    refreshScheduledCount(peer);
+  });
+
+  $effect(() => {
+    let unsubscribe: (() => void) | undefined;
+    let cancelled = false;
+
+    onChatFullUpdate((peer) => {
+      if (!cancelled && peer === activePeerId) refreshChatSendState(peer);
+    }).then((off) => {
+      if (cancelled) off();
+      else unsubscribe = off;
+    });
+
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
+  });
+
+  $effect(() => {
+    let unsubscribe: (() => void) | undefined;
+    let cancelled = false;
+
+    onScheduledUpdate((peer) => {
+      if (!cancelled && peer === activePeerId) refreshScheduledCount(peer);
+    }).then((off) => {
+      if (cancelled) off();
+      else unsubscribe = off;
+    });
+
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
+  });
+
+  // Only run a clock while there is a cooldown to count down.
+  $effect(() => {
+    if (!slowMode?.nextSendDate) return;
+    nowSeconds = Math.floor(Date.now() / 1000);
+    const timer = setInterval(() => (nowSeconds = Math.floor(Date.now() / 1000)), 1000);
+    return () => clearInterval(timer);
+  });
+
+  /** Right-click / long-press on the send button opens the options sheet. */
+  function openSendOptions(e: Event) {
+    e.preventDefault();
+    if (activePeerId === null || editing) return;
+    sendOptionsOpen = true;
+  }
+
+  function onSendPointerDown() {
+    if (activePeerId === null || editing) return;
+    clearTimeout(sendHoldTimer);
+    sendHeld = false;
+    sendHoldTimer = setTimeout(() => {
+      sendHeld = true;
+      sendOptionsOpen = true;
+    }, 450);
+  }
+
+  function cancelSendHold() {
+    clearTimeout(sendHoldTimer);
+  }
+
+  function pickEffect(effectId: string, emoticon: string) {
+    sendEffect = effectId;
+    sendEffectEmoticon = emoticon;
+    effectPickerOpen = false;
+  }
+
   async function submit(e: Event) {
     e.preventDefault();
+    // The release of a long press must not send as well as open the sheet.
+    if (sendHeld) {
+      sendHeld = false;
+      return;
+    }
+    await deliver();
+  }
+
+  async function deliver(options: {scheduleDate?: number; silent?: boolean} = {}) {
     const text = draft.trim();
     if (!text || activePeerId === null) return;
+    // Slow mode blocks sending now, but never blocks scheduling for later.
+    if (!editing && !options.scheduleDate && slowModeLeft > 0) return;
 
     // The debounced draft save is still pending with the text being sent; let
     // it fire and it writes the message back as a draft right after sendText
@@ -1860,29 +1906,40 @@
       return;
     }
 
-    const context = activeReplyContext;
-    const reply = replyTo ?
-      replySendOptions(
-        {
-          mid: replyTo.mid,
-          peerId: context?.peerId ?? activePeerId,
-          title: replyTo.fromTitle,
-          text: replyTo.text,
-          chatTitle: context?.chatTitle ?? '',
-          quote: context?.quote ?? null
-        },
-        activePeerId
-      ) :
-      {};
+    const replyToMsgId = replyTo?.mid;
+    const peer = activePeerId;
+    const scheduleDate = options.scheduleDate;
+    const effect = sendEffect;
     draft = '';
-    cancelReply();
+    replyTo = null;
+    sendEffect = '';
+    sendEffectEmoticon = '';
 
     try {
-      await sendMessage(activePeerId, text, {...reply, threadId: activeThreadId});
+      await sendMessageWithOptions(peer, text, {
+        replyToMsgId,
+        threadId: activeThreadId,
+        scheduleDate,
+        silent: options.silent ?? silentDefault,
+        effect: effect || undefined,
+        sendAsPeerId: sendAsPeerId ?? undefined
+      });
       lastTypingSent = 0;
-      sendTyping(activePeerId, activeThreadId, 'cancel').catch(() => {});
-      // The outgoing message arrives back through history_multiappend.
-      await scrollToBottom();
+      sendTyping(peer, activeThreadId, 'cancel').catch(() => {});
+
+      if (scheduleDate) {
+        // A scheduled message never joins the timeline — it joins the queue.
+        refreshScheduledCount(peer);
+      } else {
+        // Start the next cooldown immediately; the server-side value arrives
+        // with the next chat_full_update and overwrites this.
+        if (slowMode?.seconds) {
+          nowSeconds = Math.floor(Date.now() / 1000);
+          slowMode = {...slowMode, nextSendDate: nowSeconds + slowMode.seconds};
+        }
+        // The outgoing message arrives back through history_multiappend.
+        await scrollToBottom();
+      }
     } catch (err: any) {
       error = errorOf(err, 'Failed to send');
     }
@@ -2254,7 +2311,7 @@
                   e.preventDefault();
                   messageMenu = {mid: message.mid, x: e.clientX, y: e.clientY};
                 }}
-                onclick={() => (selecting ? toggleSelected(message.mid) : openInPlayer(message))}
+                onclick={() => selecting && toggleSelected(message.mid)}
                 role="presentation"
               >
                 {#if !message.out && message.fromTitle}
@@ -2263,12 +2320,15 @@
                   </button>
                 {/if}
 
-                {#if message.forward}
-                  <ForwardHeader forward={message.forward} onopenpeer={openPeerChat} />
+                {#if message.forwardedFrom}
+                  <span class="forwarded">Forwarded from {message.forwardedFrom}</span>
                 {/if}
 
                 {#if message.reply}
-                  <ReplyHeader reply={message.reply} onjump={() => jumpToReply(message.reply!)} />
+                  <button class="reply-quote jump" onclick={() => jumpTo(message.reply!.mid)}>
+                    <span class="reply-title">{message.reply.title}</span>
+                    <span class="reply-text">{message.reply.text}</span>
+                  </button>
                 {/if}
 
                 {#if group.items.length > 1}
@@ -2498,27 +2558,13 @@
         <div class="reply-bar">
           <span class="reply-quote">
             <span class="reply-title">
-              {#if editing}
-                Editing message
-              {:else}
-                {activeReplyContext?.quote ? 'Quoting' : 'Replying to'}
-                {replyTo?.fromTitle}
-                {#if activeReplyContext?.chatTitle}
-                  <!-- The original is in another chat; say which one. -->
-                  <span class="reply-in">in {activeReplyContext.chatTitle}</span>
-                {/if}
-              {/if}
+              {editing ? 'Editing message' : `Replying to ${replyTo?.fromTitle}`}
             </span>
-            <span class="reply-text">
-              {activeReplyContext?.quote?.text || (editing ?? replyTo)?.text || 'Media'}
-            </span>
+            <span class="reply-text">{(editing ?? replyTo)?.text || 'Media'}</span>
           </span>
-          {#if activeReplyContext?.quote}
-            <button class="cancel" onclick={dropQuote} title="Reply without the quote">❝✕</button>
-          {/if}
           <button
             class="cancel"
-            onclick={() => (editing ? cancelEdit() : cancelReply())}
+            onclick={() => (editing ? cancelEdit() : (replyTo = null))}
             aria-label="Cancel"
           >✕</button>
         </div>
@@ -2530,6 +2576,31 @@
             onemoji={(emoji) => (draft += emoji)}
             ondocument={pickDocument}
           />
+        {/if}
+        {#if sendAsPickerOpen && activePeerId !== null}
+          <SendAsPicker
+            peerId={activePeerId}
+            current={sendAsPeerId}
+            onpick={(id) => (sendAsPeerId = id)}
+            onclose={() => (sendAsPickerOpen = false)}
+          />
+        {/if}
+        {#if effectPickerOpen}
+          <EffectPicker
+            selected={sendEffect}
+            onpick={pickEffect}
+            onclose={() => (effectPickerOpen = false)}
+          />
+        {/if}
+        {#if sendAsPeerId !== null}
+          <button
+            type="button"
+            class="attach send-as"
+            onclick={() => (sendAsPickerOpen = !sendAsPickerOpen)}
+            title="Send message as…"
+            aria-label="Send message as…"
+            disabled={!!editing}
+          ><Avatar peerId={sendAsPeerId} title="" size={22} /></button>
         {/if}
         {#if botMenuButton}
           <button
@@ -2569,10 +2640,72 @@
           oninput={onDraftInput}
           onkeydown={onComposerKey}
         ></textarea>
-        <button type="submit" disabled={!draft.trim()} aria-label={editing ? 'Save' : 'Send'}>
-          <Glyph name={editing ? 'check' : 'send'} />
+        {#if !editing}
+          <button
+            type="button"
+            class="attach effect-button"
+            class:armed={!!sendEffect}
+            onclick={() => (effectPickerOpen = !effectPickerOpen)}
+            title={sendEffect ? 'Message effect armed' : 'Add a message effect'}
+            aria-label="Add a message effect"
+          >{sendEffectEmoticon || '✨'}</button>
+        {/if}
+        {#if scheduledCount > 0 && !editing}
+          <button
+            type="button"
+            class="attach scheduled-button"
+            onclick={() => (scheduledOpen = true)}
+            title="Scheduled messages"
+            aria-label="Scheduled messages"
+          >🕑<span class="scheduled-count">{scheduledCount}</span></button>
+        {/if}
+        <button
+          type="submit"
+          class="send-button"
+          class:silent={silentDefault && !editing}
+          disabled={!draft.trim() || (!editing && slowModeLeft > 0)}
+          aria-label={editing ? 'Save' : 'Send'}
+          title={editing ?
+            'Save' :
+            slowModeLeft > 0 ?
+              `Slow mode — wait ${slowModeLabel(slowModeLeft)}` :
+              'Send. Right-click or hold for scheduled and silent send'}
+          oncontextmenu={openSendOptions}
+          onpointerdown={onSendPointerDown}
+          onpointerup={cancelSendHold}
+          onpointerleave={cancelSendHold}
+        >
+          {#if !editing && slowModeLeft > 0}
+            <span class="slowmode">{slowModeLabel(slowModeLeft)}</span>
+          {:else}
+            <Glyph name={editing ? 'check' : 'send'} />
+          {/if}
         </button>
       </form>
+
+      {#if sendOptionsOpen && activePeerId !== null}
+        <SendOptionsSheet
+          peerId={activePeerId}
+          isUser={activeIsUser}
+          defaultSilent={silentDefault}
+          onsend={(options) => {
+            sendOptionsOpen = false;
+            silentDefault = isSilentByDefault(activePeerId!);
+            deliver(options);
+          }}
+          onclose={() => (sendOptionsOpen = false)}
+        />
+      {/if}
+
+      {#if scheduledOpen && activePeerId !== null}
+        <ScheduledMessages
+          peerId={activePeerId}
+          title={activeTitle}
+          onclose={() => (scheduledOpen = false)}
+        />
+      {/if}
+
+      <EffectOverlay peerId={activePeerId} />
     {/if}
   </section>
 
@@ -2608,15 +2741,9 @@
     peerId={activePeerId}
     items={mediaMessages}
     bind:index={lightboxIndex}
-    threadId={activeThreadId}
     onclose={() => (lightboxIndex = null)}
-    onforward={openForward}
-    onjump={jumpTo}
   />
 {/if}
-
-<AudioPlayerBar />
-
 
 {#if pendingFiles.length}
   <SendFiles
@@ -2673,12 +2800,7 @@
   <div class="menu-backdrop" onclick={() => (messageMenu = null)} role="presentation"></div>
   <div class="context-menu" style="left: {messageMenu.x}px; top: {messageMenu.y}px">
     {#if menuMessage}
-      <button onclick={() => { replyToMessage(menuMessage); messageMenu = null; }}>
-        {trackedQuote(menuMessage.mid) ? 'Reply with quote' : 'Reply'}
-      </button>
-      <button onclick={() => { openReplyElsewhere(menuMessage); messageMenu = null; }}>
-        Reply in…
-      </button>
+      <button onclick={() => { replyToMessage(menuMessage); messageMenu = null; }}>Reply</button>
       {#if menuMessage.text}
         <button onclick={() => { copyText(menuMessage); messageMenu = null; }}>Copy text</button>
       {/if}
@@ -2696,22 +2818,12 @@
   </div>
 {/if}
 
-{#if forwarding.length}
-  <ForwardSheet
-    dialogs={allDialogs}
-    count={forwarding.length}
-    hasCaptions={forwarding.some((m) => m.media && m.text)}
-    onforward={doForward}
-    onclose={() => (forwarding = [])}
-  />
-{/if}
-
-{#if replyingElsewhere}
+{#if forwarding}
   <PeerPicker
-    title="Reply in…"
+    title="Forward to"
     dialogs={allDialogs}
-    onpick={doReplyElsewhere}
-    onclose={() => (replyingElsewhere = null)}
+    onpick={doForward}
+    onclose={() => (forwarding = null)}
   />
 {/if}
 
@@ -3696,6 +3808,23 @@
     }
   }
 
+  .forwarded {
+    font-size: 12px;
+    font-style: italic;
+    opacity: 0.8;
+  }
+
+  button.reply-quote.jump {
+    background: none;
+    font: inherit;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+    border-top: none;
+    border-right: none;
+    border-bottom: none;
+  }
+
   .webpage {
     display: grid;
     gap: 2px;
@@ -3982,13 +4111,7 @@
 
   .reply-bar .reply-quote {
     flex: 1;
-    min-width: 0;
     border-left-color: var(--accent);
-  }
-
-  .reply-in {
-    font-weight: 400;
-    color: var(--text-dim);
   }
 
   form {
@@ -4049,6 +4172,59 @@
 
   .attach:hover {
     opacity: 1;
+  }
+
+  /* ---------- send options ---------- */
+
+  .send-as {
+    display: grid;
+    place-items: center;
+    padding: 0;
+    opacity: 1;
+  }
+
+  .effect-button {
+    line-height: 1;
+  }
+
+  .effect-button.armed {
+    opacity: 1;
+    filter: drop-shadow(0 0 4px var(--accent));
+  }
+
+  .scheduled-button {
+    position: relative;
+    line-height: 1;
+  }
+
+  .scheduled-count {
+    position: absolute;
+    top: -2px;
+    right: -4px;
+    min-width: 14px;
+    padding: 0 3px;
+    border-radius: 999px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 9px;
+    line-height: 14px;
+    text-align: center;
+  }
+
+  .send-button.silent {
+    /* A muted send reads as a quieter button, the way the official clients
+       swap the icon for the crossed-out bell. */
+    background: color-mix(in srgb, var(--action) 55%, transparent);
+  }
+
+  .send-button:disabled {
+    cursor: default;
+    opacity: 0.55;
+  }
+
+  .slowmode {
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
   }
 
   form button:disabled {
