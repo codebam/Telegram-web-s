@@ -2,15 +2,47 @@
   import Glyph from './Glyph.svelte';
   import {loadMediaUrl, readMediaContents, saveMediaToDisk, type MediaItem} from '$lib/telegram/chats';
 
-  let {peerId, mid, media}: {peerId: number; mid: number; media: MediaItem} = $props();
+  let {
+    peerId,
+    mid,
+    media,
+    fill = false
+  }: {
+    peerId: number;
+    mid: number;
+    media: MediaItem;
+    /**
+     * Stretch to the tile the caller sized, instead of reserving the media's
+     * own aspect ratio. Album tiles are laid out by the grid, not by the photo.
+     */
+    fill?: boolean;
+  } = $props();
 
   let url = $state<string | null>(null);
   let failed = $state(false);
+
+  /**
+   * Spoilered media stays covered until it is clicked, the same as the official
+   * clients. Reset per message so paging the list never uncovers the next one.
+   */
+  let revealed = $state(false);
+  const hidden = $derived(media.spoiler && !revealed);
+
+  function reveal(e: MouseEvent) {
+    if (!hidden) return;
+    // Swallow the click that uncovers it — otherwise the same tap also opens
+    // the lightbox on the media it was meant to keep hidden.
+    e.stopPropagation();
+    e.preventDefault();
+    revealed = true;
+  }
 
   $effect(() => {
     const key = `${peerId}_${mid}`;
     url = null;
     failed = false;
+    // A recycled component must never carry the previous message's reveal.
+    revealed = false;
     loadMediaUrl(peerId, mid).then((resolved) => {
       if(key !== `${peerId}_${mid}`) return;
       url = resolved;
@@ -74,21 +106,30 @@
   <div
     class="frame"
     class:sticker={media.kind === 'sticker'}
-    style="aspect-ratio: {ratio}"
+    class:fill
+    class:hidden
+    style={fill ? '' : `aspect-ratio: ${ratio}`}
   >
-    {#if url && media.kind === 'gif'}
+    {#if url && media.kind === 'gif' && !hidden}
       <!-- svelte-ignore a11y_media_has_caption -->
       <video src={url} autoplay loop muted playsinline></video>
       <span class="play">GIF</span>
     {:else if url}
       <img src={url} alt={media.kind} />
-      {#if media.kind === 'video'}
+      {#if media.kind === 'video' && !hidden}
         <span class="play">▶ {duration(media.duration)}</span>
       {/if}
     {:else if failed}
       <span class="fallback">{media.kind === 'video' ? '🎬 Video' : '📷 Photo'}</span>
     {:else}
       <span class="fallback">Loading…</span>
+    {/if}
+
+    {#if hidden}
+      <button class="spoiler" onclick={reveal} aria-label="Show hidden media">
+        <span class="dots" aria-hidden="true"></span>
+        <span class="spoiler-label">Spoiler</span>
+      </button>
     {/if}
   </div>
 {:else if media.kind === 'voice' || media.kind === 'audio'}
@@ -137,6 +178,69 @@
   .frame.sticker {
     background: none;
     max-width: 160px;
+  }
+
+  /* Album tiles are sized by the grid, so the media fills whatever it is
+     given instead of reserving its own aspect ratio. */
+  .frame.fill {
+    max-width: none;
+    max-height: none;
+    height: 100%;
+    border-radius: 0;
+  }
+
+  .frame.hidden img,
+  .frame.hidden video {
+    filter: blur(18px);
+    transform: scale(1.15);
+  }
+
+  .spoiler {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    border: none;
+    padding: 0;
+    background: rgba(0, 0, 0, 0.25);
+    cursor: pointer;
+  }
+
+  /* Two offset dot grids drifting past each other stand in for the particle
+     field the official clients animate over a spoiler. */
+  .dots {
+    position: absolute;
+    inset: -8px;
+    background-image:
+      radial-gradient(rgba(255, 255, 255, 0.9) 1px, transparent 1px),
+      radial-gradient(rgba(255, 255, 255, 0.55) 1px, transparent 1px);
+    background-size: 7px 7px, 11px 11px;
+    animation: spoiler-drift 6s linear infinite;
+  }
+
+  .spoiler-label {
+    position: relative;
+    padding: 3px 10px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.5);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  @keyframes spoiler-drift {
+    from {
+      background-position: 0 0, 0 0;
+    }
+    to {
+      background-position: 21px 14px, -22px 11px;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .dots {
+      animation: none;
+    }
   }
 
   img,

@@ -64,6 +64,11 @@ export type MediaItem = {
    * sender is entitled to that receipt.
    */
   unread: boolean;
+  /**
+   * The sender hid this media behind a spoiler. It has to render covered until
+   * the viewer asks to see it — that is the whole point of the flag.
+   */
+  spoiler: boolean;
 };
 
 export type ReplyPreview = {
@@ -243,7 +248,8 @@ function mediaOf(message: any): MediaItem | null {
       size: media.photo.size ?? 0,
       duration: 0,
       selfDestruct: !!media.ttl_seconds,
-      unread: !!message.pFlags?.media_unread
+      unread: !!message.pFlags?.media_unread,
+      spoiler: !!media.pFlags?.spoiler
     };
   }
 
@@ -277,7 +283,8 @@ function mediaOf(message: any): MediaItem | null {
       // A one-time voice message or video note carries the same flag as a
       // self-destructing photo, plus `round_message` / `voice` once-flags.
       selfDestruct: !!media.ttl_seconds,
-      unread: !!message.pFlags?.media_unread
+      unread: !!message.pFlags?.media_unread,
+      spoiler: !!media.pFlags?.spoiler
     };
   }
 
