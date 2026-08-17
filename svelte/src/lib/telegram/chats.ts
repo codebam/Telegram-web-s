@@ -45,13 +45,18 @@ export type TopicItem = {
 };
 
 export type MediaItem = {
-  kind: 'photo' | 'video' | 'gif' | 'sticker' | 'voice' | 'audio' | 'file';
+  kind: 'photo' | 'video' | 'gif' | 'sticker' | 'voice' | 'audio' | 'round' | 'file';
   /** Renderable thumbnail/full URL, resolved lazily via `loadMediaUrl`. */
   width: number;
   height: number;
   name: string;
   size: number;
   duration: number;
+  /**
+   * Packed waveform bytes of a voice note (100 five-bit samples). Decoded for
+   * drawing by `decodeWaveform` in `$lib/telegram/voice`.
+   */
+  waveform?: Uint8Array;
   /**
    * Self-destructing media (`ttl_seconds`) or a one-time voice/video note. The
    * UI must never render it as ordinary media: keeping a copy on screen after
@@ -265,6 +270,7 @@ function mediaOf(message: any): MediaItem | null {
 
     const kind: MediaItem['kind'] = sticker ? 'sticker' :
       animated || document.type === 'gif' ? 'gif' :
+      video?.pFlags?.round_message ? 'round' :
       video ? 'video' :
       audio ? (audio.pFlags?.voice ? 'voice' : 'audio') :
       document.mime_type?.startsWith('image/') ? 'photo' :
@@ -277,6 +283,7 @@ function mediaOf(message: any): MediaItem | null {
       name: filename?.file_name ?? '',
       size: document.size ?? 0,
       duration: video?.duration ?? audio?.duration ?? 0,
+      waveform: audio?.waveform,
       // A one-time voice message or video note carries the same flag as a
       // self-destructing photo, plus `round_message` / `voice` once-flags.
       selfDestruct: !!media.ttl_seconds,
@@ -512,6 +519,7 @@ async function messagePreview(message: any): Promise<string> {
     case 'gif': return '🎞 GIF';
     case 'sticker': return '🖼 Sticker';
     case 'voice': return '🎤 Voice message';
+    case 'round': return '📹 Video message';
     case 'audio': return '🎵 Audio';
     default: return `📎 ${media.name || 'File'}`;
   }
