@@ -2330,16 +2330,23 @@
       {/if}
 
       {#if inlineResults.length}
-        <div class="inline-results">
+        {@const isGallery = inlineSwitch?.gallery || inlineResults.every((r) => r.isGif || r.type === 'photo' || r.type === 'gif' || r.type === 'sticker')}
+        <div class="inline-results" class:is-gallery={isGallery}>
           {#each inlineResults as result (result.queryAndResultId)}
-            <button onclick={() => pickInline(result)}>
-              <InlinePreview {result} size={44} />
-              <div class="inline-text">
-                <span class="inline-title">{result.title}</span>
-                {#if result.description}
-                  <span class="inline-desc">{result.description}</span>
-                {/if}
-              </div>
+            <button
+              class:gallery-item={isGallery}
+              onclick={() => pickInline(result)}
+              title={result.title || result.description}
+            >
+              <InlinePreview {result} size={isGallery ? 80 : 44} isGrid={isGallery} />
+              {#if !isGallery}
+                <div class="inline-text">
+                  <span class="inline-title">{result.title}</span>
+                  {#if result.description}
+                    <span class="inline-desc">{result.description}</span>
+                  {/if}
+                </div>
+              {/if}
             </button>
           {/each}
         </div>
@@ -3224,10 +3231,17 @@
   }
 
   .inline-results {
-    max-height: 200px;
+    max-height: 220px;
     overflow-y: auto;
     border-top: 1px solid var(--border);
     flex: none;
+  }
+
+  .inline-results.is-gallery {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
+    gap: 4px;
+    padding: 8px 12px;
   }
 
   .inline-results button {
@@ -3241,6 +3255,13 @@
     color: inherit;
     text-align: left;
     cursor: pointer;
+  }
+
+  .inline-results button.gallery-item {
+    display: block;
+    padding: 0;
+    border-radius: 6px;
+    overflow: hidden;
   }
 
   .inline-results button:hover {
