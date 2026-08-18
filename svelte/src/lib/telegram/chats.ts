@@ -1365,9 +1365,21 @@ export async function onDialogsUpdate(callback: () => void): Promise<() => void>
 /* Files: avatars and message media                                    */
 /* ------------------------------------------------------------------ */
 
-/** Drops the memoised avatar so the next read re-resolves it — used after an upload. */
+/**
+ * Drops the memoised avatar so the next read re-resolves it — used after an
+ * upload, and after a load fails because the worker revoked the URL (see
+ * `staleUrl.ts`).
+ */
 export function invalidateAvatarUrl(peerId: number): void {
   avatarUrls.delete(peerId);
+}
+
+/** Same, for one message's media: every size this tab asked for is forgotten. */
+export function invalidateMediaUrl(peerId: number, mid: number): void {
+  const prefix = `${messageKey(peerId, mid)}_`;
+  for(const key of [...mediaUrls.keys()]) {
+    if(key.startsWith(prefix)) mediaUrls.delete(key);
+  }
 }
 
 /** Blob/stream URL for a peer's small avatar, or null when it has none. */

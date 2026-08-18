@@ -2,6 +2,7 @@
   import VideoPlayer from './VideoPlayer.svelte';
   import {deleteMessages, saveMediaToDisk, type MessageItem} from '$lib/telegram/chats';
   import {
+    invalidateViewerMedia,
     loadMediaPage,
     loadViewerMedia,
     loadViewerThumb,
@@ -11,6 +12,7 @@
     type VideoQuality,
     type ViewerItem
   } from '$lib/telegram/viewer';
+  import {staleUrlRetry} from '$lib/telegram/staleUrl';
 
   /**
    * The media viewer.
@@ -73,8 +75,10 @@
   let loadingOlder = false;
   let loadingNewer = false;
   let thumbs = $state<Record<number, string>>({});
+  const retry = staleUrlRetry();
   /** Deliberately outside reactivity: these only stop work being repeated. */
   const thumbRequested = new Set<number>();
+  const thumbRetried = new Set<number>();
   const pagedFrom = new Set<string>();
 
   const current = $derived(list[pos]);
@@ -93,6 +97,7 @@
     failed = false;
     quality = '';
     qualities = [];
+    retry.reset();
     resetZoom();
 
     loadViewerMedia(item.peerId, item.mid).then((resolved) => {
@@ -169,6 +174,40 @@
       });
     }
   });
+
+  /**
+   * The worker revoked the URL under the element — its LRU evicted the entry
+   * while the viewer was open. Forget it and download again.
+   */
+  function reloadCurrent() {
+    const item = current;
+    if (!item || !retry.shouldRetry()) return;
+
+    invalidateViewerMedia(item.peerId, item.mid);
+    url = null;
+    loadViewerMedia(item.peerId, item.mid, quality || undefined).then((resolved) => {
+      if (current?.mid !== item.mid) return;
+      url = resolved;
+      failed = !resolved;
+    });
+  }
+
+  function reloadThumb(item: ViewerItem) {
+    // One retry per poster, so a thumb that fails for any other reason cannot
+    // spin the filmstrip.
+    if (thumbRetried.has(item.mid)) return;
+    thumbRetried.add(item.mid);
+
+    invalidateViewerMedia(item.peerId, item.mid);
+    thumbRequested.delete(item.mid);
+    const next = {...thumbs};
+    delete next[item.mid];
+    thumbs = next;
+
+    loadViewerThumb(item.peerId, item.mid).then((resolved) => {
+      if (resolved) thumbs = {...thumbs, [item.mid]: resolved};
+    });
+  }
 
   function step(delta: number) {
     const next = pos + delta;
@@ -455,7 +494,7 @@
         <!-- A GIF is a silent looping mp4, so it needs a <video> here just as it
              does in the bubble — an <img> pointed at it renders nothing. -->
         <!-- svelte-ignore a11y_media_has_caption -->
-        <video src={url} autoplay loop muted playsinline></video>
+        <video src={url} autoplay loop muted playsinline onerror={reloadCurrent}></video>
       {:else if current?.kind === 'video'}
         <VideoPlayer
           src={url}
@@ -471,7 +510,7 @@
           }}
         />
       {:else}
-        <img src={url} alt={current?.caption || ''} draggable="false" />
+        <img src={url} alt={current?.caption || ''} draggable="false" onerror={reloadCurrent} />
       {/if}
     </div>
   </div>
@@ -491,7 +530,7 @@
           aria-current={i === pos}
         >
           {#if thumbs[item.mid]}
-            <img src={thumbs[item.mid]} alt="" />
+            <img src={thumbs[item.mid]} alt="" onerror={() => reloadThumb(item)} />
           {/if}
           {#if item.kind !== 'photo'}
             <span class="badge">▶</span>

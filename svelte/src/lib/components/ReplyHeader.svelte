@@ -1,16 +1,33 @@
 <script lang="ts">
   import {enqueueLoad} from '$lib/telegram/loadQueue';
   import {loadReplyThumbUrl, type ReplyInfo} from '$lib/telegram/reply';
+  import {staleUrlRetry} from '$lib/telegram/staleUrl';
 
   let {reply, onjump}: {reply: ReplyInfo; onjump: () => void} = $props();
 
   let thumb = $state<string | null>(null);
+  const retry = staleUrlRetry();
+
+  /** The worker revoked the URL out from under the element; ask again. */
+  function reload() {
+    if(!retry.shouldRetry()) {
+      thumb = null;
+      return;
+    }
+
+    const {peerId, mid} = reply;
+    thumb = null;
+    enqueueLoad(() => loadReplyThumbUrl(peerId, mid)).then((url) => {
+      if(reply.peerId === peerId && reply.mid === mid) thumb = url;
+    });
+  }
 
   // A history full of replies is a history full of thumbnails, so they go
   // through the same bounded queue as the media grids.
   $effect(() => {
     const {peerId, mid, hasMedia} = reply;
     thumb = null;
+    retry.reset();
     if (!hasMedia) return;
 
     let cancelled = false;
@@ -32,7 +49,7 @@
   title={reply.deleted ? 'The original message is gone' : 'Go to message'}
 >
   {#if thumb}
-    <img class="thumb" src={thumb} alt="" />
+    <img class="thumb" src={thumb} alt="" onerror={reload} />
   {/if}
   <span class="body">
     <span class="who">

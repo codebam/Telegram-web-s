@@ -1,6 +1,13 @@
 <script lang="ts">
   import Glyph from './Glyph.svelte';
-  import {loadMediaUrl, readMediaContents, saveMediaToDisk, type MediaItem} from '$lib/telegram/chats';
+  import {
+    invalidateMediaUrl,
+    loadMediaUrl,
+    readMediaContents,
+    saveMediaToDisk,
+    type MediaItem
+  } from '$lib/telegram/chats';
+  import {staleUrlRetry} from '$lib/telegram/staleUrl';
   import {decodeWaveform} from '$lib/telegram/voice';
 
   let {
@@ -42,18 +49,41 @@
     revealed = true;
   }
 
-  $effect(() => {
+  const retry = staleUrlRetry();
+
+  function resolve() {
     const key = `${peerId}_${mid}`;
-    url = null;
-    failed = false;
-    // A recycled component must never carry the previous message's reveal.
-    revealed = false;
     loadMediaUrl(peerId, mid, 480, wantsFullFile).then((resolved) => {
       if(key !== `${peerId}_${mid}`) return;
       url = resolved;
       failed = !resolved;
     }).catch(() => (failed = true));
+  }
+
+  $effect(() => {
+    url = null;
+    failed = false;
+    // A recycled component must never carry the previous message's reveal.
+    revealed = false;
+    retry.reset();
+    resolve();
   });
+
+  /**
+   * The URL went stale — the worker's LRU evicted it and revoked it out from
+   * under the element. Forget it and download again.
+   */
+  function reload() {
+    if(!retry.shouldRetry()) {
+      url = null;
+      failed = true;
+      return;
+    }
+
+    invalidateMediaUrl(peerId, mid);
+    url = null;
+    resolve();
+  }
 
   // Keep the bubble from collapsing then jumping once the image decodes:
   // reserve the real aspect ratio up front, capped to the bubble width.
@@ -185,10 +215,10 @@
   >
     {#if url && media.kind === 'gif' && !hidden}
       <!-- svelte-ignore a11y_media_has_caption -->
-      <video src={url} autoplay loop muted playsinline></video>
+      <video src={url} autoplay loop muted playsinline onerror={reload}></video>
       <span class="play">GIF</span>
     {:else if url}
-      <img src={url} alt={media.kind} />
+      <img src={url} alt={media.kind} onerror={reload} />
       {#if media.kind === 'video' && !hidden}
         <span class="play">▶ {duration(media.duration)}</span>
       {/if}
@@ -223,6 +253,7 @@
         muted={roundMuted}
         playsinline
         onplay={onPlay}
+        onerror={reload}
       ></video>
       <span class="round-badge">{roundMuted ? '🔇' : '🔊'} {duration(media.duration)}</span>
     {:else if failed}

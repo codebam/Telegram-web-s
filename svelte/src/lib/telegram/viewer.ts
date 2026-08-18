@@ -34,6 +34,18 @@ export type VideoQuality = {
 };
 
 const urlCache = new Map<string, string | null>();
+
+/**
+ * Forgets the memoised URLs for one item. The worker revokes a blob URL once
+ * its own LRU evicts it, so a long-lived viewer can be holding a string that no
+ * longer resolves — see `staleUrl.ts`.
+ */
+export function invalidateViewerMedia(peerId: number, mid: number): void {
+  const prefix = `${peerId}_${mid}_`;
+  for(const key of [...urlCache.keys()]) {
+    if(key.startsWith(prefix)) urlCache.delete(key);
+  }
+}
 const titleCache = new Map<number, string>();
 
 const cacheKey = (peerId: number, mid: number, docId?: string) =>
