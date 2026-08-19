@@ -85,10 +85,16 @@
     };
   });
 
-  /** lottieLoader has no 'complete' event on a non-looping worker animation. */
+  /**
+   * lottieLoader has no 'complete' event on a non-looping worker animation, so
+   * the last frame stands in for one. The frame number arrives as the event's
+   * argument — the player exposes `curFrame`, never `currentFrame`, and
+   * comparing against that typo left every burst mounted forever.
+   */
   function onEnterFrame(animation: any) {
-    return () => {
-      if (animation.currentFrame >= animation.maxFrame - 1) onfinish?.();
+    return (frameNo: number) => {
+      const frame = frameNo ?? animation.curFrame;
+      if (frame >= animation.maxFrame - 1) onfinish?.();
     };
   }
 

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import {onDestroy} from 'svelte';
+
   import ReactionSticker from './ReactionSticker.svelte';
   import ReactorsPopup from './ReactorsPopup.svelte';
   import {
@@ -31,8 +33,10 @@
 
   let items = $state<MessageReaction[]>([]);
   let reactorsFor = $state<string | null>(null);
-  /** The burst playing over the bubble, if any. */
-  let burst = $state<{docId: string; token: number} | null>(null);
+  /** The burst playing over the chip it belongs to, if any. */
+  let burst = $state<{docId: string; key: string; token: number} | null>(null);
+  /** Safety net: a burst whose animation never reports its last frame. */
+  let burstTimer: ReturnType<typeof setTimeout> | undefined;
   let effectsOn = false;
   let chosenKeys = new Set<string>();
   let firstLoad = true;
@@ -56,7 +60,9 @@
     // reactions that ship without one (custom emoji, mostly).
     const effect = added && (added.aroundDocId || added.selectDocId);
     if (!firstLoad && effect && effectsOn) {
-      burst = {docId: effect, token: ++token};
+      burst = {docId: effect, key: added.key, token: ++token};
+      clearTimeout(burstTimer);
+      burstTimer = setTimeout(() => (burst = null), 4000);
     }
     firstLoad = false;
   }
@@ -122,6 +128,8 @@
     }
   }
 
+  onDestroy(() => clearTimeout(burstTimer));
+
   function showReactors(event: MouseEvent, key: string) {
     event.preventDefault();
     event.stopPropagation();
@@ -131,41 +139,43 @@
 
 <span class="reaction-bar">
   {#each items as item (item.key)}
-    <button
-      class="chip"
-      class:chosen={item.chosen}
-      class:paid={item.kind === 'paid'}
-      onclick={() => toggle(item)}
-      oncontextmenu={(event) => showReactors(event, item.key)}
-      title="Right-click to see who reacted"
-    >
-      {#if item.kind === 'paid'}
-        <span class="plain">⭐</span>
-      {:else if item.iconDocId}
-        <ReactionSticker docId={item.iconDocId} size={16} fallback={item.emoticon} />
-      {:else}
-        <span class="plain">{item.emoticon}</span>
+    <span class="slot">
+      <button
+        class="chip"
+        class:chosen={item.chosen}
+        class:paid={item.kind === 'paid'}
+        onclick={() => toggle(item)}
+        oncontextmenu={(event) => showReactors(event, item.key)}
+        title="Right-click to see who reacted"
+      >
+        {#if item.kind === 'paid'}
+          <span class="plain">⭐</span>
+        {:else if item.iconDocId}
+          <ReactionSticker docId={item.iconDocId} size={16} fallback={item.emoticon} />
+        {:else}
+          <span class="plain">{item.emoticon}</span>
+        {/if}
+        <span class="count">{item.count}</span>
+      </button>
+
+      {#if burst && burst.key === item.key}
+        {#key burst.token}
+          <span class="burst" aria-hidden="true">
+            <ReactionSticker
+              docId={burst.docId}
+              size={72}
+              loop={false}
+              onfinish={() => (burst = null)}
+            />
+          </span>
+        {/key}
       {/if}
-      <span class="count">{item.count}</span>
-    </button>
+    </span>
   {/each}
 
   <!-- No "add a reaction" affordance here: like the official clients, reacting
        is reached by right-clicking (or long-pressing) the message. Only the
        chips for reactions that already exist live on the bubble. -->
-
-  {#if burst}
-    {#key burst.token}
-      <span class="burst" aria-hidden="true">
-        <ReactionSticker
-          docId={burst.docId}
-          size={100}
-          loop={false}
-          onfinish={() => (burst = null)}
-        />
-      </span>
-    {/key}
-  {/if}
 </span>
 
 {#if reactorsFor !== null}
@@ -179,6 +189,11 @@
     flex-wrap: wrap;
     gap: 4px;
     align-items: center;
+  }
+
+  .slot {
+    position: relative;
+    display: inline-flex;
   }
 
   .chip {
@@ -212,14 +227,15 @@
     font-variant-numeric: tabular-nums;
   }
 
-  /* The around-animation plays over the bubble and must never take clicks. */
+  /* The around-animation radiates from the chip it belongs to and must never
+     take clicks — anchoring it to the bar instead threw it across the text. */
   .burst {
     position: absolute;
-    left: 0;
-    bottom: 0;
-    width: 100px;
-    height: 100px;
-    transform: translate(-25%, 35%);
+    left: 50%;
+    top: 50%;
+    width: 72px;
+    height: 72px;
+    transform: translate(-50%, -50%);
     pointer-events: none;
     z-index: 5;
   }
