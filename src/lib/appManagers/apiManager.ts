@@ -289,6 +289,16 @@ export class ApiManager extends ApiManagerMethods {
     });
   }
 
+  /**
+   * Whether this account has a session a 401 could be the death of. False while
+   * the user is still signing in, where the server answers account-only methods
+   * with AUTH_KEY_UNREGISTERED instead.
+   */
+  private async hasSession(): Promise<boolean> {
+    const state = await this.appStateManager.getState();
+    return state?.authState?._ === 'authStateSignedIn';
+  }
+
   public async logOut(migrateAccountTo?: ActiveAccountNumber) {
     if(this.loggingOut) {
       return;
@@ -654,10 +664,18 @@ export class ApiManager extends ApiManagerMethods {
 
       if(!options.noErrorBox) {
         // error.stack = stack || (error.originalError && error.originalError.stack) || error.stack || (new Error()).stack;
-        setTimeout(() => {
+        setTimeout(async() => {
           if(!error.handled) {
             if(error.code === 401) {
-              this.logOut();
+              // A 401 only means "the session died" when there was one. While
+              // the user is still on the sign-in screen the server answers
+              // account-only methods with AUTH_KEY_UNREGISTERED, and logging out
+              // over that clears the storages and reloads the page — which
+              // throws away the number or code being typed (and, if the offending
+              // call is made on every load, reloads in a loop).
+              if(await this.hasSession()) {
+                this.logOut();
+              }
             } else {
               // ErrorService.show({error: error}); // WARNING
             }

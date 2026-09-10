@@ -67,21 +67,45 @@ async function doBoot(): Promise<TelegramClient> {
   // its phoneCall updates have nowhere to go.
   apiManagerProxy.updateTabState('idleStartTime', 0);
 
+  const authState = allStates[getCurrentAccount()].state.authState;
+
+  // Only an account that already has a session may run the signed-in boot work.
+  // The rest of the app starts it on sign-in — see `startSignedInServices`.
+  if (authState._ === 'authStateSignedIn') {
+    await startSignedInServices(managers);
+  }
+
+  return {managers, authState};
+}
+
+/**
+ * Boot work that only makes sense once there is a session: the updates loop and
+ * the content-restriction warm-up. Both call account-only methods
+ * (`updates.getState`, `account.getContentSettings`), which the server answers
+ * with AUTH_KEY_UNREGISTERED (401) while the tab is still on the sign-in
+ * screen. tweb's api layer reads a 401 as a dead session: it logs the account
+ * out, and this client answers `logging_out` by reloading the page. Running
+ * this before login therefore cleared storage and reloaded every few seconds —
+ * the sign-in form was wiped before it could be submitted, over and over.
+ *
+ * Called during boot for a stored session, and again from `markSignedIn()` when
+ * the user finishes signing in. `attach()` is idempotent and the warm-up is
+ * memoised in `restrictions.ts`, so a second call is harmless.
+ */
+export async function startSignedInServices(managers: ProxiedManagers): Promise<void> {
   // Subscribe to server updates. Without this the worker never opens the
   // updates loop, so nothing arrives after load: no incoming messages, no
   // deletions, no edits — only the local echo of what we send ourselves.
   // tweb does this from uiNotificationsManager, which the IM bootstrap starts
   // and we never run.
-  await managers.apiUpdatesManager.attach();
+  await managers.apiUpdatesManager.attach().catch((err) => {
+    // A failure here must not fail the sign-in that triggered it.
+    console.warn('Failed to attach the updates loop', err);
+  });
 
   // Warm the content-restriction settings here so the first history load never
   // pays for them on the chat-open path.
   import('./restrictions')
     .then(({warmRestrictionSettings}) => warmRestrictionSettings())
     .catch(() => {});
-
-  return {
-    managers,
-    authState: allStates[getCurrentAccount()].state.authState
-  };
 }

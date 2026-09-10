@@ -1,6 +1,6 @@
 import type {AuthSentCode, AuthAuthorization, AccountPassword} from '@layer';
 
-import {bootTelegram} from './client';
+import {bootTelegram, startSignedInServices} from './client';
 
 export type SentCode = AuthSentCode.authSentCode & {phone_number: string};
 
@@ -121,6 +121,11 @@ async function completeSignIn(authorization: AuthAuthorization.authAuthorization
 export async function markSignedIn() {
   const {managers} = await bootTelegram();
   await managers.appStateManager.pushToState('authState', {_: 'authStateSignedIn'});
+
+  // The account has a session now, so the boot work that needs one can run: the
+  // updates loop and the restriction-settings warm-up. Neither is started while
+  // the tab sits on the sign-in screen — see `startSignedInServices`.
+  void startSignedInServices(managers);
 }
 
 export async function isSignedIn(): Promise<boolean> {
