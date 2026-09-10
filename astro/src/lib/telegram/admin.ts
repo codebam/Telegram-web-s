@@ -697,6 +697,21 @@ export async function unbanMember(peerId: number, userPeerId: number): Promise<v
 }
 
 /**
+ * Add users to a basic group directly, without an invite link. `messages.addChatUser`
+ * is the basic-group path and the only place it is used; a channel or supergroup is
+ * filled through its invite links instead. The server can refuse someone who is not
+ * a mutual contact, so the ids it left out come back for the caller to report.
+ */
+export async function addGroupMembers(peerId: number, userIds: number[]): Promise<number[]> {
+  if(!userIds.length) return [];
+  const {managers} = await bootTelegram();
+  const missing: any[] = await managers.appChatsManager.addChatUser(chatIdOf(peerId), userIds);
+  return (missing ?? [])
+    .map((invitee) => Number(invitee?.user_id ?? 0))
+    .filter(Boolean);
+}
+
+/**
  * Keep the member but take rights away until `untilDate` (a unix timestamp;
  * 0 is forever). `view_messages` is never set here — that would be a ban.
  */

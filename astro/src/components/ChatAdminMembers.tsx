@@ -14,11 +14,14 @@ import {useEffect, useRef} from 'preact/hooks';
 import {useComputed, useSignal} from '@preact/signals';
 
 import {Avatar} from './Avatar';
+import {PeerPicker} from './PeerPicker';
+import {loadDialogs, type DialogItem} from '$lib/telegram/chats';
 import {
   ALL_ALLOWED,
   PERMISSION_LABELS,
   PERMISSION_ORDER,
   RESTRICTION_DURATIONS,
+  addGroupMembers,
   adminRightKeysFor,
   adminRightLabel,
   banMember,
@@ -66,6 +69,13 @@ export function ChatAdminMembers({chat, mode, onchanged, onpeer}: Props) {
   const restricting = useSignal<Participant | null>(null);
   const permissions = useSignal<Permissions>({...ALL_ALLOWED});
   const duration = useSignal(0);
+
+  // Adding members to a basic group. The picker is the shared PeerPicker in
+  // multi-select mode, so it carries its own dialogs and tentative selection.
+  const addOpen = useSignal(false);
+  const addDialogs = useSignal<DialogItem[]>([]);
+  const addSelected = useSignal<number[]>([]);
+  const addBusy = useSignal(false);
 
   const reload = useSignal(0);
 
@@ -259,6 +269,45 @@ export function ChatAdminMembers({chat, mode, onchanged, onpeer}: Props) {
     );
   }
 
+  // You cannot add yourself, and only users can be added.
+  async function openAdd() {
+    addSelected.value = [];
+    error.value = '';
+    try {
+      addDialogs.value = (await loadDialogs(100)).filter((dialog) => dialog.isUser && !dialog.isSelf);
+    } catch(err: any) {
+      addDialogs.value = [];
+      fail(err, 'Failed to load your contacts');
+    }
+    addOpen.value = true;
+  }
+
+  function pickAdd(peerId: number) {
+    addSelected.value = addSelected.value.includes(peerId) ?
+      addSelected.value.filter((id) => id !== peerId) :
+      [...addSelected.value, peerId];
+  }
+
+  async function confirmAdd() {
+    if(!addSelected.value.length || addBusy.value) return;
+    addBusy.value = true;
+    error.value = '';
+
+    try {
+      const missing = await addGroupMembers(chat.peerId, addSelected.value);
+      addOpen.value = false;
+      addSelected.value = [];
+      if(missing.length) {
+        error.value = `Could not add ${missing.length} ${missing.length === 1 ? 'member' : 'members'} — they are not mutual contacts.`;
+      }
+      refresh();
+    } catch(err: any) {
+      fail(err, 'Failed to add the members');
+    } finally {
+      addBusy.value = false;
+    }
+  }
+
   const emptyText =
     mode === 'admins' ? 'No admins yet.' : mode === 'removed' ? 'Nobody is removed.' : 'No members.';
 
@@ -349,6 +398,14 @@ export function ChatAdminMembers({chat, mode, onchanged, onpeer}: Props) {
             </div>
           </div> :
           <>
+            {mode === 'members' && chat.isBasicGroup && chat.access.inviteLinks && (
+              <div class="admin-actions left">
+                <button class="admin-btn primary" onClick={openAdd} disabled={busy.value}>
+                  Add members
+                </button>
+              </div>
+            )}
+
             {mode !== 'admins' && (
               <input
                 class="search"
@@ -435,6 +492,18 @@ export function ChatAdminMembers({chat, mode, onchanged, onpeer}: Props) {
               </p>
             )}
           </>}
+
+      {addOpen.value && (
+        <PeerPicker
+          title="Add members"
+          dialogs={addDialogs.value}
+          selectedIds={addSelected.value}
+          onpick={pickAdd}
+          onconfirm={confirmAdd}
+          confirmLabel={addBusy.value ? 'Adding…' : 'Add'}
+          onclose={() => (addOpen.value = false)}
+        />
+      )}
 
       {error.value && <p class="admin-error">{error.value}</p>}
     </div>

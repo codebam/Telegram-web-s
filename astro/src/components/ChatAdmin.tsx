@@ -83,7 +83,7 @@ export function ChatAdmin({peerId, onclose, onmigrated, onpeer}: Props) {
     if(access.changeInfo || access.changeType || access.isCreator) list.push(['edit', 'Edit']);
     if(!isChannel && access.changePermissions) list.push(['permissions', 'Permissions']);
     list.push(['admins', 'Admins']);
-    if(access.banUsers || access.addAdmins) list.push(['members', 'Members']);
+    if(access.banUsers || access.addAdmins || (isBasicGroup && access.inviteLinks)) list.push(['members', 'Members']);
     if(access.banUsers && !isBasicGroup) list.push(['removed', 'Removed']);
     if(access.inviteLinks) list.push(['invites', 'Invite links']);
     if(access.inviteLinks && !isBasicGroup) list.push(['requests', 'Requests']);
