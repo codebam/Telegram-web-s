@@ -1,0 +1,107 @@
+
+  .icon {
+    width: 36px;
+    height: 36px;
+    flex: none;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: none;
+    color: inherit;
+    cursor: pointer;
+    display: grid;
+    place-items: center;
+  }
+
+  .record {
+    opacity: 0.65;
+    transition: opacity 0.12s;
+  }
+
+  .record:hover {
+    opacity: 1;
+  }
+
+  .icon:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  /* Covers the whole composer row while recording — the text field, attach and
+     emoji buttons are meaningless mid-recording. */
+  .panel {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 6px 6px 8px;
+    border-radius: inherit;
+    background: var(--bg, inherit);
+    background-color: color-mix(in srgb, var(--text) 6%, var(--bg, #000));
+  }
+
+  .dot {
+    width: 8px;
+    height: 8px;
+    flex: none;
+    border-radius: 50%;
+    background: #e0483f;
+    animation: blink 1.2s infinite;
+  }
+
+  @keyframes blink {
+    50% {
+      opacity: 0.25;
+    }
+  }
+
+  .time {
+    font-variant-numeric: tabular-nums;
+    font-size: 13px;
+    flex: none;
+  }
+
+  .wave {
+    flex: 1;
+    min-width: 0;
+    height: 28px;
+    color: var(--action, currentColor);
+  }
+
+  .danger {
+    color: #e0483f;
+  }
+
+  .send {
+    background: var(--action);
+    color: var(--action-ink);
+  }
+
+  .round-preview {
+    position: absolute;
+    bottom: calc(100% + 12px);
+    left: 50%;
+    transform: translateX(-50%);
+    width: 220px;
+    height: 220px;
+    border-radius: 50%;
+    overflow: hidden;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+    background: #000;
+    z-index: 5;
+  }
+
+  .round-preview video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    /* Mirror the preview, like every client's selfie view. */
+    transform: scaleX(-1);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .dot {
+      animation: none;
+    }
+  }

@@ -1,0 +1,60 @@
+---
+// The whole client is one island. The app is a SPA on top of tweb's SharedWorker
+// MTProto stack: there is no per-route splitting to do and no state that could
+// live in a second island, so everything below `<App />` is one Preact tree.
+//
+// What islands buy here is the part above it — this page is prerendered, so the
+// sign-in card the user stares at while the worker boots (splash below) is real
+// HTML with real CSS, not a blank screen waiting for a bundle.
+import Base from '../layouts/Base.astro';
+// Named, not default: every component in this client is a named export, and the
+// island carries the export it needs in `component-export`.
+import {App} from '../components/App';
+---
+
+<Base>
+  <div id="splash" class="splash">
+    <div class="logo"></div>
+    <h1>Connecting…</h1>
+    <p class="sub">Starting the MTProto worker.</p>
+  </div>
+
+  <App client:only="preact" />
+</Base>
+
+<style>
+  /*
+   * Deliberately standalone: it must render correctly in the prerendered
+   * document, before any component CSS has loaded. `App` removes it as soon as
+   * it mounts (see the island), which is also why it is not styled to fade.
+   */
+  .splash {
+    position: fixed;
+    inset: 0;
+    display: grid;
+    place-content: center;
+    justify-items: center;
+    text-align: center;
+    padding: 24px;
+  }
+
+  .splash .logo {
+    width: 84px;
+    height: 84px;
+    margin: 0 auto 20px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 30% 25%, var(--accent-hover), var(--accent));
+  }
+
+  .splash h1 {
+    margin: 0 0 8px;
+    font-size: 21px;
+    font-weight: 600;
+  }
+
+  .splash .sub {
+    margin: 0;
+    color: var(--text-dim);
+    font-size: 14px;
+  }
+</style>

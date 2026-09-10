@@ -1,0 +1,450 @@
+/*
+ * Soft Depth
+ *
+ * Panes float as translucent cards over a gradient field rather than sitting in
+ * flat columns. Two accents do different jobs: --accent is identity (selection,
+ * outgoing messages, links), --action is reserved for things you can act on —
+ * unread counts, the send button, active reactions. Keeping them separate is
+ * what stops the interface reading as uniformly "branded".
+ *
+ * --pane is the floating surface; --bg-elevated is everything small that sits
+ * on it (chips, the search field, hover). They were one token, which is what
+ * made the light theme read as a white filter over the whole app: a sheet of
+ * 88% white, with more white stacked on top of it, over a ground barely
+ * darker than either. In light the pane is now the only white and the ground
+ * carries real colour; in dark, where a white tint on a dark ground was
+ * always doing the right thing, nothing changes.
+ *
+ * The accent marks an outgoing message rather than filling it. A solid violet
+ * bubble wrapped every screenshot in a violet frame and fought the image
+ * inside it; a translucent tint with a lit edge still reads as yours while
+ * leaving the content its own colour. The derived tokens below are declared
+ * once, not per theme — they are relative to --accent, which both themes
+ * share.
+ */
+:root {
+  --bg: #0e0f1a;
+  --pane: rgba(255, 255, 255, 0.055);
+  --bg-elevated: rgba(255, 255, 255, 0.055);
+  --bg-solid: #14161f;
+  --bubble-in: rgba(255, 255, 255, 0.08);
+  --border: rgba(255, 255, 255, 0.09);
+  --text: #f0f1f8;
+  --text-dim: #9ba0bb;
+  --accent: #6e63ff;
+  --accent-hover: #8f6bff;
+  --action: #ff7a5c;
+  --action-ink: #21100b;
+  --danger: #e5484d;
+  --radius: 14px;
+  --pane-radius: 16px;
+  --bubble-radius: 16px;
+  --blur: 14px;
+
+  /* Outgoing messages and the selected chat row: marked by the accent, never
+     flooded by it. */
+  --bubble-out: color-mix(in srgb, var(--accent) 24%, transparent);
+  --bubble-out-border: color-mix(in srgb, var(--accent) 50%, transparent);
+  /* An accent tint rather than --bg-elevated, which is nearly invisible against
+     a white pane in the light theme. */
+  --row-active: color-mix(in srgb, var(--accent) 12%, transparent);
+  --row-active-rail: var(--accent);
+
+  /* The field the panes float over. */
+  --field:
+    radial-gradient(120% 90% at 8% 0%, rgba(110, 99, 255, 0.30), transparent 55%),
+    radial-gradient(90% 80% at 95% 110%, rgba(255, 122, 92, 0.22), transparent 55%);
+
+  color-scheme: dark;
+}
+
+/* System preference (theme mode "system" leaves data-theme unset). */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    --bg: #a9b5dc;
+    --pane: rgba(255, 255, 255, 0.46);
+    --bg-elevated: rgba(19, 22, 40, 0.06);
+    --bg-solid: #f6f7fc;
+    --bubble-in: rgba(255, 255, 255, 0.72);
+    --border: rgba(19, 22, 40, 0.15);
+    --text: #0f1222;
+    --text-dim: #545b73;
+    --field:
+      radial-gradient(120% 90% at 8% 0%, rgba(110, 99, 255, 0.34), transparent 58%),
+      radial-gradient(90% 80% at 95% 110%, rgba(255, 122, 92, 0.24), transparent 58%);
+    color-scheme: light;
+  }
+}
+
+/* Explicit choices from Settings → Appearance win over the media query. */
+:root[data-theme='light'] {
+  --bg: #a9b5dc;
+  --pane: rgba(255, 255, 255, 0.46);
+  --bg-elevated: rgba(19, 22, 40, 0.06);
+  --bg-solid: #f6f7fc;
+  --bubble-in: rgba(255, 255, 255, 0.72);
+  --border: rgba(19, 22, 40, 0.15);
+  --text: #0f1222;
+  --text-dim: #545b73;
+  --field:
+    radial-gradient(120% 90% at 8% 0%, rgba(110, 99, 255, 0.34), transparent 58%),
+    radial-gradient(90% 80% at 95% 110%, rgba(255, 122, 92, 0.24), transparent 58%);
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  --bg: #0e0f1a;
+  --pane: rgba(255, 255, 255, 0.055);
+  --bg-elevated: rgba(255, 255, 255, 0.055);
+  --bg-solid: #14161f;
+  --bubble-in: rgba(255, 255, 255, 0.08);
+  --border: rgba(255, 255, 255, 0.09);
+  --text: #f0f1f8;
+  --text-dim: #9ba0bb;
+  --field:
+    radial-gradient(120% 90% at 8% 0%, rgba(110, 99, 255, 0.30), transparent 55%),
+    radial-gradient(90% 80% at 95% 110%, rgba(255, 122, 92, 0.22), transparent 55%);
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--field), var(--bg);
+  background-attachment: fixed;
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+input,
+button {
+  font: inherit;
+  color: inherit;
+}
+
+/*
+ * Scrollbars: thin, transparent until the area is hovered. Firefox gets the
+ * standard properties; WebKit/Blink need the pseudo-elements for a track that
+ * does not paint its own background over the pane.
+ */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--text) 22%, transparent) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--text) 16%, transparent);
+  border-radius: 999px;
+  /* Border rather than width keeps the hit area full-size while the visible
+     thumb stays slim. */
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+:hover::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--text) 30%, transparent);
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--text) 45%, transparent);
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ------------------------------------------------------------------ */
+/* Console density                                                     */
+/*                                                                     */
+/* An appearance option, not a separate theme: the same markup drops    */
+/* its bubbles and becomes an aligned monospace grid — timestamp,       */
+/* sender, text — so a busy chat can be scanned in one eye movement.    */
+/* These selectors carry a :root attribute so they outrank Svelte's     */
+/* scoped component styles.                                            */
+/* ------------------------------------------------------------------ */
+:root[data-density='console'] {
+  --bubble-in: transparent;
+  --pane: var(--bg-solid);
+  --pane-radius: 6px;
+  --bubble-radius: 4px;
+  --blur: 0px;
+  --field: none;
+  --bg-elevated: var(--bg-solid);
+  font-size: 13px;
+}
+
+:root[data-density='console'] body {
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
+}
+
+:root[data-density='console'] .messages {
+  gap: 1px;
+  padding: 10px 12px;
+}
+
+/* Rows, not bubbles: the sender column lines up down the whole thread. Outgoing
+   rows must not right-justify, or their columns shift out of the grid. */
+/* .messages in the selector so this outranks the component's own
+   `.line.out { justify-content: flex-end }` — without it the two tie on
+   specificity and the later-loaded component style wins. */
+:root[data-density='console'] .messages .line,
+:root[data-density='console'] .messages .line.out {
+  align-items: baseline;
+  justify-content: flex-start;
+  gap: 8px;
+}
+
+:root[data-density='console'] .line-avatar {
+  display: none;
+}
+
+:root[data-density='console'] .bubble {
+  max-width: 100%;
+  width: 100%;
+  padding: 1px 0;
+  background: none;
+  border: none;
+  border-radius: 0;
+  display: grid;
+  /* time · sender · text, so all three line up down the whole thread */
+  grid-template-columns: 78px 104px minmax(0, 1fr);
+  gap: 2px 10px;
+  align-items: baseline;
+}
+
+:root[data-density='console'] .bubble.out {
+  align-self: stretch;
+  background: none;
+  color: inherit;
+}
+
+:root[data-density='console'] .bubble .author {
+  grid-column: 2;
+  grid-row: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--accent);
+  font-weight: 400;
+}
+
+:root[data-density='console'] .bubble.out::before {
+  content: 'you';
+  grid-column: 2;
+  grid-row: 1;
+  color: var(--action);
+}
+
+:root[data-density='console'] .bubble .text,
+:root[data-density='console'] .bubble .reply-quote,
+:root[data-density='console'] .bubble .webpage,
+:root[data-density='console'] .bubble .poll,
+:root[data-density='console'] .bubble .reactions,
+:root[data-density='console'] .bubble .frame,
+:root[data-density='console'] .bubble .file,
+:root[data-density='console'] .bubble .read-by {
+  grid-column: 3;
+}
+
+/* The stamp becomes the leading time column; its buttons stay hover-only. */
+:root[data-density='console'] .bubble .stamp {
+  grid-column: 1;
+  grid-row: 1;
+  justify-content: flex-start;
+  gap: 6px;
+  opacity: 0.55;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+:root[data-density='console'] .bubble .stamp .reply-btn,
+:root[data-density='console'] .bubble .stamp .ticks,
+:root[data-density='console'] .bubble .stamp .views,
+:root[data-density='console'] .bubble .stamp .replies {
+  position: absolute;
+  right: 12px;
+  background: var(--bg-solid);
+  padding-left: 6px;
+}
+
+:root[data-density='console'] .bubble {
+  position: relative;
+}
+
+:root[data-density='console'] .bubble .frame {
+  max-width: 220px;
+}
+
+:root[data-density='console'] .sticker-bubble,
+:root[data-density='console'] .sticker-bubble.out {
+  align-self: flex-start;
+  justify-items: start;
+  transform: scale(0.5);
+  transform-origin: left center;
+  margin: -26px 0;
+}
+
+/* One line per chat in the list. */
+:root[data-density='console'] .row-button {
+  padding: 4px 10px;
+  gap: 8px;
+}
+
+:root[data-density='console'] .row-button .avatar {
+  width: 16px !important;
+  height: 16px !important;
+  border-radius: 3px;
+  font-size: 9px !important;
+}
+
+:root[data-density='console'] .row-button .meta {
+  grid-auto-flow: column;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: baseline;
+  gap: 8px;
+}
+
+:root[data-density='console'] .row-button .preview {
+  display: none;
+}
+
+:root[data-density='console'] .row-button .title {
+  font-weight: 400;
+  text-transform: lowercase;
+}
+
+:root[data-density='console'] .row-button .time {
+  display: none;
+}
+
+/* Signal dot in place of the avatar: filled when the chat has activity. */
+:root[data-density='console'] .row-button .avatar {
+  width: 8px !important;
+  height: 8px !important;
+  border-radius: 50% !important;
+  font-size: 0 !important;
+  background: color-mix(in srgb, var(--text) 35%, transparent) !important;
+}
+
+:root[data-density='console'] .row-button .avatar img {
+  display: none;
+}
+
+:root[data-density='console'] .row-button:has(.badge) .avatar {
+  background: var(--accent) !important;
+}
+
+/* Uppercase headers, terminal-style. */
+:root[data-density='console'] header {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 11px;
+}
+
+:root[data-density='console'] .badge,
+:root[data-density='console'] .folder-badge {
+  font-variant-numeric: tabular-nums;
+  background: transparent;
+  color: var(--action);
+  padding: 0;
+}
+
+:root[data-density='console'] .day-divider,
+:root[data-density='console'] .unread-divider {
+  border-radius: 0;
+  background: none;
+  border-top: 1px solid var(--border);
+  align-self: stretch;
+  text-align: left;
+  padding-left: 0;
+}
+
+/* At console density the per-message action row is noise on every line —
+   reveal it on hover instead, the way a dense client would. */
+:root[data-density='console'] .bubble .stamp .reply-btn,
+:root[data-density='console'] .bubble .stamp .edited {
+  visibility: hidden;
+}
+
+:root[data-density='console'] .bubble:hover .stamp .reply-btn,
+:root[data-density='console'] .bubble:hover .stamp .edited {
+  visibility: visible;
+}
+
+:root[data-density='console'] form button[type='submit'] {
+  border-radius: 4px;
+}
+
+:root[data-density='console'] form textarea {
+  font-family: inherit;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Appearance                                                          */
+/*                                                                     */
+/* Settings → Appearance writes custom properties on <html>; these are */
+/* the rules that consume them. `data-appearance` is stamped by        */
+/* applyAppearance() purely so the selectors outrank Chat.svelte's     */
+/* scoped styles without touching the component. Console density keeps */
+/* its own geometry, so the spacing rules step aside there.            */
+/* ------------------------------------------------------------------ */
+:root[data-appearance] .messages {
+  font-size: var(--message-text-size, 15px);
+}
+
+:root[data-appearance]:not([data-density]) .messages {
+  gap: var(--bubble-gap, 8px);
+  padding: var(--messages-padding, 18px);
+}
+
+:root[data-appearance]:not([data-density]) .messages .bubble {
+  padding: var(--bubble-padding, 8px 12px);
+  gap: var(--bubble-inner-gap, 6px);
+}
+
+/* The wallpaper sits under the bubbles, fixed to the viewport so it does not
+   crawl as the thread scrolls. */
+:root[data-wallpaper] .messages {
+  background-image: var(--chat-wallpaper, none);
+  background-size: cover;
+  background-position: center;
+  background-attachment: fixed;
+}
+
+/* Power saving: the Svelte components do not read tweb's liteMode, so the two
+   flags that are purely visual are enforced here. */
+:root[data-lite-animations] * {
+  animation-duration: 0.01ms !important;
+  transition-duration: 0.01ms !important;
+}
+
+:root[data-lite-blur] {
+  --blur: 0px;
+}

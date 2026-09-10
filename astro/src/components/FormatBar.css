@@ -1,0 +1,59 @@
+
+  .format-bar {
+    position: fixed;
+    transform: translateY(calc(-100% - 8px));
+    z-index: 30;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 4px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--bg);
+    box-shadow: 0 6px 20px rgb(0 0 0 / 18%);
+  }
+
+  .format-bar button {
+    min-width: 30px;
+    height: 28px;
+    padding: 0 6px;
+    border: none;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    display: grid;
+    place-items: center;
+  }
+
+  .icon {
+    display: block;
+  }
+
+  .format-bar button:hover {
+    background: color-mix(in srgb, var(--text) 10%, transparent);
+  }
+
+  .bold {
+    font-weight: 700;
+  }
+
+  .italic {
+    font-style: italic;
+  }
+
+  .underline {
+    text-decoration: underline;
+  }
+
+  .strike {
+    text-decoration: line-through;
+  }
+
+  .mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+  }

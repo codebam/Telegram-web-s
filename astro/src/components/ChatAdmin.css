@@ -1,0 +1,227 @@
+
+  .admin-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    display: grid;
+    place-items: center;
+    z-index: 95;
+  }
+
+  .admin-dialog {
+    width: min(560px, calc(100vw - 32px));
+    max-height: min(680px, calc(100vh - 48px));
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 18px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    font-weight: 600;
+    flex: none;
+  }
+
+  header span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .close {
+    background: none;
+    border: none;
+    color: var(--accent);
+    cursor: pointer;
+    font-size: 15px;
+    flex: none;
+  }
+
+  .admin-nav {
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    flex: none;
+    padding-bottom: 2px;
+  }
+
+  .admin-nav button {
+    flex: none;
+    padding: 6px 10px;
+    border: none;
+    border-radius: 999px;
+    background: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    font-size: 13px;
+  }
+
+  .admin-nav button.active {
+    background: var(--accent);
+    color: #fff;
+  }
+
+  .admin-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  /*
+   * The admin sections share one vocabulary of rows, fields and buttons. Svelte
+   * scopes styles per component, so the shared classes are declared once here,
+   * globally, rather than copied into each of the six panes. Every one is a
+   * single `admin-`prefixed class — cheap to match and unlikely to collide.
+   */
+  :global(.admin-error) {
+    margin: 0;
+    color: var(--danger);
+    font-size: 13px;
+  }
+
+  :global(.admin-muted) {
+    margin: 0;
+    color: var(--text-dim);
+    font-size: 13px;
+  }
+
+  :global(.admin-ok) {
+    margin: 0;
+    color: var(--accent);
+    font-size: 13px;
+  }
+
+  :global(.admin-hint) {
+    margin: 0;
+    color: var(--text-dim);
+    font-size: 12px;
+  }
+
+  :global(.admin-label) {
+    margin: 0;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-dim);
+  }
+
+  :global(.admin-field) {
+    display: grid;
+    gap: 4px;
+    font-size: 13px;
+    color: var(--text-dim);
+  }
+
+  :global(.admin-field input),
+  :global(.admin-field textarea),
+  :global(.admin-field select) {
+    padding: 9px 12px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    outline: none;
+    resize: vertical;
+  }
+
+  :global(.admin-field input:focus),
+  :global(.admin-field textarea:focus),
+  :global(.admin-field select:focus) {
+    border-color: var(--accent);
+  }
+
+  :global(.admin-toggle) {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+
+  :global(.admin-btn) {
+    padding: 6px 12px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    font-size: 13px;
+  }
+
+  :global(.admin-btn.primary) {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+
+  :global(.admin-btn.danger) {
+    color: var(--danger);
+  }
+
+  :global(.admin-btn:disabled) {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  :global(.admin-actions) {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  :global(.admin-actions.left) {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+
+  :global(.admin-row) {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 4px;
+    border-radius: 8px;
+  }
+
+  :global(.admin-row:hover) {
+    background: color-mix(in srgb, var(--text) 8%, transparent);
+  }
+
+  :global(.admin-row .admin-name) {
+    flex: 1;
+    min-width: 0;
+    display: grid;
+  }
+
+  :global(.admin-row .admin-name > span) {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  :global(.admin-row .admin-name .admin-sub) {
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  :global(.admin-peer) {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 1;
+    min-width: 0;
+    padding: 0;
+    border: none;
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }

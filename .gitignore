@@ -34,6 +34,10 @@ ignore
 svelte/.svelte-kit
 svelte/build
 
+# Astro client
+astro/.astro
+astro/dist
+
 # Local env and scratch
 .env
 serve-tmp.mjs

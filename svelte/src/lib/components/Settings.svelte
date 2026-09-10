@@ -1,43 +1,32 @@
 <script lang="ts">
   import Avatar from './Avatar.svelte';
-  import {
-    disableNotifications,
-    enableNotifications,
-    notificationsEnabled,
-    permission
-  } from '$lib/telegram/notifications';
+  import AppearanceSettings from './AppearanceSettings.svelte';
+  import BusinessSettings from './BusinessSettings.svelte';
+  import DataSettings from './DataSettings.svelte';
+  import ImageCropper from './ImageCropper.svelte';
+  import NotificationSettings from './NotificationSettings.svelte';
+  import PrivacySettings from './PrivacySettings.svelte';
   import {
     loadAttachBots,
-    loadBusiness,
-    loadNotifyScopes,
+    loadBirthdayPrivacy,
+    loadPersonalChannels,
     loadProfile,
-    loadSessions,
-    saveBusinessIntro,
+    removeProfilePhoto,
+    saveBirthday,
+    saveBirthdayPrivacy,
+    savePersonalChannel,
     saveProfile,
     saveUsername,
-    setNotifyScope,
-    terminateOtherSessions,
-    terminateSession,
+    uploadProfilePhoto,
     type AttachBot,
-    type BusinessInfo,
-    type NotifyScope,
-    type ProfileInfo,
-    type SessionInfo
+    type BirthdayPrivacy,
+    type PersonalChannelOption,
+    type ProfileInfo
   } from '$lib/telegram/settings';
-  import {logOutCurrentAccount} from '$lib/telegram/accounts';
-  import {
-    ACCENTS,
-    getAccent,
-    getDensity,
-    getThemeMode,
-    setAccent,
-    setDensity,
-    setThemeMode,
-    type Density,
-    type ThemeMode
-  } from '$lib/telegram/theme';
   import PremiumPanel from './PremiumPanel.svelte';
   import StarsPanel from './StarsPanel.svelte';
+  import {invalidateAvatarUrl} from '$lib/telegram/chats';
+  import {logOutCurrentAccount} from '$lib/telegram/accounts';
 
   let {onclose, onminiapp}: {onclose: () => void; onminiapp: (botId: number) => void} = $props();
 
@@ -45,7 +34,9 @@
     | 'profile'
     | 'appearance'
     | 'notifications'
-    | 'sessions'
+    | 'privacy'
+    | 'security'
+    | 'data'
     | 'premium'
     | 'stars'
     | 'business'
@@ -61,18 +52,20 @@
   let status = $state('');
   let error = $state('');
 
-  let theme = $state<ThemeMode>(getThemeMode());
-  let accent = $state(getAccent());
-  let density = $state<Density>(getDensity());
-
-  let scopes = $state<Record<NotifyScope, boolean> | null>(null);
-  let desktopOn = $state(notificationsEnabled());
-
-  let sessions = $state<SessionInfo[]>([]);
-  let business = $state<BusinessInfo | null>(null);
-  let introTitle = $state('');
-  let introDescription = $state('');
   let bots = $state<AttachBot[]>([]);
+
+  // Profile extras: birthday, personal channel, avatar.
+  let birthdayDate = $state('');
+  let birthdayPrivacy = $state<BirthdayPrivacy>('nobody');
+  let channels = $state<PersonalChannelOption[]>([]);
+  let personalChannelId = $state(0);
+  // Plain `let`, not `$state` — the File goes to the cropper and its Blob to the
+  // worker, and a proxy there would fail to clone.
+  let pendingPhoto: File | null = null;
+  let cropping = $state(false);
+  let photoBusy = $state('');
+  let avatarVersion = $state(0);
+  let photoInput: HTMLInputElement | null = $state(null);
 
   $effect(() => {
     const current = section;
@@ -87,14 +80,14 @@
           lastName = profile.lastName;
           bio = profile.bio;
           username = profile.username;
-        } else if(current === 'notifications' && !scopes) {
-          scopes = await loadNotifyScopes();
-        } else if(current === 'sessions' && !sessions.length) {
-          sessions = await loadSessions();
-        } else if(current === 'business' && !business) {
-          business = await loadBusiness();
-          introTitle = business.introTitle;
-          introDescription = business.introDescription;
+          personalChannelId = profile.personalChannelId;
+          birthdayDate = profile.birthday ?
+            `${String(profile.birthday.year ?? 1900).padStart(4, '0')}-${String(profile.birthday.month).padStart(2, '0')}-${String(profile.birthday.day).padStart(2, '0')}` :
+            '';
+
+          // Both are extras — a failure here must not blank the profile form.
+          loadBirthdayPrivacy().then((value) => (birthdayPrivacy = value)).catch(() => {});
+          loadPersonalChannels().then((value) => (channels = value)).catch(() => {});
         } else if(current === 'bots' && !bots.length) {
           bots = await loadAttachBots();
         }
@@ -126,56 +119,98 @@
     }
   }
 
-  async function toggleDesktop() {
-    if(desktopOn) {
-      disableNotifications();
-      desktopOn = false;
-    } else {
-      desktopOn = await enableNotifications();
-      if(!desktopOn) error = 'Permission denied by the browser';
-    }
-  }
-
-  async function toggleScope(scope: NotifyScope) {
-    if(!scopes) return;
-    const next = !scopes[scope];
-    scopes = {...scopes, [scope]: next};
-    try {
-      await setNotifyScope(scope, next);
-    } catch(err: any) {
-      error = err?.type || err?.message || 'Failed to update';
-      scopes = {...scopes, [scope]: !next};
-    }
-  }
-
-  async function kill(session: SessionInfo) {
-    try {
-      await terminateSession(session.hash);
-      sessions = sessions.filter((s) => s.hash !== session.hash);
-    } catch(err: any) {
-      error = err?.type || err?.message || 'Failed to terminate';
-    }
-  }
-
-  async function killOthers() {
-    try {
-      await terminateOtherSessions();
-      sessions = sessions.filter((s) => s.current);
-      flash('Other sessions terminated');
-    } catch(err: any) {
-      error = err?.type || err?.message || 'Failed to terminate';
-    }
-  }
-
-  async function submitIntro() {
+  /** `<input type="date">` gives `YYYY-MM-DD`; a blank value clears the birthday. */
+  async function submitBirthday() {
     saving = true;
+    error = '';
     try {
-      await saveBusinessIntro(introTitle.trim(), introDescription.trim());
-      flash('Intro saved');
+      if(!birthdayDate) {
+        await saveBirthday(null);
+      } else {
+        const [year, month, day] = birthdayDate.split('-').map(Number);
+        if(!day || !month) throw new Error('That date is not valid');
+        // Telegram treats the year as optional; 1900 is our "not given" marker.
+        await saveBirthday({day, month, year: year && year > 1900 ? year : null});
+      }
+
+      profile = await loadProfile();
+      flash('Birthday saved');
     } catch(err: any) {
-      error = err?.type || err?.message || 'Failed to save intro';
+      error = err?.type || err?.message || 'Failed to save birthday';
     } finally {
       saving = false;
+    }
+  }
+
+  async function changeBirthdayPrivacy(value: BirthdayPrivacy) {
+    const previous = birthdayPrivacy;
+    birthdayPrivacy = value;
+    try {
+      await saveBirthdayPrivacy(value);
+    } catch(err: any) {
+      birthdayPrivacy = previous;
+      error = err?.type || err?.message || 'Failed to update birthday privacy';
+    }
+  }
+
+  async function changePersonalChannel(peerId: number) {
+    const previous = personalChannelId;
+    personalChannelId = peerId;
+    try {
+      await savePersonalChannel(peerId);
+      flash(peerId ? 'Personal channel set' : 'Personal channel removed');
+    } catch(err: any) {
+      personalChannelId = previous;
+      error = err?.type || err?.message || 'Failed to set the personal channel';
+    }
+  }
+
+  function pickPhoto(event: Event) {
+    const input = event.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = '';
+    if(!file) return;
+
+    pendingPhoto = file;
+    cropping = true;
+  }
+
+  async function commitPhoto(blob: Blob) {
+    cropping = false;
+    pendingPhoto = null;
+    photoBusy = 'upload';
+    error = '';
+
+    try {
+      await uploadProfilePhoto(blob);
+      if(profile) invalidateAvatarUrl(profile.userId);
+      profile = await loadProfile();
+      // Bumping the key remounts <Avatar/>, which re-reads the freshly
+      // invalidated URL rather than showing the old cached one.
+      ++avatarVersion;
+      flash('Profile photo updated');
+    } catch(err: any) {
+      error = err?.type || err?.message || 'Failed to upload the photo';
+    } finally {
+      photoBusy = '';
+    }
+  }
+
+  async function dropPhoto() {
+    if(!profile?.photoId || !confirm('Remove your profile photo?')) return;
+
+    photoBusy = 'remove';
+    error = '';
+    try {
+      await removeProfilePhoto(profile.photoId);
+      invalidateAvatarUrl(profile.userId);
+      profile = await loadProfile();
+      ++avatarVersion;
+      flash('Profile photo removed');
+    } catch(err: any) {
+      error = err?.type || err?.message || 'Failed to remove the photo';
+    } finally {
+      photoBusy = '';
     }
   }
 
@@ -197,9 +232,6 @@
     }
   }
 
-  function dateOf(unix: number) {
-    return unix ? new Date(unix * 1000).toLocaleString() : '';
-  }
 </script>
 
 <aside class="settings">
@@ -209,7 +241,7 @@
   </header>
 
   <nav>
-    {#each [['profile', 'Profile'], ['appearance', 'Appearance'], ['notifications', 'Notifications'], ['sessions', 'Devices'], ['premium', 'Premium'], ['stars', 'Stars'], ['business', 'Business'], ['bots', 'Bots']] as [key, label]}
+    {#each [['profile', 'Profile'], ['appearance', 'Appearance'], ['notifications', 'Notifications'], ['privacy', 'Privacy'], ['security', 'Security'], ['data', 'Data'], ['premium', 'Premium'], ['stars', 'Stars'], ['business', 'Business'], ['bots', 'Bots']] as [key, label]}
       <button class:active={section === key} onclick={() => (section = key as Section)}>{label}</button>
     {/each}
   </nav>
@@ -223,8 +255,27 @@
         <p class="muted">Loading…</p>
       {:else}
         <div class="head">
-          <Avatar peerId={profile.userId} title={firstName || 'Me'} size={84} />
+          {#key avatarVersion}
+            <Avatar peerId={profile.userId} title={firstName || 'Me'} size={84} />
+          {/key}
           <p class="phone">{profile.phone}{profile.isPremium ? ' · Premium' : ''}</p>
+          <div class="photo-actions">
+            <button class="small-btn" onclick={() => photoInput?.click()} disabled={!!photoBusy}>
+              {photoBusy === 'upload' ? 'Uploading…' : profile.photoId ? 'Change photo' : 'Set photo'}
+            </button>
+            {#if profile.photoId}
+              <button class="danger small-btn" onclick={dropPhoto} disabled={!!photoBusy}>
+                {photoBusy === 'remove' ? 'Removing…' : 'Remove'}
+              </button>
+            {/if}
+          </div>
+          <input
+            class="file-input"
+            type="file"
+            accept="image/*"
+            bind:this={photoInput}
+            onchange={pickPhoto}
+          />
         </div>
         <label class="field"><span>First name</span><input bind:value={firstName} /></label>
         <label class="field"><span>Last name</span><input bind:value={lastName} /></label>
@@ -233,6 +284,51 @@
         <button class="primary" onclick={submitProfile} disabled={saving}>
           {saving ? 'Saving…' : 'Save'}
         </button>
+
+        <p class="label">Birthday</p>
+        <label class="field">
+          <span>Date</span>
+          <input type="date" bind:value={birthdayDate} />
+        </label>
+        <label class="field">
+          <span>Who can see it</span>
+          <select
+            value={birthdayPrivacy}
+            onchange={(e) => changeBirthdayPrivacy(e.currentTarget.value as BirthdayPrivacy)}
+          >
+            <option value="everybody">Everybody</option>
+            <option value="contacts">My contacts</option>
+            <option value="nobody">Nobody</option>
+          </select>
+        </label>
+        <p class="muted small">
+          Setting a birthday does not reveal it on its own — the privacy above
+          decides who sees it, and contacts who share theirs with you see yours.
+        </p>
+        <button class="small-btn" onclick={submitBirthday} disabled={saving}>
+          {birthdayDate ? 'Save birthday' : 'Clear birthday'}
+        </button>
+
+        <p class="label">Personal channel</p>
+        {#if !channels.length}
+          <p class="muted small">
+            You do not administer any channel that can be shown on your profile.
+          </p>
+        {:else}
+          <label class="field">
+            <span>Shown on your profile</span>
+            <select
+              value={personalChannelId}
+              onchange={(e) => changePersonalChannel(Number(e.currentTarget.value))}
+            >
+              <option value={0}>None</option>
+              {#each channels as channel (channel.peerId)}
+                <option value={channel.peerId}>{channel.title}</option>
+              {/each}
+            </select>
+          </label>
+        {/if}
+
         {#if confirmingLogOut}
           <p class="label">Log out of this account? Your other accounts stay signed in.</p>
           <div class="confirm-row">
@@ -247,90 +343,16 @@
       {/if}
 
     {:else if section === 'appearance'}
-      <p class="label">Theme</p>
-      <div class="chips">
-        {#each ['system', 'light', 'dark'] as mode}
-          <button
-            class:on={theme === mode}
-            onclick={() => { theme = mode as ThemeMode; setThemeMode(theme); }}
-          >{mode}</button>
-        {/each}
-      </div>
-
-      <p class="label">Density</p>
-      <div class="chips">
-        <button
-          class:on={density === 'comfortable'}
-          onclick={() => { density = 'comfortable'; setDensity(density); }}
-        >comfortable</button>
-        <button
-          class:on={density === 'console'}
-          onclick={() => { density = 'console'; setDensity(density); }}
-        >console</button>
-      </div>
-      <p class="muted small">
-        Console swaps bubbles for an aligned monospace grid — about twice as many
-        messages per screen.
-      </p>
-
-      <p class="label">Accent</p>
-      <div class="swatches">
-        {#each ACCENTS as option}
-          <button
-            class="swatch"
-            class:on={accent === option.value}
-            style="background: {option.value}"
-            title={option.name}
-            aria-label={option.name}
-            onclick={() => { accent = option.value; setAccent(accent); }}
-          ></button>
-        {/each}
-      </div>
+      <AppearanceSettings />
 
     {:else if section === 'notifications'}
-      <label class="toggle">
-        <input type="checkbox" checked={desktopOn} onchange={toggleDesktop} />
-        <span>Desktop notifications</span>
-      </label>
-      <p class="muted small">Browser permission: {permission()}</p>
+      <NotificationSettings />
 
-      <p class="label">Notify me about</p>
-      {#if !scopes}
-        <p class="muted">Loading…</p>
-      {:else}
-        {#each [['users', 'Private chats'], ['groups', 'Groups'], ['channels', 'Channels']] as [key, label]}
-          <label class="toggle">
-            <input
-              type="checkbox"
-              checked={scopes[key as NotifyScope]}
-              onchange={() => toggleScope(key as NotifyScope)}
-            />
-            <span>{label}</span>
-          </label>
-        {/each}
-      {/if}
+    {:else if section === 'privacy' || section === 'security'}
+      <PrivacySettings view={section} />
 
-    {:else if section === 'sessions'}
-      {#if !sessions.length}
-        <p class="muted">Loading…</p>
-      {:else}
-        {#each sessions as session (session.hash)}
-          <div class="session">
-            <span class="session-name">
-              {session.appName} · {session.deviceModel}
-              {#if session.current}<span class="badge">this device</span>{/if}
-            </span>
-            <span class="muted small">
-              {session.platform} · {[session.ip, session.country].filter(Boolean).join(' · ')}
-            </span>
-            <span class="muted small">{dateOf(session.dateActive)}</span>
-            {#if !session.current}
-              <button class="danger small-btn" onclick={() => kill(session)}>Terminate</button>
-            {/if}
-          </div>
-        {/each}
-        <button class="danger" onclick={killOthers}>Terminate all other sessions</button>
-      {/if}
+    {:else if section === 'data'}
+      <DataSettings onerror={(message) => (error = message)} />
 
     {:else if section === 'premium'}
       <PremiumPanel />
@@ -343,26 +365,7 @@
       {/if}
 
     {:else if section === 'business'}
-      {#if !business}
-        <p class="muted">Loading…</p>
-      {:else}
-        <p class="label">Current business setup</p>
-        <p class="muted small">Working hours: {business.hoursText || 'not set'}</p>
-        <p class="muted small">Location: {business.location || 'not set'}</p>
-        <p class="muted small">Greeting message: {business.greeting ? 'on' : 'off'}</p>
-        <p class="muted small">Away message: {business.away ? 'on' : 'off'}</p>
-
-        <p class="label">Intro</p>
-        <label class="field"><span>Title</span><input bind:value={introTitle} /></label>
-        <label class="field"><span>Description</span><input bind:value={introDescription} /></label>
-        <button class="primary" onclick={submitIntro} disabled={saving}>
-          {saving ? 'Saving…' : 'Save intro'}
-        </button>
-        <p class="muted small">
-          Hours, location, greeting and away messages are read-only here — editing them
-          needs Premium and the full business editor.
-        </p>
-      {/if}
+      <BusinessSettings onerror={(message) => (error = message)} />
 
     {:else}
       {#if !bots.length}
@@ -381,6 +384,18 @@
     {/if}
   </div>
 </aside>
+
+{#if cropping && pendingPhoto}
+  <ImageCropper
+    file={pendingPhoto}
+    title="Crop your profile photo"
+    onconfirm={commitPhoto}
+    oncancel={() => {
+      cropping = false;
+      pendingPhoto = null;
+    }}
+  />
+{/if}
 
 <style>
   .settings {
@@ -480,6 +495,28 @@
     border-color: var(--accent);
   }
 
+  .field select {
+    padding: 9px 12px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: transparent;
+    color: var(--text);
+    outline: none;
+  }
+
+  .field select:focus {
+    border-color: var(--accent);
+  }
+
+  .photo-actions {
+    display: flex;
+    gap: 6px;
+  }
+
+  .file-input {
+    display: none;
+  }
+
   .label {
     margin: 8px 0 0;
     font-size: 11px;
@@ -488,71 +525,11 @@
     color: var(--text-dim);
   }
 
-  .chips {
-    display: flex;
-    gap: 6px;
-  }
-
-  .chips button {
-    padding: 6px 12px;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    background: transparent;
-    color: inherit;
-    cursor: pointer;
-    font-size: 13px;
-    text-transform: capitalize;
-  }
-
-  .chips button.on {
-    background: var(--accent);
-    border-color: transparent;
-    color: #fff;
-  }
-
-  .swatches {
-    display: flex;
-    gap: 8px;
-  }
-
-  .swatch {
-    width: 28px;
-    height: 28px;
-    border-radius: 50%;
-    border: 2px solid transparent;
-    cursor: pointer;
-  }
-
-  .swatch.on {
-    border-color: var(--text);
-  }
-
   .toggle {
     display: flex;
     align-items: center;
     gap: 8px;
     font-size: 14px;
-  }
-
-  .session {
-    display: grid;
-    gap: 2px;
-    padding: 10px 0;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .session-name {
-    font-size: 14px;
-    font-weight: 500;
-  }
-
-  .badge {
-    margin-left: 6px;
-    padding: 1px 6px;
-    border-radius: 999px;
-    background: var(--accent);
-    color: #fff;
-    font-size: 11px;
   }
 
   .bot {
@@ -600,9 +577,14 @@
   }
 
   .small-btn {
-    padding: 6px 10px;
-    font-size: 12px;
+    padding: 6px 12px;
+    font-size: 13px;
     justify-self: start;
+  }
+
+  .small-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
   }
 
   .muted {

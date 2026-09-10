@@ -1,0 +1,39 @@
+
+  .pane {
+    display: grid;
+    gap: 10px;
+  }
+
+  section {
+    display: grid;
+    gap: 6px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+  }
+
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .chips button {
+    padding: 5px 11px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--text-dim);
+    cursor: pointer;
+    font-size: 13px;
+  }
+
+  .chips button.on {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: #fff;
+  }
+
+  .chips button:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }

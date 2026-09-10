@@ -1,0 +1,22 @@
+
+  .suggest {
+    display: flex;
+    gap: 4px;
+    overflow-x: auto;
+    padding: 6px 10px;
+    border-top: 1px solid var(--border);
+    background: var(--bg-elevated);
+  }
+
+  .tile {
+    flex: none;
+    background: none;
+    border: none;
+    padding: 2px;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+
+  .tile.active {
+    background: color-mix(in srgb, var(--accent) 20%, transparent);
+  }

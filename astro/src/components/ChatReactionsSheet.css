@@ -1,0 +1,106 @@
+
+  .sheet-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    display: grid;
+    place-items: center;
+    background: rgba(0, 0, 0, 0.45);
+  }
+
+  .sheet {
+    width: min(360px, 92vw);
+    max-height: 80vh;
+    overflow-y: auto;
+    padding: 14px;
+    border-radius: 14px;
+    background: var(--bg-elevated);
+  }
+
+  header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+  }
+
+  header button {
+    background: none;
+    border: none;
+    color: inherit;
+    cursor: pointer;
+  }
+
+  .modes {
+    display: grid;
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+
+  .modes label {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    font-size: 14px;
+    cursor: pointer;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 2px;
+    margin-bottom: 8px;
+  }
+
+  .option {
+    background: none;
+    border: none;
+    border-radius: 8px;
+    padding: 4px;
+    cursor: pointer;
+    display: grid;
+    place-items: center;
+    opacity: 0.45;
+  }
+
+  .option.on {
+    opacity: 1;
+    background: color-mix(in srgb, currentColor 14%, transparent);
+  }
+
+  .plain {
+    font-size: 20px;
+    line-height: 1;
+  }
+
+  .muted {
+    font-size: 12px;
+    opacity: 0.65;
+    margin: 0 0 8px;
+  }
+
+  .error {
+    font-size: 12px;
+    color: var(--danger);
+    margin: 0 0 8px;
+  }
+
+  .actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  .actions button {
+    background: none;
+    border: none;
+    border-radius: 8px;
+    padding: 6px 12px;
+    color: inherit;
+    cursor: pointer;
+  }
+
+  .actions .primary {
+    background: var(--accent);
+    color: var(--action-ink);
+  }

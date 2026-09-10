@@ -1,0 +1,497 @@
+
+  .strip {
+    display: flex;
+    gap: 10px;
+    padding: 10px 12px;
+    overflow-x: auto;
+    border-bottom: 1px solid var(--border);
+    flex: none;
+  }
+
+  .story {
+    display: grid;
+    justify-items: center;
+    gap: 3px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: inherit;
+    width: 68px;
+    flex: none;
+  }
+
+  .ring {
+    padding: 2px;
+    border-radius: 50%;
+    border: 2px solid transparent;
+    display: block;
+  }
+
+  .ring.unread {
+    border-color: var(--accent);
+  }
+
+  .ring.own {
+    border-color: var(--border);
+  }
+
+  .ring.plus {
+    width: 52px;
+    height: 52px;
+    line-height: 52px;
+    text-align: center;
+    font-size: 22px;
+    border-color: var(--border);
+    color: var(--text-dim);
+  }
+
+  .name {
+    font-size: 11px;
+    color: var(--text-dim);
+    max-width: 64px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .viewer {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.92);
+    display: grid;
+    place-items: center;
+    z-index: 98;
+  }
+
+  .stage {
+    position: relative;
+    width: min(420px, calc(100vw - 24px));
+    height: min(760px, calc(100vh - 40px));
+    display: grid;
+    grid-template-rows: auto auto 1fr auto;
+    gap: 8px;
+    padding: 10px;
+  }
+
+  .progress {
+    display: flex;
+    gap: 4px;
+  }
+
+  .segment {
+    flex: 1;
+    height: 3px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.25);
+    overflow: hidden;
+  }
+
+  .fill {
+    display: block;
+    height: 100%;
+    background: #fff;
+    transform-origin: left;
+    will-change: transform;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #fff;
+    font-size: 14px;
+  }
+
+  header span {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  header .sound,
+  header .close {
+    background: none;
+    border: none;
+    color: #fff;
+    cursor: pointer;
+    font-size: 16px;
+    flex: none;
+  }
+
+  img,
+  video {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    min-height: 0;
+  }
+
+  .foot {
+    display: grid;
+    gap: 6px;
+  }
+
+  .caption {
+    margin: 0;
+    color: #fff;
+    font-size: 14px;
+  }
+
+  .reactions {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .reaction {
+    background: rgba(255, 255, 255, 0.12);
+    border: none;
+    border-radius: 50%;
+    width: 36px;
+    height: 36px;
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+  }
+
+  .reaction.picked {
+    background: var(--accent);
+  }
+
+  .reply-bar {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+
+  .reply-bar input {
+    flex: 1;
+    min-width: 0;
+    border-radius: 16px;
+    border: none;
+    padding: 8px 12px;
+    background: rgba(255, 255, 255, 0.14);
+    color: #fff;
+  }
+
+  .owner-bar {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .chip {
+    background: rgba(255, 255, 255, 0.14);
+    border: none;
+    border-radius: 14px;
+    padding: 6px 10px;
+    color: inherit;
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .chip.danger {
+    color: #ff8080;
+  }
+
+  .chip:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  .owner-bar .chip,
+  .reply-bar .chip {
+    color: #fff;
+  }
+
+  .nav {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(255, 255, 255, 0.12);
+    color: #fff;
+    font-size: 22px;
+    cursor: pointer;
+  }
+
+  .prev {
+    left: -50px;
+  }
+
+  .next {
+    right: -50px;
+  }
+
+  .muted {
+    color: rgba(255, 255, 255, 0.7);
+    align-self: center;
+    justify-self: center;
+  }
+
+  .backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    display: grid;
+    place-items: center;
+    z-index: 99;
+  }
+
+  .sheet {
+    width: min(420px, calc(100vw - 24px));
+    max-height: calc(100vh - 60px);
+    display: flex;
+    flex-direction: column;
+    background: var(--panel, #1e1e1e);
+    color: var(--text, #fff);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+
+  .sheet-head {
+    padding: 12px 14px;
+    font-weight: 600;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .sheet-body {
+    padding: 12px 14px;
+    overflow-y: auto;
+    display: grid;
+    gap: 10px;
+  }
+
+  .sheet-foot {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 10px 14px;
+    border-top: 1px solid var(--border);
+  }
+
+  .sheet-foot button {
+    border: none;
+    border-radius: 8px;
+    padding: 8px 14px;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+  }
+
+  .sheet-foot .primary {
+    background: var(--accent);
+    color: #fff;
+  }
+
+  .sheet-foot button:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  .tabs {
+    display: flex;
+    gap: 6px;
+    padding: 8px 14px 0;
+  }
+
+  .tabs button {
+    flex: 1;
+    border: none;
+    background: transparent;
+    color: var(--text-dim);
+    padding: 6px;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+  }
+
+  .tabs .active {
+    color: inherit;
+    border-bottom-color: var(--accent);
+  }
+
+  .file {
+    display: block;
+    cursor: pointer;
+  }
+
+  .file input {
+    display: none;
+  }
+
+  .file span {
+    display: block;
+    padding: 10px;
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+    text-align: center;
+    font-size: 13px;
+    color: var(--text-dim);
+  }
+
+  .preview {
+    width: 100%;
+    max-height: 240px;
+    object-fit: contain;
+    border-radius: 8px;
+    background: #000;
+  }
+
+  .caption-input {
+    width: 100%;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: inherit;
+    padding: 8px 10px;
+  }
+
+  fieldset {
+    border: none;
+    padding: 0;
+    margin: 0;
+    display: grid;
+    gap: 4px;
+  }
+
+  legend {
+    font-size: 12px;
+    color: var(--text-dim);
+    padding: 0 0 4px;
+  }
+
+  .option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+  }
+
+  .row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 13px;
+  }
+
+  .contacts {
+    max-height: 200px;
+    overflow-y: auto;
+    display: grid;
+    gap: 2px;
+  }
+
+  .contact {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: none;
+    border: none;
+    color: inherit;
+    padding: 5px 4px;
+    border-radius: 8px;
+    cursor: pointer;
+    text-align: left;
+  }
+
+  .contact.picked {
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .contact .name {
+    flex: 1;
+    min-width: 0;
+    max-width: none;
+    font-size: 13px;
+    color: inherit;
+  }
+
+  .check {
+    color: var(--accent);
+  }
+
+  .viewer-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .viewer-row .name {
+    flex: 1;
+    min-width: 0;
+    max-width: none;
+    font-size: 13px;
+    color: inherit;
+  }
+
+  .viewer-reaction {
+    font-size: 15px;
+  }
+
+  .managed {
+    display: grid;
+    gap: 6px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .managed-info {
+    display: grid;
+    gap: 2px;
+    font-size: 13px;
+  }
+
+  .managed-actions {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .meta,
+  .hint {
+    font-size: 12px;
+    color: var(--text-dim);
+    margin: 0;
+  }
+
+  .tools {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    padding-top: 6px;
+  }
+
+  .error {
+    color: #ff8080;
+    font-size: 12px;
+    margin: 0;
+  }
+
+  .toast {
+    position: fixed;
+    left: 50%;
+    bottom: 28px;
+    transform: translateX(-50%);
+    background: rgba(0, 0, 0, 0.85);
+    color: #fff;
+    padding: 8px 14px;
+    border-radius: 16px;
+    font-size: 13px;
+    z-index: 120;
+  }
+
+  @media (max-width: 860px) {
+    .prev {
+      left: 4px;
+    }
+
+    .next {
+      right: 4px;
+    }
+  }

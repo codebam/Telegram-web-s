@@ -1,0 +1,67 @@
+
+  .qr {
+    position: relative;
+    width: 240px;
+    height: 240px;
+    margin: 0 auto 20px;
+    display: grid;
+    place-items: center;
+  }
+
+  .qr-host {
+    width: 240px;
+    height: 240px;
+    display: grid;
+    place-items: center;
+  }
+
+  /* paintQrCode sizes the canvas by device pixel ratio; keep it in the box. */
+  .qr-host :global(canvas) {
+    width: 100% !important;
+    height: 100% !important;
+    border-radius: 12px;
+  }
+
+  .qr-placeholder {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    color: var(--text-dim);
+    font-size: 13px;
+  }
+
+  .steps {
+    margin: 0 0 4px;
+    padding: 0;
+    list-style: none;
+    counter-reset: step;
+    text-align: left;
+    display: grid;
+    gap: 10px;
+  }
+
+  .steps li {
+    position: relative;
+    padding-left: 32px;
+    font-size: 14px;
+    line-height: 1.4;
+    color: var(--text-dim);
+  }
+
+  .steps li::before {
+    counter-increment: step;
+    content: counter(step);
+    position: absolute;
+    left: 0;
+    top: -1px;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 600;
+    display: grid;
+    place-items: center;
+  }

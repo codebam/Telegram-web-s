@@ -1,5 +1,7 @@
 <script lang="ts">
-  import {loadCoverUrl, invoiceCheckoutUrl, type InvoiceExtra} from '$lib/telegram/messageTypes';
+  import Checkout from './Checkout.svelte';
+  import {loadCoverUrl, type InvoiceExtra} from '$lib/telegram/messageTypes';
+  import {openInvoice, openReceipt, type Checkout as CheckoutData} from '$lib/telegram/payments';
 
   let {
     peerId,
@@ -15,8 +17,10 @@
 
   let url = $state<string | null>(null);
   let paying = $state(false);
+  let checkout = $state<CheckoutData | null>(null);
+  let paidHere = $state(false);
 
-  const paid = $derived(!!invoice.receiptMid);
+  const paid = $derived(!!invoice.receiptMid || paidHere);
 
   $effect(() => {
     if (!invoice.hasPhoto) return;
@@ -27,18 +31,17 @@
     });
   });
 
+  /**
+   * Both the payment and the receipt open the in-app checkout sheet — the same
+   * one Stars top-ups and gifts use, so no invoice has to leave the client.
+   */
   async function pay() {
     if (paying) return;
     paying = true;
     try {
-      const checkout = await invoiceCheckoutUrl(peerId, mid);
-      if (checkout) {
-        window.open(checkout, '_blank', 'noopener,noreferrer');
-      } else {
-        // Stars and native-provider forms need a checkout UI this client does
-        // not have; say so rather than opening something that cannot complete.
-        onerror?.('This invoice can only be paid in an official Telegram app');
-      }
+      checkout = paid ?
+        await openReceipt(peerId, invoice.receiptMid || mid) :
+        await openInvoice(peerId, mid);
     } catch (err: any) {
       onerror?.(err?.message || err?.type || 'Could not open the checkout');
     } finally {
@@ -59,10 +62,21 @@
     <span class="price">{invoice.priceText}</span>
     {#if invoice.test}<span class="tag">Test</span>{/if}
   </div>
-  <button onclick={pay} disabled={paying || paid}>
-    {paid ? 'Paid' : paying ? 'Opening…' : `Pay ${invoice.priceText}`}
+  <button onclick={pay} disabled={paying}>
+    {paying ? 'Opening…' : paid ? 'View receipt' : `Pay ${invoice.priceText}`}
   </button>
 </div>
+
+{#if checkout}
+  <Checkout
+    {checkout}
+    onclose={() => (checkout = null)}
+    ondone={() => {
+      checkout = null;
+      paidHere = true;
+    }}
+  />
+{/if}
 
 <style>
   .invoice {

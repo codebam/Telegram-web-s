@@ -1,0 +1,138 @@
+
+  .backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    display: grid;
+    place-items: center;
+    z-index: 98;
+  }
+
+  .panel {
+    width: min(520px, calc(100vw - 32px));
+    max-height: calc(100vh - 48px);
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 18px;
+    background: var(--bg-solid, var(--bg-elevated));
+    border: 1px solid var(--border);
+    border-radius: 14px;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    font-weight: 600;
+    font-size: 16px;
+  }
+
+  .close {
+    display: grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: inherit;
+    opacity: 0.6;
+    cursor: pointer;
+  }
+
+  .close:hover {
+    opacity: 1;
+    background: color-mix(in srgb, var(--text) 10%, transparent);
+  }
+
+  .muted {
+    margin: 0;
+    font-size: 13px;
+    color: var(--text-dim);
+  }
+
+  .error {
+    margin: 0;
+    font-size: 12px;
+    color: var(--danger, #e05c5c);
+  }
+
+  .list {
+    display: grid;
+    gap: 10px;
+  }
+
+  .row {
+    display: grid;
+    gap: 6px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+  }
+
+  .when {
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+
+  .text {
+    font-size: 14px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .edit {
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    resize: vertical;
+    outline: none;
+  }
+
+  .edit:focus {
+    border-color: var(--accent);
+  }
+
+  .actions,
+  footer {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  footer {
+    justify-content: flex-end;
+  }
+
+  .actions button,
+  footer button {
+    padding: 5px 11px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: transparent;
+    color: inherit;
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .actions button:disabled,
+  footer button:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+
+  .actions .primary {
+    border-color: transparent;
+    background: var(--action, var(--accent));
+    color: var(--action-ink, #fff);
+  }
+
+  .danger {
+    color: var(--danger, #e05c5c);
+  }

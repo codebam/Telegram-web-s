@@ -1,0 +1,59 @@
+diff --git a/dist/index.js b/dist/index.js
+index 30f8d74c6eb9b0f55d0e9e1986e8117b3fe32b51..2b768f03d2881a7474a7ff7a5c730fbb92c41e11 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -56,10 +56,20 @@ function index_default({
+           reactAliasesEnabled: compat ?? false,
+           include,
+           exclude,
+-          babel: {
+-            ...babel,
+-            cwd: fileURLToPath(babelCwd)
+-          }
++          /*
++           * Local patch (see astro/astro.config.mjs): upstream always passes a
++           * `babel` object here, which makes the preset transform JSX with Babel
++           * instead of esbuild/oxc. That path is broken against @babel/core 8 —
++           * outside production the preset uses
++           * @babel/plugin-transform-react-jsx-development, whose
++           * buildJSXElementCall calls path.scope.buildUndefinedNode(), an API
++           * Babel 8 removed — so `astro dev` answers every component with a 500
++           * ("path.scope.buildUndefinedNode is not a function") and the island
++           * never hydrates. Only pass the options through when the caller
++           * actually supplied them, which leaves the preset on its supported
++           * esbuild/oxc path.
++           */
++          ...babel ? {babel: {...babel, cwd: fileURLToPath(babelCwd)}} : {}
+         });
+         const viteConfig = {
+           optimizeDeps: {
+diff --git a/dist/server.js b/dist/server.js
+index cbd3acf1024d6be0291de6dc1bd46ca619e0c5e1..b8527e5ba521aa4754e9df9916a559a3ded97512 100644
+--- a/dist/server.js
++++ b/dist/server.js
+@@ -1,10 +1,24 @@
+-import opts from "astro:preact:opts";
+ import { Component as BaseComponent, h } from "preact";
+ import { renderToStringAsync } from "preact-render-to-string";
+ import { getContext, incrementIslandId } from "./context.js";
+ import { restoreSignalsOnProps, serializeSignals } from "./signals.js";
+ import StaticHtml from "./static-html.js";
+ import { createFilter } from "@astrojs/internal-helpers/create-filter";
++
++/*
++ * Local patch (see astro/astro.config.mjs and README in this repo): the upstream
++ * file imports the virtual module "astro:preact:opts" for its include/exclude
++ * filter. Astro externalises this package when it builds or dev-renders a page,
++ * so Node is handed a module id it cannot resolve and the build and the dev
++ * server both die with "Only URLs with a scheme in: file, data, and node are
++ * supported... Received protocol 'astro:'". Bundling the package instead drags
++ * its CJS dependencies through Vite's module runner ("require is not defined").
++ *
++ * This app is the only JSX renderer in the project, so the filter the virtual
++ * module configures has nothing to disambiguate: `check()` applies to every
++ * component, which is what an empty opts does.
++ */
++const opts = {};
+ const slotName = (str) => str.trim().replace(/[-_]([a-z])/g, (_, w) => w.toUpperCase());
+ let originalConsoleError;
+ let consoleFilterRefs = 0;

@@ -1,0 +1,76 @@
+
+  .pane {
+    display: grid;
+    gap: 12px;
+  }
+
+  section {
+    display: grid;
+    gap: 6px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+  }
+
+  .photo-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .photo-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .picker {
+    display: none;
+  }
+
+  .kinds {
+    display: flex;
+    gap: 8px;
+  }
+
+  .kinds button {
+    flex: 1;
+    padding: 7px 12px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: transparent;
+    color: var(--text-dim);
+    cursor: pointer;
+    font-size: 13px;
+  }
+
+  .kinds button.on {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .link-edit {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+  }
+
+  .link-edit:focus-within {
+    border-color: var(--accent);
+  }
+
+  .at {
+    color: var(--text-dim);
+  }
+
+  .link-edit input {
+    flex: 1;
+    min-width: 0;
+    background: none;
+    border: none;
+    color: inherit;
+    font: inherit;
+    outline: none;
+  }

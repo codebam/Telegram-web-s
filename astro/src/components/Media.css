@@ -1,0 +1,260 @@
+
+  .frame {
+    position: relative;
+    width: 100%;
+    max-width: 320px;
+    max-height: 380px;
+    border-radius: 10px;
+    overflow: hidden;
+    background: color-mix(in srgb, var(--text) 8%, transparent);
+    display: grid;
+    place-items: center;
+  }
+
+  .frame.sticker {
+    background: none;
+    max-width: 160px;
+  }
+
+  /* Album tiles are sized by the grid, so the media fills whatever it is
+     given instead of reserving its own aspect ratio. */
+  .frame.fill {
+    max-width: none;
+    max-height: none;
+    height: 100%;
+    border-radius: 0;
+  }
+
+  .frame.hidden img,
+  .frame.hidden video {
+    filter: blur(18px);
+    transform: scale(1.15);
+  }
+
+  .spoiler {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    border: none;
+    padding: 0;
+    background: rgba(0, 0, 0, 0.25);
+    cursor: pointer;
+  }
+
+  /* Two offset dot grids drifting past each other stand in for the particle
+     field the official clients animate over a spoiler. */
+  .dots {
+    position: absolute;
+    inset: -8px;
+    background-image:
+      radial-gradient(rgba(255, 255, 255, 0.9) 1px, transparent 1px),
+      radial-gradient(rgba(255, 255, 255, 0.55) 1px, transparent 1px);
+    background-size: 7px 7px, 11px 11px;
+    animation: spoiler-drift 6s linear infinite;
+  }
+
+  .spoiler-label {
+    position: relative;
+    padding: 3px 10px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.5);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  @keyframes spoiler-drift {
+    from {
+      background-position: 0 0, 0 0;
+    }
+    to {
+      background-position: 21px 14px, -22px 11px;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .dots {
+      animation: none;
+    }
+  }
+
+  img,
+  video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
+  .frame.sticker img {
+    object-fit: contain;
+  }
+
+  .fallback {
+    font-size: 13px;
+    opacity: 0.75;
+  }
+
+  .play {
+    position: absolute;
+    left: 8px;
+    bottom: 8px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    font-size: 12px;
+  }
+
+  .file {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    color: inherit;
+    text-decoration: none;
+    width: 100%;
+    padding: 0;
+    background: none;
+    border: none;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  button.file:hover .name {
+    text-decoration: underline;
+  }
+
+  button.file:disabled {
+    cursor: default;
+  }
+
+  audio {
+    display: none;
+  }
+
+  .player {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 220px;
+    max-width: 280px;
+  }
+
+  .play-btn {
+    width: 34px;
+    height: 34px;
+    flex: none;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: var(--action);
+    color: var(--action-ink);
+    cursor: pointer;
+    display: grid;
+    place-items: center;
+  }
+
+  .play-btn:disabled,
+  .speed:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  .track {
+    display: grid;
+    gap: 2px;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .wave {
+    display: flex;
+    align-items: center;
+    gap: 1px;
+    height: 24px;
+    cursor: pointer;
+  }
+
+  .bar {
+    flex: 1;
+    min-width: 1px;
+    border-radius: 1px;
+    background: color-mix(in srgb, currentColor 35%, transparent);
+  }
+
+  .bar.played {
+    background: var(--action, currentColor);
+  }
+
+  .speed {
+    flex: none;
+    padding: 2px 6px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: none;
+    color: inherit;
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+  }
+
+  .round {
+    position: relative;
+    width: 200px;
+    height: 200px;
+    max-width: 60vw;
+    max-height: 60vw;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    overflow: hidden;
+    background: color-mix(in srgb, var(--text) 8%, transparent);
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+  }
+
+  .round video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  .round-badge {
+    position: absolute;
+    bottom: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 1px 8px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    font-size: 11px;
+    white-space: nowrap;
+  }
+
+  .glyph {
+    display: grid;
+    place-items: center;
+    opacity: 0.75;
+    font-size: 22px;
+  }
+
+  .info {
+    display: grid;
+    min-width: 0;
+  }
+
+  .name {
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .sub {
+    font-size: 12px;
+    opacity: 0.7;
+  }

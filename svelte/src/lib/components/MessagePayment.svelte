@@ -3,11 +3,8 @@
   import {
     formatAmount,
     loadGiveawayInfo,
-    loadStarsBalance,
-    maxPaidReaction,
     openInvoice,
     openReceipt,
-    sendPaidReaction,
     unlockPaidMedia,
     type Checkout as CheckoutData,
     type GiveawayInfo,
@@ -18,14 +15,11 @@
     peerId,
     mid,
     payment,
-    paidReactions = false,
     onboost
   }: {
     peerId: number;
     mid: number;
     payment: PaymentPreview | null;
-    /** The peer accepts star reactions on its posts. */
-    paidReactions?: boolean;
     /** Opens the channel's boost page. */
     onboost?: () => void;
   } = $props();
@@ -35,12 +29,6 @@
   let error = $state('');
   let note = $state('');
   let busy = $state('');
-
-  let reactionOpen = $state(false);
-  let reactionCount = $state(1);
-  let reactionMax = $state(2500);
-  let reactionBalance = $state<number | null>(null);
-  let reactionAnonymous = $state(false);
 
   function report(err: any, fallback: string) {
     error = err?.type || err?.message || fallback;
@@ -65,38 +53,6 @@
       giveaway = await loadGiveawayInfo(peerId, mid);
     } catch(err) {
       report(err, 'Could not load the giveaway details');
-    } finally {
-      busy = '';
-    }
-  }
-
-  async function openReactions() {
-    reactionOpen = true;
-    error = '';
-    try {
-      [reactionMax, reactionBalance] = await Promise.all([
-        maxPaidReaction(),
-        loadStarsBalance().then((value) => value.stars)
-      ]);
-    } catch(err) {
-      report(err, 'Could not read your balance');
-    }
-  }
-
-  async function sendReaction() {
-    error = '';
-    busy = 'reaction';
-    try {
-      await sendPaidReaction(peerId, mid, reactionCount, reactionAnonymous);
-      note = `Sent ★ ${reactionCount}`;
-      reactionOpen = false;
-      reactionBalance = (await loadStarsBalance(true)).stars;
-    } catch(err: any) {
-      if(err?.type === 'BALANCE_TOO_LOW') {
-        error = 'Not enough Stars — top up in Settings → Stars first.';
-      } else {
-        report(err, 'The reaction was not sent');
-      }
     } finally {
       busy = '';
     }
@@ -205,35 +161,6 @@
 
     {#if error}<span class="error">{error}</span>{/if}
     {#if note}<span class="ok">{note}</span>{/if}
-  </div>
-{/if}
-
-{#if paidReactions}
-  <div class="paid-reaction">
-    {#if !reactionOpen}
-      <button class="ghost" onclick={openReactions}>★ Send Stars</button>
-      {#if note}<span class="ok">{note}</span>{/if}
-    {:else}
-      <label class="field">
-        <span>Stars to send (max {reactionMax.toLocaleString()})</span>
-        <input type="number" min="1" max={reactionMax} bind:value={reactionCount} />
-      </label>
-      {#if reactionBalance !== null}
-        <span class="muted">Balance: ★ {reactionBalance.toLocaleString()}</span>
-      {/if}
-      <label class="toggle">
-        <input type="checkbox" bind:checked={reactionAnonymous} />
-        <span>Send anonymously</span>
-      </label>
-      <span class="muted">Stars leave your balance immediately and cannot be taken back.</span>
-      <div class="row">
-        <button class="primary" onclick={sendReaction} disabled={busy === 'reaction' || reactionCount < 1}>
-          {busy === 'reaction' ? 'Sending…' : `Send ★ ${reactionCount}`}
-        </button>
-        <button class="ghost" onclick={() => (reactionOpen = false)}>Cancel</button>
-      </div>
-      {#if error}<span class="error">{error}</span>{/if}
-    {/if}
   </div>
 {/if}
 

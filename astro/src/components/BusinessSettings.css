@@ -1,0 +1,170 @@
+
+  .panels {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .panels button {
+    padding: 5px 9px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--text-dim);
+    cursor: pointer;
+    font-size: 12px;
+  }
+
+  .panels button.on {
+    background: var(--accent);
+    border-color: transparent;
+    color: #fff;
+  }
+
+  .day {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+  }
+
+  .day.off {
+    opacity: 0.5;
+  }
+
+  .day-name {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 120px;
+    flex: none;
+  }
+
+  .closed {
+    margin-left: 2px;
+  }
+
+  .dash {
+    color: var(--text-dim);
+  }
+
+  .reply {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 2px 8px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .reply-name {
+    font-size: 14px;
+    font-weight: 500;
+  }
+
+  .reply-actions {
+    grid-row: span 2;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .bot-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .excluded {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .label {
+    margin: 10px 0 0;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-dim);
+  }
+
+  .field {
+    display: grid;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  .field input,
+  select {
+    padding: 8px 11px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: transparent;
+    color: var(--text);
+    outline: none;
+  }
+
+  .field input:focus,
+  select:focus {
+    border-color: var(--accent);
+  }
+
+  .day input[type='time'] {
+    padding: 5px 8px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text);
+    font-size: 12px;
+  }
+
+  .toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+  }
+
+  .primary,
+  .danger,
+  .small-btn {
+    padding: 10px 14px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+  }
+
+  .primary {
+    background: var(--accent);
+    border-color: transparent;
+    color: #fff;
+    font-weight: 600;
+  }
+
+  .danger {
+    color: var(--danger);
+  }
+
+  .small-btn {
+    padding: 6px 10px;
+    font-size: 12px;
+    justify-self: start;
+  }
+
+  .muted {
+    color: var(--text-dim);
+  }
+
+  .small {
+    font-size: 12px;
+    margin: 0;
+  }
+
+  .ok {
+    margin: 0;
+    color: var(--accent);
+    font-size: 13px;
+  }

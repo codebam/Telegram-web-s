@@ -1,0 +1,111 @@
+
+  .backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 120;
+    display: grid;
+    place-items: center;
+    background: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(2px);
+  }
+
+  .dialog {
+    display: grid;
+    gap: 12px;
+    justify-items: center;
+    padding: 18px;
+    border: 1px solid var(--border);
+    border-radius: var(--pane-radius);
+    background: var(--bg);
+    max-width: calc(100vw - 32px);
+  }
+
+  header {
+    font-weight: 600;
+    justify-self: start;
+  }
+
+  .viewport {
+    position: relative;
+    overflow: hidden;
+    border-radius: 12px;
+    background: #000;
+    cursor: grab;
+    touch-action: none;
+    display: grid;
+    place-items: center;
+    user-select: none;
+  }
+
+  .viewport.grabbing {
+    cursor: grabbing;
+  }
+
+  .viewport img {
+    position: absolute;
+    max-width: none;
+    pointer-events: none;
+  }
+
+  /* Circular cut-out preview — the server renders avatars round. */
+  .mask {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    box-shadow: 0 0 0 999px rgba(0, 0, 0, 0.45);
+    border-radius: 50%;
+  }
+
+  .zoom {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  .zoom input {
+    width: 100%;
+  }
+
+  footer {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    width: 100%;
+  }
+
+  footer button {
+    padding: 9px 14px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+  }
+
+  footer button.primary {
+    background: var(--accent);
+    border-color: transparent;
+    color: #fff;
+    font-weight: 600;
+  }
+
+  .muted {
+    color: var(--text-dim);
+  }
+
+  .small {
+    font-size: 12px;
+    margin: 0;
+    justify-self: start;
+  }
+
+  .error {
+    margin: 0;
+    color: var(--danger);
+    font-size: 13px;
+    justify-self: start;
+  }
