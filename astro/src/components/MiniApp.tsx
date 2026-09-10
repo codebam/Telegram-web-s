@@ -28,6 +28,7 @@ import {
   writeMiniAppPermission,
   botCanManageEmojiStatus,
   allowBotEmojiStatus,
+  webAppAllowedProtocols,
   getPreparedMessage,
   sendPreparedMessage,
   themeParams,
@@ -58,6 +59,14 @@ type ButtonState = {
 
 export function MiniApp({request, onclose, onswitchinline, onlink}: Props) {
   const iframe = useRef<HTMLIFrameElement>(null);
+  /**
+   * The origin answers are addressed to, when the bot asked the frame to stay on
+   * one (`same_origin`). Empty means it did not, and `'*'` is used the way tweb
+   * does; when set, both directions are pinned to it, so a document that
+   * navigated into the frame can neither reach the handlers nor be handed the
+   * answers meant for the mini app.
+   */
+  const targetOrigin = useRef('');
   const url = useSignal('');
   const queryId = useSignal('');
   const error = useSignal('');
@@ -82,7 +91,10 @@ export function MiniApp({request, onclose, onswitchinline, onlink}: Props) {
 
   /** The bot page talks to us with `postMessage(JSON.stringify({eventType, eventData}))`. */
   function send(eventType: string, eventData?: any) {
-    iframe.current?.contentWindow?.postMessage(JSON.stringify({eventType, eventData}), '*');
+    iframe.current?.contentWindow?.postMessage(
+      JSON.stringify({eventType, eventData}),
+      targetOrigin.current || '*'
+    );
   }
 
   function viewport() {
@@ -110,9 +122,20 @@ export function MiniApp({request, onclose, onswitchinline, onlink}: Props) {
   }
 
   function openExternal(target: string) {
-    // A t.me link may itself point at a mini app; let the host take it first.
-    if(onlink?.(target)) return;
-    window.open(target, '_blank', 'noopener,noreferrer');
+    // Only a protocol the server allows may leave the app.
+    let protocol: string;
+    try {
+      protocol = new URL(target).protocol.replace(/:$/, '');
+    } catch(err) {
+      return;
+    }
+
+    void webAppAllowedProtocols().then((allowed) => {
+      if(!allowed.includes(protocol)) return;
+      // A t.me link may itself point at a mini app; let the host take it first.
+      if(onlink?.(target)) return;
+      window.open(target, '_blank', 'noopener,noreferrer');
+    });
   }
 
   async function confirmPrepared() {
@@ -492,6 +515,7 @@ export function MiniApp({request, onclose, onswitchinline, onlink}: Props) {
 
   function onMessage(event: MessageEvent) {
     if(!iframe.current || event.source !== iframe.current.contentWindow) return;
+    if(targetOrigin.current && event.origin !== targetOrigin.current) return;
 
     let payload: any;
     try {
@@ -522,6 +546,7 @@ export function MiniApp({request, onclose, onswitchinline, onlink}: Props) {
     const current = request;
     url.value = '';
     queryId.value = '';
+    targetOrigin.current = '';
     error.value = '';
     sawEvent.value = false;
     stalled.value = false;
@@ -537,6 +562,13 @@ export function MiniApp({request, onclose, onswitchinline, onlink}: Props) {
     requestWebView(current)
       .then((session) => {
         if(cancelled) return;
+        if(session.sameOrigin) {
+          try {
+            targetOrigin.current = new URL(session.url).origin;
+          } catch(err) {
+            targetOrigin.current = '';
+          }
+        }
         url.value = session.url;
         queryId.value = session.queryId;
       })

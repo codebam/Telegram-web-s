@@ -31,6 +31,8 @@ export type MiniAppRequest = {
 export type MiniAppSession = {
   url: string;
   queryId: string;
+  /** The bot asked the frame to stay on the origin it was opened at. */
+  sameOrigin: boolean;
 };
 
 /* ------------------------------------------------------------------ */
@@ -126,7 +128,8 @@ export async function requestWebView(request: MiniAppRequest): Promise<MiniAppSe
   return {
     // The bridge below implements 9.0 events; the server still advertises 8.0.
     url: url.replace('tgWebAppVersion=8.0', 'tgWebAppVersion=9.0'),
-    queryId: result?.query_id ? '' + result.query_id : ''
+    queryId: result?.query_id ? '' + result.query_id : '',
+    sameOrigin: !!result?.pFlags?.same_origin
   };
 }
 
@@ -134,6 +137,21 @@ export async function requestWebView(request: MiniAppRequest): Promise<MiniAppSe
 export async function prolongWebView(peerId: number, botId: number, queryId: string): Promise<void> {
   const {managers} = await bootTelegram();
   await managers.appAttachMenuBotsManager.prolongWebView({peerId, botId, queryId} as any);
+}
+
+/**
+ * The URL protocols the server allows a mini app to open — normally
+ * `['http', 'https', 'tg']`. Used to vet `web_app_open_link` before the host
+ * hands the URL to the browser; a protocol the config does not list is dropped.
+ */
+export async function webAppAllowedProtocols(): Promise<string[]> {
+  const {managers} = await bootTelegram();
+  try {
+    const config: any = await managers.apiManager.getAppConfig();
+    return config?.web_app_allowed_protocols ?? ['http', 'https'];
+  } catch(err) {
+    return ['http', 'https'];
+  }
 }
 
 /** `web_app_data_send` — the bot receives the payload as a service message. */
