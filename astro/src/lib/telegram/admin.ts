@@ -879,7 +879,7 @@ export async function resolveJoinRequest(
 /* ------------------------------------------------------------------ */
 
 export type RecentAction = {
-  id: string;
+  id: number;
   date: number;
   /** Who did it. */
   peerId: number;
@@ -890,21 +890,68 @@ export type RecentAction = {
   detail: string;
 };
 
-export async function loadRecentActions(peerId: number, limit = 50): Promise<RecentAction[]> {
-  const {managers} = await bootTelegram();
-  const events: any[] = await managers.appChatsManager.fetchAdminLogs({
-    channelId: chatIdOf(peerId),
-    limit
-  }) as any;
+/**
+ * The event classes the server can filter the log by, grouped the way an admin
+ * thinks of them rather than one chip per flag. `channelAdminLogEventsFilter`
+ * carries a couple of dozen booleans; five categories cover them.
+ */
+export type AdminLogFilterKey = 'messages' | 'members' | 'admins' | 'settings' | 'calls';
 
-  return Promise.all((events ?? []).map(async(event: any) => {
+type AdminLogFlags = Partial<Record<
+  'join' | 'leave' | 'invite' | 'ban' | 'unban' | 'kick' | 'unkick' |
+  'promote' | 'demote' | 'info' | 'settings' | 'pinned' | 'edit' | 'delete' |
+  'group_call' | 'invites' | 'send' | 'forums' | 'sub_extend' | 'edit_rank',
+  true
+>>;
+
+export const ADMIN_LOG_FILTERS: {key: AdminLogFilterKey; label: string; flags: AdminLogFlags}[] = [
+  {key: 'messages', label: 'Messages', flags: {send: true, edit: true, delete: true, pinned: true}},
+  {key: 'members', label: 'Members', flags: {join: true, leave: true, invite: true, ban: true, unban: true, kick: true, unkick: true}},
+  {key: 'admins', label: 'Admins', flags: {promote: true, demote: true, edit_rank: true}},
+  {key: 'settings', label: 'Settings', flags: {info: true, settings: true, forums: true, invites: true}},
+  {key: 'calls', label: 'Calls', flags: {group_call: true, sub_extend: true}}
+];
+
+export type RecentActionsOptions = {
+  /** Free-text search over the event payloads. */
+  search?: string;
+  /** One of `ADMIN_LOG_FILTERS`; omitted means everything. */
+  filter?: AdminLogFilterKey;
+  /** Fetch events older than this id — the paging cursor. */
+  offsetId?: number;
+  limit?: number;
+};
+
+export type RecentActionsPage = {
+  items: RecentAction[];
+  /** The server has no older events for this search and filter. */
+  isEnd: boolean;
+};
+
+export async function loadRecentActions(
+  peerId: number,
+  options: RecentActionsOptions = {}
+): Promise<RecentActionsPage> {
+  const {managers} = await bootTelegram();
+  const {search, filter, offsetId, limit = 50} = options;
+  // `getAdminLogs` (not `fetchAdminLogs`) so paging and filtering reuse one
+  // cached fetcher per search/filter instead of re-requesting the head.
+  const page: any = await managers.appChatsManager.getAdminLogs({
+    channelId: chatIdOf(peerId),
+    offsetId: offsetId as any,
+    limit,
+    search: search || undefined,
+    flags: filter ? ADMIN_LOG_FILTERS.find((option) => option.key === filter)?.flags : undefined
+  });
+
+  const items = await Promise.all((page?.items ?? []).map(async(event: any) => {
     const actorId = Number(event?.user_id ?? 0);
     const actor: any = actorId ? await managers.appPeersManager.getPeer(actorId) : null;
     const name = [actor?.first_name, actor?.last_name].filter(Boolean).join(' ').trim();
     const described = await describeAction(event?.action, managers);
 
     return {
-      id: String(event?.id ?? ''),
+      id: Number(event?.id ?? 0),
       date: Number(event?.date ?? 0),
       peerId: actorId,
       title: name || actor?.title || actor?.username || 'Someone',
@@ -912,6 +959,8 @@ export async function loadRecentActions(peerId: number, limit = 50): Promise<Rec
       detail: described.detail
     };
   }));
+
+  return {items, isEnd: !!page?.isEnd};
 }
 
 const ADMIN_LOG_TEXT: Record<string, string> = {
