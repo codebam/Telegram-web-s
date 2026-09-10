@@ -68,12 +68,17 @@ Everything here is verified by `pnpm typecheck:astro`, the 456 guard tests,
 | Emoji suggestions | The suggestion strip answers an ordinary word as well as `/`, `@` and `#`: two letters or more is looked up in the emoji keyword index and the distinct matches are offered beside the word, Enter replacing it. |
 | Replacing a media message's file | Edit offers "Replace media" for a photo, video, GIF or document of our own, sending the new file through `editMessageMedia` with the caption, so the message keeps its id, reactions and position. This also fixed the media URL cache, which was keyed by the message alone and would have served the replaced file's URL for the rest of the tab's life. |
 | Reporting a multi-selection | Report is in the multi-selection bar beside Forward and Delete, and the flow carries the whole id list — the server's report state machine was always keyed to the peer and a list of messages; only the entry point sent one. |
+| The six missing admin settings | Content protection, hidden members, join-to-send, pre-history and anti-spam are toggles in the edit pane, each a `channels.toggle*` call the layer already had; the group location is new — `channels.editLocation` had no wrapper in either client, so `appChatsManager.editLocation` was added, and "Use my location" takes the browser's coordinates since there is no map picker. |
+| Admin log paging, search and filtering | The log was one page of 50 with no controls; it now uses the manager's own `getAdminLogs` (a cached fetcher per search/filter) so "Load more" walks a cursor and five event categories map onto the server's `channelAdminLogEventsFilter`. |
+| Bulk delete | "Delete messages" on a member row deletes everything that user sent (`channels.deleteParticipantHistory`, tweb's own moderation call, gated by the `delete_messages` right); a basic group gets a From/To date-range section (`messages.deleteHistory`), while a channel does not, because `channels.deleteHistory` carries no date bounds. |
 
 The P1 table below is clear. Its last six entries — captions above media,
 animated single-emoji messages, emoji suggestions, typing-action variety,
 replacing the *file* of a media message, and reporting a multi-selection — landed
 in the slice recorded above; the P0 and P1 tables are kept as the audit found
-them, and the "landed" table is what is true now. What remains is the P2 areas
+them, and the "landed" table is what is true now. **Chat administration** has
+since landed too: the six settings that had no UI, the admin log's paging/search/
+filtering, and the two bulk deletes. What remains is the rest of the P2 areas
 (group calls, RTMP, conferences, star-gift actions, sign-up, passkey login,
 passcode lock, in-app browser and Instant View, channel statistics, settings
 search), which are untouched.
@@ -133,11 +138,10 @@ honoured; no age verification, no frozen-account handling *(upstream partially)*
 and articles all eject to an OS browser tab (`Chat.tsx:2262`,
 `GameBubble.tsx:44-47`); web-page previews drop the page photo.
 
-**Admin** — no channel/group statistics, no revenue, no suggested posts, no paid
-messages; six chat-admin settings have no UI (content protection, hidden
-members, join-to-send, pre-history, anti-spam, location); the admin log is
-capped at 50 rows with no filtering; no bulk delete by user or date range; no
-ownership transfer and no way to add members to an existing group.
+**Admin** — the six settings, the admin-log filtering and the two bulk deletes
+landed (see above). Still missing: no channel/group statistics, no revenue, no
+suggested posts, no paid messages; no ownership transfer and no way to add
+members to an existing group.
 
 **Mini apps** — location access answers a hardcoded `available: false`
 (`MiniApp.tsx:300-306`); fullscreen is refused; emoji-status access is
@@ -160,21 +164,15 @@ colour picker (fixed 10-swatch palette) and a rotation wheel.
 
 ## Where to go next
 
-The first slice is done (see "What has landed since this audit" above). The next
-natural slices, smallest first:
+The first three slices are done (see "What has landed since this audit" above):
+the last of the P1 table, and then chat administration. The next natural slices,
+smallest first:
 
-1. **The last of the P1 table** — captions-above-media, animated single-emoji
-   messages, emoji suggestions, typing-action variety, replacing a media
-   message's file, reporting a multi-selection.
-2. **Chat administration** — six settings have no UI at all (content protection,
-   hidden members, join-to-send, pre-history, anti-spam, group location), the
-   admin log cannot be filtered or paged, and there is no bulk delete by user or
-   date range. Each is one manager call the layer already has.
-3. **Search & discovery** — a hashtag can be searched inside a chat now, but the
+1. **Search & discovery** — a hashtag can be searched inside a chat now, but the
    Public-posts scope (`channels.searchPosts`) and people-nearby are still
    absent, and the in-chat search has no `#`-scope rows.
-4. **Calls** — group calls / voice chats are the largest missing area: nothing in
+2. **Calls** — group calls / voice chats are the largest missing area: nothing in
    the client calls `appGroupCallsManager` or `groupCallsController`, so a voice
    chat cannot be joined, and a video call cannot even be placed.
-5. **Stars & gifts** — gifts are receive-only: no info popup, upgrade, wear,
+3. **Stars & gifts** — gifts are receive-only: no info popup, upgrade, wear,
    transfer, resale, collections or profile display.
