@@ -147,7 +147,7 @@ function requireCredentials() {
 }
 
 export default defineConfig({
-  site: 'https://telegram.codebam.ca',
+  site: 'https://tgws.codebam.ca',
   // A static SPA: every route is the same client, so there is exactly one page
   // and it is prerendered. Islands do the rest in the browser.
   output: 'static',

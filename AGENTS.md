@@ -10,7 +10,7 @@ file — edit AGENTS.md, never CLAUDE.md.
 |---|---|---|---|
 | What | **Web S** — the client this repo ships | the previous client, retired | tweb (Telegram Web K), the upstream client |
 | Framework | Astro + Preact islands (`@preact/signals`) | SvelteKit + Svelte 5 runes | Solid.js (custom fork in `src/vendor/solid/`) |
-| Deployed | **yes** — https://telegram.codebam.ca | not built any more | no |
+| Deployed | **yes** — https://tgws.codebam.ca | not built any more | no |
 | Role | the product | the port source, kept for reference | MTProto stack + managers the product imports |
 
 **The client this repo ships is `astro/`.** The Cloudflare Pages build runs
@@ -118,7 +118,7 @@ the port honest.
 
 Deployment is **CI**: the Cloudflare Pages GitHub integration builds the Astro
 client on every push to `master` and publishes it to
-https://telegram.codebam.ca. The dashboard settings are build command
+https://tgws.codebam.ca. The dashboard settings are build command
 `pnpm install && pnpm run build:astro`, output directory `astro/dist`, root
 directory **blank** (the build reads `src/`, the repo-root `.env` and `patches/`,
 so it has to run from the repo root) — there is no workflow file in this repo

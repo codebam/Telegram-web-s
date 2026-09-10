@@ -390,7 +390,7 @@ export async function joinChatlistByInvite(slug: string, peerIds: number[]): Pro
  * The link the app was opened with.
  *
  * `static/_redirects` serves `index.html` for every path, so a shared
- * `https://telegram.codebam.ca/durov` arrives here as a normal load with the
+ * `https://tgws.codebam.ca/durov` arrives here as a normal load with the
  * deep link sitting in `location`. tweb's own `#?tgaddr=` form is accepted too.
  * The URL is rewritten back to `/` so a refresh does not re-trigger the link.
  */

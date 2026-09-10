@@ -14,7 +14,7 @@
 # Usage:
 #   bash scripts/test-browser.sh                      # headless, localhost:8081
 #   bash scripts/test-browser.sh --headed             # watch it
-#   bash scripts/test-browser.sh https://telegram.codebam.ca
+#   bash scripts/test-browser.sh https://tgws.codebam.ca
 #
 # The default URL is the `pnpm start:svelte` dev server.
 set -euo pipefail
