@@ -64,6 +64,7 @@ import {AudioPlayerBar} from './AudioPlayerBar';
 import {Media} from './Media';
 import {MessagePayment} from './MessagePayment';
 import {CallScreen} from './CallScreen';
+import {GroupCallScreen} from './GroupCallScreen';
 import {MiniApp} from './MiniApp';
 import {AccountSwitcher} from './AccountSwitcher';
 import {ConnectionStatus} from './ConnectionStatus';
@@ -266,12 +267,16 @@ import {applyAccent, applyDensity, applyTheme} from '$lib/telegram/theme';
 import {playAudioMessage} from '$lib/telegram/player';
 import {applyAppearance} from '$lib/telegram/appearance';
 import {
+  canManageGroupCall,
   getBusinessBot,
+  joinOrStartGroupCall,
+  loadGroupCallPreview,
   onPeerSettings,
   removeBusinessBot,
   setBusinessBotPaused,
   startCall,
-  type BusinessBot
+  type BusinessBot,
+  type GroupCallPreview
 } from '$lib/telegram/extras';
 import {EffectOverlay} from './EffectOverlay';
 import {EffectPicker} from './EffectPicker';
@@ -384,6 +389,9 @@ export function Chat() {
   /** Calls are one-to-one only, and never to Saved Messages. */
   const activeIsUser = useSignal(false);
   const activeIsSelf = useSignal(false);
+  /** Active voice chat of the open group/channel, for the header entry point. */
+  const groupCallPreview = useSignal<GroupCallPreview | null>(null);
+  const groupCallCanManage = useSignal(false);
   /**
    * Highest outgoing message the other side has read. In a group this is the
    * position up to which *everyone* has read, which is what the second tick
@@ -2122,6 +2130,53 @@ export function Chat() {
       failure.reason === 'no-mic' ?
         (failure.detail ?? `No ${device} found. Connect one and try again.`) :
         `Could not start the ${isVideo ? 'video call' : 'call'}${failure.detail ? `: ${failure.detail}` : ''}`;
+  }
+
+  /**
+   * Load the open chat's voice chat after render, never on the chat-open path,
+   * and refresh only when the chat actually changes.
+   */
+  const groupCallRequest = useRef(0);
+  useSignalEffect(() => {
+    const peerId = activePeerId.value;
+    const isUser = activeIsUser.value;
+    const isSelf = activeIsSelf.value;
+    const request = ++groupCallRequest.current;
+
+    groupCallPreview.value = null;
+    groupCallCanManage.value = false;
+
+    if(peerId === null || peerId >= 0 || isUser || isSelf) return;
+
+    (async() => {
+      try {
+        const [preview, canManage] = await Promise.all([
+          loadGroupCallPreview(peerId),
+          canManageGroupCall(peerId)
+        ]);
+        if(request !== groupCallRequest.current) return;
+        groupCallPreview.value = preview;
+        groupCallCanManage.value = canManage;
+      } catch(err) {
+      }
+    })();
+  });
+
+  /** Join the open chat's voice chat, or start one when there is none. */
+  async function openGroupCall() {
+    if(activePeerId.value === null) return;
+
+    const result = await joinOrStartGroupCall(activePeerId.value);
+    if(result.ok) return;
+
+    // `strictNullChecks` is off, which also switches off narrowing of a boolean
+    // discriminant, so the failure shape is read out by hand (as in `placeCall`).
+    const failure = 'reason' in result ? result : {reason: 'failed'};
+    error.value =
+      failure.reason === 'no-rights' ? 'You cannot start a voice chat here' :
+      failure.reason === 'busy' ? 'Finish your current call first' :
+      failure.reason === 'not-a-group' ? 'Voice chats are for groups and channels' :
+      'Could not open the voice chat';
   }
 
   /**
@@ -4324,6 +4379,7 @@ export function Chat() {
   return (
     <>
       <CallScreen />
+      <GroupCallScreen />
 
       <div
         class={[
@@ -4805,6 +4861,19 @@ export function Chat() {
                     <button class="icon-button" onClick={() => placeCall(true)} aria-label="Video call"><Glyph name="video" /></button>
                   </>
                 ) : null}
+                {!activeIsUser.value && !activeIsSelf.value && activePeerId.value !== null &&
+                  (groupCallPreview.value || groupCallCanManage.value) ? (
+                    <button
+                      class={['icon-button', groupCallPreview.value && 'group-call-live'].filter(Boolean).join(' ')}
+                      onClick={openGroupCall}
+                      aria-label={groupCallPreview.value ? 'Join the voice chat' : 'Start a voice chat'}
+                      title={groupCallPreview.value ?
+                        `${groupCallPreview.value.title} · ${groupCallPreview.value.participantsCount} in the call` :
+                        'Start a voice chat'}
+                    >
+                      <Glyph name="call" />
+                    </button>
+                  ) : null}
                 <button class="icon-button" onClick={() => (chatSearchOpen.value = !chatSearchOpen.value)} aria-label="Search messages"><Glyph name="search" /></button>
               </header>
 

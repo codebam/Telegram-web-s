@@ -331,6 +331,268 @@ export async function onCallState(callback: (state: CallState | null) => void): 
 }
 
 /* ------------------------------------------------------------------ */
+/* Group calls / voice chats                                           */
+/* ------------------------------------------------------------------ */
+
+export type GroupCallParticipantItem = {
+  peerId: number;
+  title: string;
+  muted: boolean;
+  /** Our own row, pinned first. */
+  self: boolean;
+  /** The participant is sending video. */
+  video: boolean;
+  /** A hand raised, waiting to be allowed to speak. */
+  raisedHand: boolean;
+};
+
+export type GroupCallState = {
+  chatId: number;
+  title: string;
+  phase: 'connecting' | 'unmuted' | 'muted' | 'muted-by-admin' | 'ended';
+  muted: boolean;
+  sharingVideo: boolean;
+  sharingScreen: boolean;
+  participants: GroupCallParticipantItem[];
+};
+
+export type GroupCallPreview = {
+  title: string;
+  participantsCount: number;
+  participantPeerIds: number[];
+  /** An RTMP livestream rather than a voice chat. */
+  rtmp: boolean;
+};
+
+const GROUP_CONTROLLER_KEY = '__websGroupCallsController';
+
+/**
+ * One group-call controller for the tab, constructed on first use. The 1:1
+ * controller is constructed by `appImManager` in tweb; this one has no such
+ * owner here, so the seam does it.
+ */
+async function getGroupCallsController() {
+  const store = globalThis as any;
+  return (store[GROUP_CONTROLLER_KEY] ??= (async() => {
+    const {managers} = await bootTelegram();
+    const {default: groupCallsController} = await import('@lib/calls/groupCallsController');
+    groupCallsController.construct(managers as any);
+    return groupCallsController;
+  })());
+}
+
+async function peerTitleById(managers: any, peerId: number): Promise<string> {
+  try {
+    const peer: any = await managers.appPeersManager.getPeer(peerId);
+    return [peer?.first_name, peer?.last_name].filter(Boolean).join(' ') ||
+      peer?.title || peer?.username || 'Member';
+  } catch(err) {
+    return 'Member';
+  }
+}
+
+async function groupCallSnapshot(instance: any, managers: any): Promise<GroupCallState | null> {
+  if(!instance) return null;
+
+  const {default: GROUP_CALL_STATE} = await import('@lib/calls/groupCallState');
+  const state = instance.state;
+  const participantsMap: Map<number, any> = instance.participants || new Map();
+
+  const participants: GroupCallParticipantItem[] = await Promise.all(
+    [...participantsMap.entries()].map(async([peerId, participant]: [number, any]) => ({
+      peerId: Number(peerId),
+      title: await peerTitleById(managers, Number(peerId)),
+      muted: !!participant?.pFlags?.muted,
+      self: !!participant?.pFlags?.self,
+      video: !!participant?.video,
+      raisedHand: !!participant?.pFlags?.raise_hand
+    }))
+  );
+
+  participants.sort((a, b) => (a.self === b.self ? 0 : a.self ? -1 : 1));
+
+  return {
+    chatId: Number(instance.chatId),
+    title: instance.groupCall?.title || 'Voice chat',
+    phase:
+      state === GROUP_CALL_STATE.CLOSED ? 'ended' :
+      state === GROUP_CALL_STATE.CONNECTING ? 'connecting' :
+      state === GROUP_CALL_STATE.MUTED_BY_ADMIN ? 'muted-by-admin' :
+      state === GROUP_CALL_STATE.UNMUTED ? 'unmuted' : 'muted',
+    muted: instance.isMuted,
+    sharingVideo: instance.isSharingVideo,
+    sharingScreen: instance.isSharingScreen,
+    participants
+  };
+}
+
+/** The active voice chat of a group or channel, for the join bar, or null. */
+export async function loadGroupCallPreview(peerId: number): Promise<GroupCallPreview | null> {
+  if(peerId >= 0) return null;
+  const {managers} = await bootTelegram();
+
+  try {
+    const full: any = await managers.appProfileManager.getChatFull(-peerId);
+    const input = full?.call;
+    if(!input) return null;
+
+    const {call, peerIds} = await managers.appGroupCallsManager.getGroupCallPreview(input.id, 5);
+    if(call?._ !== 'groupCall') return null;
+
+    return {
+      title: call.title || 'Voice chat',
+      participantsCount: Number(call.participants_count ?? peerIds.length),
+      participantPeerIds: peerIds.map(Number),
+      rtmp: !!call.pFlags?.rtmp_stream
+    };
+  } catch(err) {
+    return null;
+  }
+}
+
+/** Whether the current user may start or manage a voice chat here. */
+export async function canManageGroupCall(peerId: number): Promise<boolean> {
+  if(peerId >= 0) return false;
+  const {managers} = await bootTelegram();
+  try {
+    return await managers.appChatsManager.hasRights(-peerId, 'manage_call');
+  } catch(err) {
+    return false;
+  }
+}
+
+/**
+ * Join the chat's voice chat, starting one first when there is none and the
+ * user has the right to. A second call while one is live is refused rather than
+ * silently replacing it.
+ */
+export async function joinOrStartGroupCall(
+  peerId: number
+): Promise<{ok: true} | {ok: false; reason: string}> {
+  if(peerId >= 0) return {ok: false, reason: 'not-a-group'};
+
+  const {managers} = await bootTelegram();
+  const controller = await getGroupCallsController();
+  const chatId = -peerId;
+
+  const existing = controller.groupCall;
+  if(existing) {
+    if(Number(existing.chatId) === chatId) return {ok: true};
+    return {ok: false, reason: 'busy'};
+  }
+
+  try {
+    const {default: callsController} = await import('@lib/calls/callsController');
+    if(callsController.currentCall) return {ok: false, reason: 'busy'};
+  } catch(err) {
+    // Nothing to be busy with if the 1:1 controller is not up.
+  }
+
+  let callId: any;
+  try {
+    const full: any = await managers.appProfileManager.getChatFull(chatId);
+    if(full?._ === 'communityFull') return {ok: false, reason: 'unsupported'};
+    callId = full?.call?.id;
+  } catch(err) {
+    return {ok: false, reason: 'failed'};
+  }
+
+  if(callId === undefined || callId === null) {
+    const canManage = await managers.appChatsManager.hasRights(chatId, 'manage_call').catch(() => false);
+    if(!canManage) return {ok: false, reason: 'no-rights'};
+    try {
+      const created: any = await managers.appGroupCallsManager.createGroupCall(chatId);
+      callId = created?.id;
+    } catch(err: any) {
+      return {ok: false, reason: err?.type || err?.message || 'failed'};
+    }
+  }
+
+  if(callId === undefined || callId === null) return {ok: false, reason: 'failed'};
+
+  try {
+    await controller.joinGroupCall(chatId, callId, true, false);
+    return {ok: true};
+  } catch(err: any) {
+    return {ok: false, reason: err?.type || err?.message || 'failed'};
+  }
+}
+
+export async function leaveGroupCall(): Promise<void> {
+  const controller = await getGroupCallsController();
+  await controller.groupCall?.hangUp();
+}
+
+export async function toggleGroupCallMute(): Promise<void> {
+  const controller = await getGroupCallsController();
+  await controller.groupCall?.toggleMuted();
+}
+
+export async function toggleGroupCallVideo(): Promise<void> {
+  const controller = await getGroupCallsController();
+  await controller.groupCall?.toggleVideoSharing();
+}
+
+export async function toggleGroupCallScreen(): Promise<void> {
+  const controller = await getGroupCallsController();
+  await controller.groupCall?.toggleScreenSharing();
+}
+
+/**
+ * Subscribe to the live voice chat. Emits on every state change and once a
+ * second while one is open (participant rows arrive as their own worker events,
+ * so the tick is what keeps the roster current). Returns an unsubscribe.
+ */
+export async function onGroupCallState(
+  callback: (state: GroupCallState | null) => void
+): Promise<() => void> {
+  const controller = await getGroupCallsController();
+  const {managers} = await bootTelegram();
+  const {default: rootScope} = await import('@lib/rootScope');
+
+  let attached: any = null;
+  let emitting = false;
+
+  const emit = async() => {
+    if(emitting) return;
+    emitting = true;
+    try {
+      callback(await groupCallSnapshot(controller.groupCall, managers));
+    } finally {
+      emitting = false;
+    }
+  };
+
+  const attach = () => {
+    const instance = controller.groupCall;
+    if(attached === instance) return;
+    if(attached) attached.removeEventListener('state', emit);
+    attached = instance;
+    if(instance) instance.addEventListener('state', emit);
+  };
+
+  const refresh = () => {
+    attach();
+    void emit();
+  };
+
+  controller.addEventListener('instance', refresh);
+  rootScope.addEventListener('group_call_participant', refresh as any);
+  rootScope.addEventListener('group_call_update', refresh as any);
+
+  const ticker = setInterval(emit, 1000);
+  refresh();
+
+  return () => {
+    controller.removeEventListener('instance', refresh);
+    rootScope.removeEventListener('group_call_participant', refresh as any);
+    rootScope.removeEventListener('group_call_update', refresh as any);
+    clearInterval(ticker);
+    if(attached) attached.removeEventListener('state', emit);
+  };
+}
+
+/* ------------------------------------------------------------------ */
 /* Call devices (Settings → Calls)                                     */
 /* ------------------------------------------------------------------ */
 
