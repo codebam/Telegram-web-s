@@ -784,6 +784,15 @@ button {
   margin-bottom: 2px;
 }
 
+/*
+ * A message that is nothing but emoji is drawn large, and Telegram keeps the
+ * bubble around it — only the text scales, so the stamp under it stays small.
+ */
+:root[data-ui='native'] .messages .bubble.emoji-big > .text {
+  font-size: var(--emoji-size, 3rem);
+  line-height: 1.15;
+}
+
 /* Date and unread dividers read as glass pills laid on the wallpaper. */
 :root[data-ui='native'] .messages .day-divider,
 :root[data-ui='native'] .messages .service {

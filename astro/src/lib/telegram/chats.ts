@@ -167,6 +167,13 @@ export type MessageItem = {
   captionAboveMedia: boolean;
   /** Sticker document id, when the media is a sticker. */
   stickerDocId: string;
+  /**
+   * How many emoji the message is made of, when it is nothing but emoji and
+   * Telegram would draw them large — 0 for every other message. A single emoji
+   * is also offered as its animated sticker, which then renders in place of the
+   * glyph.
+   */
+  bigEmoji: number;
   /** '' when not a sticker; 'animated' means .tgs and needs the Lottie worker. */
   stickerKind: '' | 'static' | 'video' | 'animated';
   /** True until the server has acknowledged the message. */
@@ -1454,6 +1461,48 @@ export async function loadDialogs(limit = 40, filterId = 0): Promise<DialogItem[
 /* History                                                             */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Telegram's own sizes for a message that is nothing but emoji, by how many of
+ * them it is made of.
+ */
+const BIG_EMOJI_SIZES: {[count: number]: number} = {1: 96, 2: 90, 3: 84, 4: 72, 5: 60, 6: 48, 7: 36};
+
+/** How large a run of `count` emoji is drawn; 0 when it is not drawn large. */
+export function bigEmojiSize(count: number): number {
+  return BIG_EMOJI_SIZES[count] ?? 0;
+}
+
+const EMOJI_GRAPHEME = /^\p{RGI_Emoji}$/v;
+
+/**
+ * How many emoji a message is made of, or 0 when it is anything else.
+ *
+ * The whole message has to be emoji — one word of text and it stays a normal
+ * message, which is what every client does. Graphemes rather than code points,
+ * so a family, a flag or a skin-toned hand counts once, and only up to seven:
+ * past that Telegram stops enlarging them.
+ */
+function emojiOnlyCount(text: string): number {
+  const trimmed = text.trim();
+  if(!trimmed) return 0;
+
+  const graphemes = [...new Intl.Segmenter(undefined, {granularity: 'grapheme'}).segment(trimmed)]
+  .map((entry) => entry.segment);
+  if(!graphemes.length || graphemes.length > 7) return 0;
+  return graphemes.every((grapheme) => EMOJI_GRAPHEME.test(grapheme)) ? graphemes.length : 0;
+}
+
+/**
+ * The animated sticker Telegram keeps for one emoji, when it has been loaded.
+ * The manager reads it from a cache it warms at startup, so an emoji whose set
+ * has not arrived yet falls back to being drawn large.
+ */
+async function animatedEmojiSticker(text: string): Promise<{docId: string; kind: StickerItem['kind']} | undefined> {
+  const {managers} = await bootTelegram();
+  const doc = await managers.appStickersManager.getAnimatedEmojiSticker(text.trim());
+  return doc ? {docId: '' + doc.id, kind: stickerKind(doc)} : undefined;
+}
+
 function isStickerMessage(message: any): boolean {
   const doc = message?.media?.document;
   if(!doc) return false;
@@ -1484,6 +1533,12 @@ async function toItem(message: any, peerId: number, selfId: number): Promise<Mes
 
   const forward = await buildForwardInfo(message, selfId);
 
+  /* A message that is nothing but emoji is drawn large, and a single one as its
+     animated sticker when Telegram has one for it — the same two rules the
+     official clients apply, in the same order. */
+  const bigEmoji = message._ === 'messageService' || message.media ? 0 : emojiOnlyCount(text);
+  const emojiSticker = bigEmoji === 1 ? await animatedEmojiSticker(text) : undefined;
+
   return {
     mid: message.mid,
     text,
@@ -1505,8 +1560,9 @@ async function toItem(message: any, peerId: number, selfId: number): Promise<Mes
     reactions: reactionsOf(message),
     groupedId: message.grouped_id ? '' + message.grouped_id : '',
     captionAboveMedia: !!message.pFlags?.invert_media,
-    stickerDocId: isStickerMessage(message) ? '' + message.media.document.id : '',
-    stickerKind: isStickerMessage(message) ? stickerKind(message.media.document) : '',
+    bigEmoji,
+    stickerDocId: isStickerMessage(message) ? '' + message.media.document.id : emojiSticker?.docId ?? '',
+    stickerKind: isStickerMessage(message) ? stickerKind(message.media.document) : emojiSticker?.kind ?? '',
     pending: !!message.pFlags?.is_outgoing,
     views: message.views ?? 0,
     forwardedFrom: forward?.title ?? '',

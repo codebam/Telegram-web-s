@@ -150,6 +150,7 @@ import {
   readParticipants,
   onTyping,
   onUserUpdate,
+  bigEmojiSize,
   typingActionText,
   pressCallbackButton,
   readUpTo,
@@ -5029,9 +5030,11 @@ export function Chat() {
                                 class={[
                                   'bubble',
                                   message.out && 'out',
+                                  message.bigEmoji > 0 && 'emoji-big',
                                   highlightedMid.value === message.mid && 'highlighted',
                                   selected.value.has(message.mid) && 'selected'
                                 ].filter(Boolean).join(' ')}
+                                style={message.bigEmoji > 0 ? {'--emoji-size': `${bigEmojiSize(message.bigEmoji)}px`} : undefined}
                                 data-mid={message.mid}
                                 ref={refs.bubble}
                                 onClick={() => (selecting.value ? toggleSelected(message.mid) : openInPlayer(message))}
