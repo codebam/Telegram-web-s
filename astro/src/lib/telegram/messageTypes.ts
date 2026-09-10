@@ -1,5 +1,6 @@
 import {bootTelegram} from './client';
 import {toSticker, type StickerItem} from './chats';
+import getPeerId from '@appManagers/utils/peers/getPeerId';
 
 /**
  * The message types the chat could not render or compose: locations (static,
@@ -130,6 +131,26 @@ export type GiftExtra = {
   incoming: boolean;
 };
 
+export type DiceExtra = {
+  kind: 'dice';
+  /** '🎲' | '🎯' | '🎳' | '⚽' | '🏀' | '🎰' — this is what selects the sticker set. */
+  emoticon: string;
+  /**
+   * The outcome the sticker set indexes by, 0 while our own throw has not been
+   * acknowledged yet (the server sends the value with the real message).
+   */
+  value: number;
+};
+
+export type StoryExtra = {
+  kind: 'story';
+  /** Author of the story, as a peer id. */
+  peerId: number;
+  storyId: number;
+  /** `pFlags.via_mention`: a mention card rather than a story preview. */
+  viaMention: boolean;
+};
+
 export type MessageExtra =
   | LocationExtra
   | LiveLocationExtra
@@ -139,7 +160,9 @@ export type MessageExtra =
   | InvoiceExtra
   | PaidMediaExtra
   | ChecklistExtra
-  | GiftExtra;
+  | GiftExtra
+  | DiceExtra
+  | StoryExtra;
 
 /* ------------------------------------------------------------------ */
 /* Raw caches — deliberately outside Svelte reactivity                 */
@@ -407,6 +430,17 @@ export function extraOf(message: any, peerId: number, selfIdHint: number): Messa
 
     case 'messageMediaToDo':
       return checklistOf(media, out, selfIdHint);
+
+    case 'messageMediaDice':
+      return {kind: 'dice', emoticon: media.emoticon ?? '', value: Number(media.value ?? 0)};
+
+    case 'messageMediaStory':
+      return {
+        kind: 'story',
+        peerId: Number(getPeerId(media.peer)),
+        storyId: Number(media.id ?? 0),
+        viaMention: !!media.pFlags?.via_mention
+      };
   }
 
   return null;

@@ -32,6 +32,7 @@ import {PeerPicker} from './PeerPicker';
 import {ReactionSticker} from './ReactionSticker';
 import {Portal} from '$lib/portal';
 import type {DialogItem} from '$lib/telegram/chats';
+import {getPeerBrief} from '$lib/telegram/chats';
 import {copyText} from '$lib/telegram/profile';
 import {activeReactions, type ReactionOption} from '$lib/telegram/reactions';
 import {
@@ -43,6 +44,8 @@ import {
   loadMyActiveStories,
   loadMyStories,
   loadStealthMode,
+  loadPeerStoryIds,
+  onStoryViewerRequest,
   loadStories,
   loadStoriesFeed,
   loadStoryUrl,
@@ -636,6 +639,33 @@ export function Stories({dialogs = []}: Props) {
   useEffect(() => {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  /**
+   * A story opened from elsewhere — a story shared into a chat, or a mention of
+   * one — arrives through the seam's request registry, because the bubble has no
+   * way to reach this component's own state. The viewer opens on the peer's list
+   * so swiping away from the story works, and falls back to the single requested
+   * id when the list cannot be read.
+   */
+  useEffect(() => {
+    return onStoryViewerRequest(async(peerId, storyId) => {
+      const [ids, brief] = await Promise.all([
+        loadPeerStoryIds(peerId),
+        getPeerBrief(peerId).catch(() => null)
+      ]);
+
+      const list = ids.length ? ids : [storyId];
+      await open({
+        peerId,
+        title: brief?.isSelf ? 'Your story' : (brief?.title ?? ''),
+        unread: false,
+        storyIds: list
+      });
+
+      const at = list.indexOf(storyId);
+      if(at > 0 && openPeer.value?.peerId === peerId) index.value = at;
+    });
   }, []);
 
   return (

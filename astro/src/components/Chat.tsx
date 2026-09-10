@@ -43,6 +43,8 @@ import {Avatar} from './Avatar';
 import {Glyph} from './Glyph';
 import {ChatInfo} from './ChatInfo';
 import {ChecklistBubble} from './ChecklistBubble';
+import {Dice} from './Dice';
+import {StoryBubble} from './StoryBubble';
 import {ContactBubble} from './ContactBubble';
 import {GameBubble} from './GameBubble';
 import {GiftBubble} from './GiftBubble';
@@ -113,6 +115,8 @@ import {
   clickSponsored,
   deleteMessage,
   deleteMessages,
+  canPin,
+  pinMessage,
   getDraftText,
   editMessage,
   getMessage,
@@ -127,6 +131,7 @@ import {
   loadPinned,
   loadSponsored,
   hidePinnedMessage,
+  joinChat,
   loadOlder,
   markDialogRead,
   markDialogUnread,
@@ -161,6 +166,7 @@ import {
   type SponsoredItem
 } from '$lib/telegram/chats';
 import {sendContact} from '$lib/telegram/messageTypes';
+import {transcribeVoice, translateMessage} from '$lib/telegram/translation';
 import {
   FOLDER_ID_ARCHIVE,
   getArchiveSummary,
@@ -484,6 +490,22 @@ export function Chat() {
   const lightboxIndex = useSignal<number | null>(null);
   const highlightedMid = useSignal<number | null>(null);
   const pinnedMessage = useSignal<MessageItem | null>(null);
+  /**
+   * Whether this chat's pin is ours to set (a private chat always, a group or
+   * channel only with the `pin_messages` right). Loaded per peer rather than
+   * asked at menu-open time, so the menu still renders in one pass.
+   */
+  const canPinHere = useSignal(false);
+  /** True while a join is in flight, so the banner's button cannot be double-fired. */
+  const joining = useSignal(false);
+  /**
+   * Translations and transcripts shown under a message, keyed by mid. Both are
+   * fetched on demand from the message menu and live only as long as this chat
+   * is open — the managers do their own caching.
+   */
+  const translations = useSignal<Map<number, string>>(new Map());
+  const transcripts = useSignal<Map<number, string>>(new Map());
+  const busyMids = useSignal<Set<number>>(new Set());
   /**
    * The channel's sponsored message. Telegram's API terms require third-party
    * clients to show these unmodified and to report views and clicks, so nothing
@@ -1697,6 +1719,76 @@ export function Chat() {
       return;
     }
     profilePeerId.value = peerId;
+  }
+
+  /**
+   * A hashtag, a cashtag or a bot command tapped inside a message. Telegram
+   * searches the current chat for a tag — a command is sent instead — and a
+   * chat-specific `#tag@channel` switches to that chat first. The tag itself is
+   * already the text of the run, which is what the search wants.
+   */
+  async function openTag(text: string, kind: 'hashtag' | 'cashtag' | 'botCommand') {
+    if(kind === 'botCommand') {
+      const peerId = activePeerId.value;
+      if(peerId === null) return;
+
+      try {
+        await sendMessage(peerId, text.startsWith('/') ? text : `/${text}`, {
+          threadId: activeThreadId.value ?? undefined
+        });
+        scrollToBottom();
+      } catch (err: any) {
+        error.value = errorOf(err, 'Could not send the command');
+      }
+      return;
+    }
+
+    // `#news@channel` and `$TON@channel` belong to another chat: open it, then
+    // search there. Any failure falls through to searching the chat we are in.
+    const at = text.lastIndexOf('@');
+    const query = at > 0 ? text.slice(0, at) : text;
+    const username = at > 0 ? text.slice(at + 1) : '';
+
+    if(username) {
+      try {
+        const peerId = await resolveUsername(username);
+        if(peerId !== null) await openChat(await dialogTargetFor(peerId));
+      } catch (err) {
+        // Not a chat we can open — keep the search local.
+      }
+    }
+
+    closeChatSearch();
+    chatQuery.value = query;
+    chatSearchOpen.value = true;
+    await runChatSearch();
+  }
+
+  /** The date under a formatted-date run, copied like any other text. */
+  function copyDate(unix: number) {
+    const text = new Date(unix * 1000).toLocaleString();
+    navigator.clipboard?.writeText(text).catch(() => {});
+  }
+
+  /**
+   * Where the message menu sits. Anchoring by the top edge alone drops the menu's
+   * lower half — and its last actions — below the fold when the message is near
+   * the bottom of the screen, so a click in the lower half anchors by the bottom
+   * edge instead, the flip a native context menu does. The cap keeps the longest
+   * menu (every action a message can offer) scrollable rather than clipped by the
+   * stylesheet's own `overflow: hidden`.
+   */
+  function menuPosition(point: {x: number; y: number}) {
+    const viewport = window.innerHeight;
+
+    return {
+      left: `${point.x}px`,
+      ...(point.y > viewport / 2 ?
+        {bottom: `${Math.max(8, viewport - point.y)}px`} :
+        {top: `${point.y}px`}),
+      maxHeight: 'calc(100dvh - 24px)',
+      overflowY: 'auto' as const
+    };
   }
 
   /** Place a call, explaining the failure rather than opening a dead screen. */
@@ -3190,7 +3282,7 @@ export function Chat() {
     typingNames.value = [];
     editing.value = null;
     getPresence(peerId).then((info) => (presence.value = info.text)).catch(() => (presence.value = ''));
-    loadPinned(peerId, threadId).then((message) => (pinnedMessage.value = message)).catch(() => (pinnedMessage.value = null));
+    refreshPinned(peerId, threadId);
     businessBot.value = null;
     refreshBusinessBot(peerId);
     // Off the chat-open path on purpose: the ad is fetched after the history
@@ -3228,6 +3320,170 @@ export function Chat() {
       error.value = errorOf(err, 'Failed to load messages');
     } finally {
       loadingHistory.value = false;
+    }
+  }
+
+  /**
+   * Re-read the pinned bar. Called when a chat opens and after a pin or unpin —
+   * what the bar shows is what the manager stored, never an assumption about
+   * what the server did with the request.
+   */
+  function refreshPinned(peerId: number, threadId?: number) {
+    loadPinned(peerId, threadId).then((message) => {
+      if(activePeerId.value === peerId) pinnedMessage.value = message;
+    }).catch(() => {
+      if(activePeerId.value === peerId) pinnedMessage.value = null;
+    });
+  }
+
+  /**
+   * Pin the message, or unpin it when it already is the pinned one. Only offered
+   * where `pin_messages` is ours (see `canPinHere`).
+   */
+  async function toggleMessagePin(message: MessageItem) {
+    if(activePeerId.value === null) return;
+
+    const peerId = activePeerId.value;
+    const unpin = message.pinned;
+    try {
+      await pinMessage(peerId, message.mid, unpin);
+      messages.value = messages.value.map((m) => m.mid === message.mid ? {...m, pinned: !unpin} : m);
+      refreshPinned(peerId, activeThreadId.value ?? undefined);
+    } catch (err: any) {
+      error.value = errorOf(err, unpin ? 'Could not unpin the message' : 'Could not pin the message');
+    }
+  }
+
+  /**
+   * Delete a message for me only — `revoke = false`, the same call the manager
+   * makes for a local delete. It is the only delete a member has for someone
+   * else's message.
+   */
+  async function removeMessageLocally(message: MessageItem) {
+    if(activePeerId.value === null) return;
+    try {
+      await deleteMessage(activePeerId.value, message.mid, false);
+      messages.value = messages.value.filter((m) => m.mid !== message.mid);
+    } catch (err: any) {
+      error.value = errorOf(err, 'Delete failed');
+    }
+  }
+
+  /** The same, for the whole selection. */
+  async function deleteSelectedLocally() {
+    if(activePeerId.value === null || !selected.value.size) return;
+
+    const mids = [...selected.value];
+    selecting.value = false;
+    selected.value = new Set();
+
+    try {
+      await deleteMessages(activePeerId.value, mids, false);
+      messages.value = messages.value.filter((m) => !mids.includes(m.mid));
+    } catch (err: any) {
+      error.value = errorOf(err, 'Delete failed');
+    }
+  }
+
+  /**
+   * Whether a local delete is expressible here. Every supergroup and channel
+   * goes through `channels.deleteMessages`, which has no revoke flag and always
+   * deletes for everyone, so "just for me" cannot be asked for there and the
+   * option is not offered. A private chat, a basic group and Saved Messages can.
+   */
+  function canDeleteLocally() {
+    const dialog = dialogs.value.find((d) => d.peerId === activePeerId.value);
+    return !!dialog && (dialog.isUser || dialog.isSelf || (!dialog.isMegagroup && !dialog.isBroadcast));
+  }
+
+  // Reads the `activePeerId` signal, so it stays a `useSignalEffect` (CONVERSION.md §4).
+  useSignalEffect(() => {
+    const peerId = activePeerId.value;
+    canPinHere.value = false;
+    if(peerId === null) return;
+
+    let cancelled = false;
+    canPin(peerId).then((allowed) => {
+      if(!cancelled && activePeerId.value === peerId) canPinHere.value = allowed;
+    }).catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  });
+
+  /**
+   * The open chat is one we are not in — a channel or supergroup found by
+   * username, or one we left. Its history is readable, but nothing can be posted
+   * until we join, so the composer gives way to a join banner.
+   */
+  const activeLeft = useComputed(() =>
+    !!dialogs.value.find((d) => d.peerId === activePeerId.value)?.left
+  );
+
+  /**
+   * Marks a mid busy while a translation or transcription is in flight, so the
+   * menu item cannot be fired twice and the bubble can show that it is working.
+   */
+  function setMidBusy(mid: number, busy: boolean) {
+    const next = new Set(busyMids.value);
+    if(busy) next.add(mid);
+    else next.delete(mid);
+    busyMids.value = next;
+  }
+
+  async function translateOne(message: MessageItem) {
+    const peerId = activePeerId.value;
+    if(peerId === null || busyMids.value.has(message.mid)) return;
+
+    setMidBusy(message.mid, true);
+    try {
+      const result = await translateMessage(peerId, message.mid);
+      if(result?.text) {
+        const next = new Map(translations.value);
+        next.set(message.mid, result.text);
+        translations.value = next;
+      }
+    } catch (err: any) {
+      error.value = errorOf(err, 'Could not translate this message');
+    } finally {
+      setMidBusy(message.mid, false);
+    }
+  }
+
+  async function transcribeOne(message: MessageItem) {
+    const peerId = activePeerId.value;
+    if(peerId === null || busyMids.value.has(message.mid)) return;
+
+    setMidBusy(message.mid, true);
+    try {
+      const text = await transcribeVoice(peerId, message.mid);
+      if(text) {
+        const next = new Map(transcripts.value);
+        next.set(message.mid, text);
+        transcripts.value = next;
+      }
+    } catch (err: any) {
+      error.value = errorOf(err, 'Could not transcribe this message');
+    } finally {
+      setMidBusy(message.mid, false);
+    }
+  }
+
+  async function joinActiveChat() {
+    const peerId = activePeerId.value;
+    if(peerId === null || joining.value) return;
+
+    joining.value = true;
+    try {
+      await joinChat(peerId);
+      // The manager processed the update; re-reading the list is what lets the
+      // banner go away and the composer come back on its own.
+      dialogs.value = await loadDialogs(40, activeFolder.value);
+    } catch (err: any) {
+      error.value = errorOf(err, 'Could not join this chat');
+    } finally {
+      joining.value = false;
     }
   }
 
@@ -4289,6 +4545,7 @@ export function Chat() {
                   <span class="spacer"></span>
                   <button onClick={forwardSelected}>Forward</button>
                   <button class="danger" onClick={deleteSelected}>Delete</button>
+                  {canDeleteLocally() ? <button onClick={deleteSelectedLocally}>Delete for me</button> : null}
                   <button onClick={() => { selecting.value = false; selected.value = new Set(); }}>Cancel</button>
                 </div>
               ) : null}
@@ -4374,6 +4631,22 @@ export function Chat() {
                                sticker, who sent it and what it is worth. */
                             <div class="service-card" data-mid={message.mid}>
                               <GiftBubble gift={message.extra} fromTitle={message.fromTitle} />
+                            </div>
+                          ) : message.service && activePeerId.value !== null && (
+                            message.payment?.kind === 'starGift' ||
+                            message.payment?.kind === 'giftCode' ||
+                            message.payment?.kind === 'paymentSent'
+                          ) ? (
+                            /* Three more service messages are cards: a Star gift, a gift
+                               code and a receipt. They sit behind this branch because the
+                               bubble body — where every other payment card is rendered — is
+                               never reached by a service message. */
+                            <div class="service-card" data-mid={message.mid}>
+                              <MessagePayment
+                                peerId={activePeerId.value}
+                                mid={message.mid}
+                                payment={message.payment}
+                              />
                             </div>
                           ) : message.service ? (
                             <p
@@ -4549,6 +4822,23 @@ export function Chat() {
                                       checklist={message.extra}
                                       onerror={(text) => (error.value = text)}
                                     />
+                                  ) : message.extra.kind === 'dice' ? (
+                                    /* A dice replays only while it is unanswered or still
+                                         unread — a chat you have already read shows the
+                                         outcome frame, the way tweb's own renderer does. */
+                                    <Dice
+                                      extra={message.extra}
+                                      play={message.extra.value === 0 || (
+                                        !message.out &&
+                                        firstUnreadMid.value !== null &&
+                                        message.mid >= firstUnreadMid.value
+                                      )}
+                                    />
+                                  ) : message.extra.kind === 'story' ? (
+                                    <StoryBubble
+                                      extra={message.extra}
+                                      chatTitle={dialogs.value.find((d) => d.peerId === activePeerId.value)?.title ?? ''}
+                                    />
                                   ) : null
                                 ) : null}
 
@@ -4570,10 +4860,20 @@ export function Chat() {
                                 ) : null}
 
                                 {captioned.rich ?
-                                  <RichMessage blocks={captioned.rich} onmention={openMention} /> :
+                                  <RichMessage blocks={captioned.rich} onmention={openMention} ontag={openTag} ondate={copyDate} /> :
                                 captioned.parts.length ?
-                                  <FormattedText parts={captioned.parts} onmention={openMention} onlink={openLink} /> :
+                                  <FormattedText parts={captioned.parts} onmention={openMention} onlink={openLink} ontag={openTag} ondate={copyDate} /> :
                                 null}
+
+                                {/* Translation and transcript sit under the message they
+                                     belong to. Both are asked for from the message menu. */}
+                                {translations.value.has(message.mid) ? (
+                                  <p class="message-translation">{translations.value.get(message.mid)}</p>
+                                ) : transcripts.value.has(message.mid) ? (
+                                  <p class="message-translation">{transcripts.value.get(message.mid)}</p>
+                                ) : busyMids.value.has(message.mid) ? (
+                                  <p class="message-translation pending">…</p>
+                                ) : null}
 
                                 {message.webpage ? (
                                   <a
@@ -4834,7 +5134,20 @@ export function Chat() {
                 />
               ) : null}
 
-              {replyKeyboardOpen.value && replyKeyboard.value?.kind === 'markup' ? (
+              {activeLeft.value ? (
+                /* A chat we are not a member of: readable, but read-only until we
+                     join — so the composer is replaced rather than disabled. */
+                <div class="join-bar">
+                  <span class="join-note">
+                    {dialogs.value.find((d) => d.peerId === activePeerId.value)?.isBroadcast ?
+                      'You are not subscribed to this channel' :
+                      'You are not a member of this chat'}
+                  </span>
+                  <button class="join-action" disabled={joining.value} onClick={joinActiveChat}>
+                    {joining.value ? 'Joining…' : 'Join'}
+                  </button>
+                </div>
+              ) : replyKeyboardOpen.value && replyKeyboard.value?.kind === 'markup' ? (
                 <ReplyKeyboard
                   keyboard={replyKeyboard.value}
                   onpress={pressReplyKeyboardButton}
@@ -5177,7 +5490,7 @@ export function Chat() {
       {messageMenu.value ? (
         <>
           <div class="menu-backdrop" onClick={() => (messageMenu.value = null)} role="presentation"></div>
-          <div class="context-menu" style={{left: `${messageMenu.value.x}px`, top: `${messageMenu.value.y}px`}}>
+          <div class="context-menu" style={menuPosition(messageMenu.value)}>
             {menuMessage ? (
               <>
                 <button onClick={() => { replyToMessage(menuMessage); messageMenu.value = null; }}>
@@ -5194,6 +5507,15 @@ export function Chat() {
                 {menuMessage.text ? (
                   <button onClick={() => { copyText(menuMessage); messageMenu.value = null; }}>Copy text</button>
                 ) : null}
+                {/* Translation and transcription are Premium on Telegram's side; a
+                     free account gets the server's refusal, which the error bar
+                     shows, rather than a control that always fails silently. */}
+                {menuMessage.text && !menuMessage.service ? (
+                  <button onClick={() => { translateOne(menuMessage); messageMenu.value = null; }}>Translate</button>
+                ) : null}
+                {menuMessage.media?.kind === 'voice' || menuMessage.media?.kind === 'round' ? (
+                  <button onClick={() => { transcribeOne(menuMessage); messageMenu.value = null; }}>Transcribe</button>
+                ) : null}
                 <button onClick={() => { openForward(menuMessage); messageMenu.value = null; }}>Forward</button>
                 {menuMessage.stickerDocId ? (
                   <button
@@ -5204,6 +5526,13 @@ export function Chat() {
                   <GifSaveAction docId={menuMessage.media.docId} ondone={() => (messageMenu.value = null)} />
                 ) : null}
                 <button onClick={() => startSelecting(menuMessage.mid)}>Select</button>
+                {/* Pin is offered where the right is ours, and never for a service
+                     message — the pinned plate tracks messages, not join notices. */}
+                {canPinHere.value && !menuMessage.service ? (
+                  <button onClick={() => { toggleMessagePin(menuMessage); messageMenu.value = null; }}>
+                    {menuMessage.pinned ? 'Unpin' : 'Pin'}
+                  </button>
+                ) : null}
                 {/* A sticker or a bare media message is editable in the API sense but
                      has no text to edit; deleting it is still fair game. */}
                 {menuMessage.editable && menuMessage.text ? (
@@ -5211,6 +5540,11 @@ export function Chat() {
                 ) : null}
                 {menuMessage.editable ? (
                   <button class="danger" onClick={() => { removeMessage(menuMessage); messageMenu.value = null; }}>Delete</button>
+                ) : null}
+                {/* The other half of Delete: this side only. A supergroup or a
+                     channel cannot express it, so it is not offered there. */}
+                {canDeleteLocally() ? (
+                  <button onClick={() => { removeMessageLocally(menuMessage); messageMenu.value = null; }}>Delete for me</button>
                 ) : null}
               </>
             ) : null}

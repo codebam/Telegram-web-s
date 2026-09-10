@@ -2,7 +2,7 @@ import getPeerId from '@appManagers/utils/peers/getPeerId';
 
 import {bootTelegram} from './client';
 import {extraOf, type MessageExtra} from './messageTypes';
-import {paymentPreviewOf, type PaymentPreview} from './payments';
+import {formatAmount, paymentPreviewOf, type PaymentPreview} from './payments';
 import {buildForwardInfo, buildReplyInfo, type ForwardInfo, type ReplyInfo} from './reply';
 import {peerRestrictionText, restrictionTextOf} from './restrictions';
 import type {MessageEntity} from '@layer';
@@ -25,8 +25,15 @@ export type DialogItem = {
   unread: number;
   isSelf: boolean;
   isUser: boolean;
+  /** Supergroup — a channel peer that is not a broadcast channel. */
+  isMegagroup: boolean;
   /** Broadcast channel — posts carry view counts, not delivery ticks. */
   isBroadcast: boolean;
+  /**
+   * A channel or supergroup we are not a member of (left, or found by username
+   * and never joined): readable, but it cannot be posted to until we join.
+   */
+  left: boolean;
   isForum: boolean;
   pinned: boolean;
   muted: boolean;
@@ -100,6 +107,23 @@ export type TextPart = {
    * which are searchable rather than clickable to a profile.
    */
   mentionKind?: 'username' | 'userId' | 'tag';
+  /**
+   * Which kind of searchable tag this run is, when `mentionKind` is 'tag'. A
+   * hashtag and a cashtag open a search for the text in this chat, a bot command
+   * is sent; the tag itself stays in `mention`.
+   */
+  tagKind?: 'hashtag' | 'cashtag' | 'botCommand';
+  /**
+   * `messageEntityBlockquote` with Telegram's collapsed flag: the quote starts
+   * clipped to three lines and opens when it is clicked.
+   */
+  blockquoteCollapsed?: boolean;
+  /** Language of a `pre` block, '' when the sender gave none. */
+  preLanguage?: string;
+  /** A `messageEntityFormattedDate` run: unix seconds plus the flags the server
+   *  sent, which say how to render it (relative, short/long date, time, day). */
+  dateUnix?: number;
+  dateFlags?: {relative?: true; short_time?: true; long_time?: true; short_date?: true; long_date?: true; day_of_week?: true};
   /** Document id of the custom emoji this run renders as, when it is one. */
   customEmojiDocId?: string;
 };
@@ -107,7 +131,7 @@ export type TextPart = {
 export type RichBlock =
   | {type: 'paragraph'; parts: TextPart[]}
   | {type: 'heading'; level: number; parts: TextPart[]}
-  | {type: 'code'; text: string}
+  | {type: 'code'; text: string; lang?: string}
   | {type: 'quote'; parts: TextPart[]}
   | {type: 'divider'}
   | {type: 'list'; ordered: boolean; items: TextPart[][]}
@@ -121,6 +145,8 @@ export type MessageItem = {
   editable: boolean;
   edited: boolean;
   out: boolean;
+  /** The chat's pinned message right now, for the Pin/Unpin menu entry. */
+  pinned: boolean;
   date: number;
   fromTitle: string;
   fromId: number;
@@ -371,9 +397,16 @@ function textParts(text: string, entities: any[] = []): TextPart[] {
         case 'messageEntityUnderline': part.underline = true; break;
         case 'messageEntityStrike': part.strike = true; break;
         case 'messageEntityCode': part.code = true; break;
-        case 'messageEntityPre': part.pre = true; break;
+        case 'messageEntityPre': part.pre = true; part.preLanguage = entity.language || undefined; break;
         case 'messageEntitySpoiler': part.spoiler = true; break;
-        case 'messageEntityBlockquote': part.blockquote = true; break;
+        case 'messageEntityBlockquote':
+          part.blockquote = true;
+          part.blockquoteCollapsed = !!entity.pFlags?.collapsed;
+          break;
+        case 'messageEntityFormattedDate':
+          part.dateUnix = entity.date;
+          part.dateFlags = entity.pFlags;
+          break;
         case 'messageEntityCustomEmoji': part.customEmojiDocId = '' + entity.document_id; break;
         case 'messageEntityTextUrl': part.url = entity.url; break;
         case 'messageEntityUrl': part.url = part.text; break;
@@ -387,10 +420,19 @@ function textParts(text: string, entities: any[] = []): TextPart[] {
           part.mentionKind = 'userId';
           break;
         case 'messageEntityHashtag':
+          part.mention = part.text;
+          part.mentionKind = 'tag';
+          part.tagKind = 'hashtag';
+          break;
         case 'messageEntityCashtag':
+          part.mention = part.text;
+          part.mentionKind = 'tag';
+          part.tagKind = 'cashtag';
+          break;
         case 'messageEntityBotCommand':
           part.mention = part.text;
           part.mentionKind = 'tag';
+          part.tagKind = 'botCommand';
           break;
       }
     }
@@ -430,6 +472,12 @@ function richTextToParts(rich: any, inherited: TextPart = {text: ''}): TextPart[
     case 'textFixed': return richTextToParts(rich.text, withFlag('code'));
     case 'textUrl': return richTextToParts(rich.text, withFlag('url', rich.url));
     case 'textEmail': return richTextToParts(rich.text, withFlag('url', `mailto:${rich.email}`));
+    case 'textDate':
+      return richTextToParts(rich.text, {
+        ...inherited,
+        dateUnix: rich.date,
+        dateFlags: rich.pFlags
+      });
     case 'textAnchor': return richTextToParts(rich.text, inherited);
     case 'textSubscript':
     case 'textSuperscript':
@@ -470,7 +518,7 @@ function richBlocksOf(message: any): RichBlock[] | null {
         break;
 
       case 'pageBlockPreformatted':
-        out.push({type: 'code', text: partsToText(richTextToParts(block.text))});
+        out.push({type: 'code', text: partsToText(richTextToParts(block.text)), lang: block.language || undefined});
         break;
 
       case 'pageBlockBlockquote':
@@ -573,6 +621,16 @@ async function actorName(peerId: number, selfId: number): Promise<string> {
   return peerTitle(await getPeer(peerId), selfId);
 }
 
+/**
+ * The sentence Telegram shows for a service message — the wording upstream
+ * keeps in its language pack, with the entities (`**bold**`, `[text](url)`)
+ * dropped because this client renders the result as one plain string.
+ *
+ * Two rules run through every branch: an outgoing message speaks as "You" and
+ * drops the actor argument, and a branch that needs to know whether the chat is
+ * a broadcast channel or a group resolves the chat lazily, so the messages that
+ * do not care pay nothing for it.
+ */
 async function serviceText(message: any): Promise<string> {
   const action = message?.action;
   if(!action) return 'Service message';
@@ -580,14 +638,29 @@ async function serviceText(message: any): Promise<string> {
   const selfId = await getSelfId();
   const actorId = Number(message.fromId ?? message.from_id?.user_id ?? 0);
   const actor = await actorName(actorId, selfId);
+  const peerId = Number(message?.peerId ?? 0);
+
+  // Outgoing-ness is what picks the `…You` half of the language pack.
+  const out = !!message.pFlags?.out || (!!actorId && actorId === selfId);
+  const speaker = out ? 'You' : actor;
+
+  let chatPromise: Promise<any> = null;
+  const chat = () => chatPromise ?? (chatPromise = servicePeer(peerId));
+  const isBroadcast = async() => {
+    const peer = await chat();
+    return !!(peer?._ === 'channel' && peer?.pFlags?.broadcast);
+  };
 
   switch(action._) {
-    case 'messageActionChatAddUser': {
+    /* --- people coming and going ---------------------------------- */
+
+    case 'messageActionChatAddUser':
+    case 'messageActionChatAddUsers': {
       const ids = (action.users ?? []).map(Number);
       // Joining a group by tapping its link arrives as an add of oneself.
       if(ids.length === 1 && ids[0] === actorId) return `${actor} joined the group`;
       const names = await Promise.all(ids.map((id: number) => actorName(id, selfId)));
-      return `${actor} added ${names.join(', ') || 'a user'}`;
+      return `${actor} added ${names.length ? joinNames(names) : 'a user'}`;
     }
 
     case 'messageActionChatDeleteUser': {
@@ -596,29 +669,466 @@ async function serviceText(message: any): Promise<string> {
       return `${actor} removed ${await actorName(id, selfId)}`;
     }
 
+    case 'messageActionChatLeave':
+      return `${actor} left the group`;
+
+    case 'messageActionChatLeaveYou':
+      return 'You left this group';
+
+    case 'messageActionChatJoined':
+      return `${actor} joined the group`;
+
+    case 'messageActionChatJoinedYou':
+      return 'You joined this group';
+
+    case 'messageActionChatReturn':
+      return `${actor} returned to the group`;
+
+    case 'messageActionChatReturnYou':
+      return 'You returned to the group';
+
     case 'messageActionChatJoinedByLink':
       return `${actor} joined the group via invite link`;
 
-    case 'messageActionChatJoinedByRequest':
-      return `${actor} was accepted into the group`;
+    case 'messageActionChatJoinedByRequest': {
+      if(out) {
+        return await isBroadcast() ?
+          'Your request to join the channel was approved' :
+          'Your request to join the group was approved';
+      }
+
+      return await isBroadcast() ?
+        `${actor} joined the channel by request` :
+        `${actor} was accepted to the group`;
+    }
+
+    case 'messageActionContactSignUp':
+      return `${actor} joined Telegram`;
+
+    /* --- the chat itself ------------------------------------------ */
 
     case 'messageActionChatCreate':
-      return `${actor} created the group ${action.title ?? ''}`.trim();
+      // Upstream hides an outgoing one: the sender did it, so naming them again
+      // and repeating the title only makes the line longer.
+      return out ? 'You created the group' : `${actor} created the group`;
 
-    case 'messageActionChannelCreate':
-      return `${actor} created the channel ${action.title ?? ''}`.trim();
+    case 'messageActionChannelCreate': {
+      const peer = await chat();
+      return peer?._ === 'channel' && peer?.pFlags?.monoforum ?
+        'Direct Messages Opened' :
+        'Channel created';
+    }
 
-    case 'messageActionChatEditTitle':
-      return `${actor} changed the title to ${action.title ?? ''}`.trim();
+    case 'messageActionChatEditTitle': {
+      const title = action.title ?? '';
+      return title ? `${actor} changed the group name to ${title}` : `${actor} changed the group name`;
+    }
+
+    case 'messageActionChannelEditTitle': {
+      const title = action.title ?? '';
+      return title ? `Channel renamed to "${title}"` : 'Channel renamed';
+    }
 
     case 'messageActionChatEditPhoto':
-      return `${actor} changed the chat photo`;
+    case 'messageActionChatEditVideo':
+      return `${actor} changed the group photo`;
+
+    case 'messageActionChannelEditPhoto':
+    case 'messageActionChannelEditVideo':
+      return 'Channel photo updated';
 
     case 'messageActionChatDeletePhoto':
-      return `${actor} removed the chat photo`;
+      return `${actor} removed the group photo`;
 
-    case 'messageActionPinMessage':
-      return `${actor} pinned a message`;
+    case 'messageActionChannelDeletePhoto':
+      return 'Channel photo removed';
+
+    case 'messageActionChatMigrateTo':
+    case 'messageActionChannelMigrateFrom':
+      // Upstream drops both from the chat view; this is the wording its own
+      // language pack carries for the migration, so the preview still reads.
+      return 'This group was upgraded to a supergroup';
+
+    case 'messageActionHistoryClear':
+      return 'History was cleared';
+
+    case 'messageActionDiscussionStarted':
+      return 'Discussion started';
+
+    case 'messageActionChannelJoined':
+      return 'You joined this channel';
+
+    case 'messageActionPinMessage': {
+      const pinned = await serviceReplied(message);
+      const preview = pinned ? truncateText(await messagePreview(pinned), 60) : '';
+      return preview ? `${actor} pinned "${preview}"` : `${actor} pinned a message`;
+    }
+
+    /* --- calls and group calls ------------------------------------ */
+
+    case 'messageActionPhoneCall': {
+      const call = phoneCallState(action);
+      if(call.state === 'ok') {
+        const name = `${out ? 'Outgoing' : 'Incoming'}${call.video ? ' Video' : ''} Call`;
+        return action.duration === undefined ? name : `${name} (${durationText(action.duration)})`;
+      }
+
+      return `${call.video ? 'Video ' : ''}${call.state === 'missed' ? 'Missed' : 'Canceled'} Call`;
+    }
+
+    case 'messageActionConferenceCall': {
+      const ended = action.duration !== undefined;
+      if(!ended) {
+        if(action.pFlags?.missed) return out ? 'Declined group call' : 'Missed group call';
+        return action.pFlags?.active ? 'Ongoing group call' : 'Group call invitation';
+      }
+
+      return out ? 'Outgoing group call' : 'Incoming group call';
+    }
+
+    case 'messageActionGroupCall': {
+      // The manager stamps `type` when it rewrites the action; recompute it for
+      // messages cached before that rewrite.
+      let type = action.type;
+      if(!type) {
+        type = (action.duration === undefined ? 'started' : 'ended') +
+          (await isBroadcast() ? '' : (out ? '_byYou' : '_by'));
+      }
+
+      const duration = action.duration === undefined ? '' : ` (${durationText(action.duration)})`;
+      switch(type) {
+        case 'started': return 'Live Stream started';
+        case 'started_byYou': return 'You started a video chat';
+        case 'ended': return `Live Stream ended${duration}`;
+        case 'ended_byYou': return `You ended the video chat${duration}`;
+        case 'ended_by': return `${actor} ended the video chat${duration}`;
+        default: return `${actor} started a video chat`;
+      }
+    }
+
+    case 'messageActionInviteToGroupCall': {
+      const inviteeId = Number((action.users ?? [])[0] ?? 0);
+      if(out) return `You invited ${await actorName(inviteeId, selfId)} to the video chat`;
+      if(inviteeId === selfId) return `${actor} invited you to the video chat`;
+      return `${actor} invited ${await actorName(inviteeId, selfId)} to the video chat`;
+    }
+
+    case 'messageActionGroupCallScheduled': {
+      const when = dateAtTimeText(Number(action.schedule_date ?? 0));
+      if(await isBroadcast()) return `Video chat scheduled for ${when}`;
+      return out ? `You scheduled a video chat for ${when}` : `${actor} scheduled a video chat for ${when}`;
+    }
+
+    /* --- chat settings -------------------------------------------- */
+
+    case 'messageActionSetMessagesTTL': {
+      const period = Number(action.period ?? 0);
+      if(!period) {
+        if(await isBroadcast()) return 'Messages in this channel will no longer be automatically deleted';
+        return `${actor} disabled the auto-delete timer`;
+      }
+
+      const duration = ttlDurationText(period);
+      if(await isBroadcast()) return `Messages in this channel will be automatically deleted after ${duration}`;
+      return `${actor} set messages to auto-delete in ${duration}`;
+    }
+
+    case 'messageActionSetChatTheme': {
+      const emoticon = action.theme?.emoticon;
+      if(emoticon) return `${speaker} changed the chat theme to ${emoticon}`;
+      if(action.theme?._ === 'chatThemeUniqueGift') return `${speaker} changed the chat theme`;
+      return `${speaker} disabled the chat theme`;
+    }
+
+    case 'messageActionSetChatWallPaper': {
+      const peer = await chat();
+      const both = !!action.pFlags?.for_both;
+      const same = !!action.pFlags?.same;
+      if(peer?._ === 'user') {
+        if(out) {
+          if(both) return `You set a new wallpaper for ${await peerNameById(peerId, selfId)} and you`;
+          return same ? 'You set the same wallpaper as your chat partner' : 'You set a new wallpaper for this chat';
+        }
+
+        return same ?
+          `${actor} set your wallpaper as their own for this chat` :
+          `${actor} set a new wallpaper for this chat`;
+      }
+
+      if(peer?._ === 'channel' && peer?.pFlags?.broadcast) return 'Channel set a new wallpaper';
+      return actorId === peerId ? 'Group set a new wallpaper' : `${actor} set a new wallpaper`;
+    }
+
+    case 'messageActionChangeCommunity': {
+      const peer = await chat();
+      const communityPeer = action.community_id ? await servicePeer(servicePeerId(action.community_id)) : null;
+      const community = communityPeer ?
+        `${peerTitle(communityPeer, selfId)} community` :
+        'a community';
+      const added = !!action.community_id && Number(action.community_id) !== 0;
+
+      if(peer?._ === 'user') {
+        return added ? `The bot was added to ${community}` : 'The bot was removed from a community';
+      }
+
+      if(peer?._ === 'channel' && !peer?.pFlags?.megagroup) {
+        return added ? `The channel was added to ${community}` : 'The channel was removed from a community';
+      }
+
+      if(added) return `${speaker} added this group to ${community}`;
+      return `${speaker} removed this group from a community`;
+    }
+
+    case 'messageActionNoForwardsToggle': {
+      const enabled = !!action.new_value;
+      if(enabled === !!action.prev_value) {
+        return enabled ? 'Sharing in this chat is still enabled' : 'Sharing in this chat is still disabled';
+      }
+
+      return `${speaker} ${enabled ? 'enabled' : 'disabled'} sharing in this chat`;
+    }
+
+    case 'messageActionNoForwardsRequest': {
+      if(action.pFlags?.expired) return 'Sharing enable request has expired';
+      return `${speaker} suggested to ${action.new_value ? 'disable' : 'enable'} sharing`;
+    }
+
+    case 'messageActionManagedBotCreated':
+      return `The bot ${await peerNameById(Number(action.bot_id ?? 0), selfId)} was created`;
+
+    case 'messageActionNewCreatorPending':
+      return `${await peerNameById(Number(action.new_creator_id ?? 0), selfId)} will become the new owner in 7 days if ${actor} does not return.`;
+
+    case 'messageActionChangeCreator':
+      return `${actor} made ${await peerNameById(Number(action.new_creator_id ?? 0), selfId)} the new owner of the group.`;
+
+    /* --- topics --------------------------------------------------- */
+
+    case 'messageActionTopicCreate': {
+      const title = action.title ?? '';
+      return title ? `${title} was created` : 'Topic created';
+    }
+
+    case 'messageActionTopicEdit': {
+      const iconChanged = action.icon_emoji_id !== undefined;
+      const iconRemoved = iconChanged && !Number(action.icon_emoji_id);
+      const titleChanged = action.title !== undefined;
+      const title = action.title ?? '';
+
+      if(action.closed) return `${speaker} closed the topic`;
+      if(action.closed === false) return `${speaker} reopened the topic`;
+      if(iconRemoved && titleChanged) return `${speaker} changed the topic name to "${title}" and removed icon`;
+      if(iconChanged && titleChanged) return `${speaker} changed the topic name and icon to "${title}"`;
+      if(iconRemoved) return `${speaker} removed the icon`;
+      if(titleChanged) return `${speaker} changed topic name to "${title}"`;
+      if(iconChanged) return `${speaker} changed topic icon`;
+      if(action.hidden !== undefined) return `${speaker} ${action.hidden ? 'hid' : 'unhid'} the general topic`;
+
+      // No flag this client knows about — upstream would print the raw type.
+      return `${speaker} updated the topic`;
+    }
+
+    /* --- chats, polls and checklists ------------------------------ */
+
+    case 'messageActionPollAppendAnswer':
+    case 'messageActionPollDeleteAnswer': {
+      const answer = truncateText(action.answer?.text?.text ?? '', 20);
+      const added = action._ === 'messageActionPollAppendAnswer';
+      return `${speaker} ${added ? 'added' : 'deleted'} ${answer} ${added ? 'to' : 'from'} the poll`;
+    }
+
+    case 'messageActionTodoAppendTasks': {
+      const list = await serviceTodoList(message);
+      if(!list) return `${speaker} added a task to the checklist`;
+
+      const tasks = (action.list ?? []).map((item: any) => item.title?.text ?? '');
+      const listTitle = list.title?.text ?? '';
+      return tasks.length === 1 ?
+        `${speaker} added a new task "${truncateText(tasks[0], 60)}" to "${listTitle}".` :
+        `${speaker} added ${quoteNames(tasks)} to "${listTitle}".`;
+    }
+
+    case 'messageActionTodoCompletions': {
+      const list = await serviceTodoList(message);
+      const titles = new Map<number, string>();
+      for(const item of list?.list ?? []) titles.set(Number(item.id), item.title?.text ?? '');
+
+      const names = (ids: any[]) => quoteNames(
+        (ids ?? []).map((id) => titles.get(Number(id))).filter(Boolean).map((title: string) => truncateText(title, 60))
+      );
+
+      const done = names(action.completed);
+      const undone = names(action.incompleted);
+      if(!list || (!done && !undone)) return `${speaker} updated the checklist`;
+      if(!undone) return `${speaker} marked ${done} as done.`;
+      if(!done) return `${speaker} marked ${undone} as not done.`;
+      return `${speaker} marked ${done} as done and ${undone} as not done.`;
+    }
+
+    /* --- games, gifts and money ----------------------------------- */
+
+    case 'messageActionGameScore': {
+      const game = (await serviceReplied(message))?.media;
+      const title = game?._ === 'messageMediaGame' ? game.game?.title : '';
+      const scored = out ? `You scored ${action.score}` : `${actor} scored ${action.score}`;
+      return title ? `${scored} in ${title}` : scored;
+    }
+
+    case 'messageActionGiftPremium':
+    case 'messageActionGiftStars':
+    case 'messageActionGiftTon': {
+      const amount = await moneyText(action.amount, action.currency);
+      return out ? `You have sent a gift for ${amount}` : `${actor} sent you a gift for ${amount}`;
+    }
+
+    case 'messageActionGiftCode': {
+      // Without an amount this is the recipient's side of a gift link: the
+      // wording is the "you've received a gift" one, not the purchase one.
+      if(action.amount === undefined && action.crypto_amount === undefined) {
+        if(!action.boost_peer) return 'You\'ve received a gift.';
+        return `You\'ve received a gift from ${await peerNameById(servicePeerId(action.boost_peer), selfId)}.`;
+      }
+
+      const amount = await moneyText(action.amount, action.currency);
+      return out ? `You have sent a gift for ${amount}` : `${actor} sent you a gift for ${amount}`;
+    }
+
+    case 'messageActionPrizeStars':
+      return 'You\'ve received a gift.';
+
+    case 'messageActionStarGift':
+    case 'messageActionStarGiftUnique':
+      return await starGiftText(message, action, selfId, out);
+
+    case 'messageActionStarGiftPurchaseOffer': {
+      const offered = `${starsText(starsAmountOf(action.price))} for ${collectibleName(action.gift)}`;
+      return out ?
+        `You offered ${await peerNameById(peerId, selfId)} ${offered}` :
+        `${await peerNameById(peerId, selfId)} offered you ${offered}`;
+    }
+
+    case 'messageActionStarGiftPurchaseOfferDeclined': {
+      const peer = await peerNameById(peerId, selfId);
+      const price = starsText(starsAmountOf(action.price));
+      const name = collectibleName(action.gift);
+      if(action.pFlags?.expired) return `Your offer to ${peer} has expired. ${price} for ${name}`;
+      return out ?
+        `You rejected ${peer}'s offer to buy your ${name} for ${price}` :
+        `${peer} rejected your offer of ${name} for ${price}`;
+    }
+
+    case 'messageActionSuggestProfilePhoto':
+      return out ?
+        `You suggested ${await peerNameById(peerId, selfId)} to use this profile photo` :
+        `${actor} suggests this photo for your Telegram profile`;
+
+    case 'messageActionSuggestBirthday':
+      return out ?
+        `You suggested ${await peerNameById(peerId, selfId)} to add a birthday` :
+        `${actor} suggested you add your birthday`;
+
+    case 'messageActionGiveawayLaunch': {
+      const stars = Number(action.stars ?? 0);
+      return stars ?
+        `${actor} just started a giveaway of ${starsText(stars)} to its followers.` :
+        `${actor} just started a giveaway of Telegram Premium subscriptions to its followers.`;
+    }
+
+    case 'messageActionGiveawayResults':
+      return giveawayResultsText(action);
+
+    case 'messageActionBoostApply':
+      return `${actor} boosted the group ${Number(action.boosts ?? 0)} times`;
+
+    case 'messageActionPaymentSent': {
+      const price = await moneyText(action.total_amount, action.currency);
+      const payee = await peerNameById(peerId, selfId);
+      const invoice = (await serviceReplied(message))?.media;
+      const forWhat = invoice?._ === 'messageMediaInvoice' && invoice.title ? ` for ${invoice.title}` : '';
+
+      if(action.pFlags?.recurring_used) {
+        return `You have just successfully transferred ${price} to ${payee}${forWhat} via recurrent payments`;
+      }
+
+      if(action.pFlags?.recurring_init) {
+        return `You successfully transferred ${price} to ${payee}${forWhat} and allowed future recurring payments`;
+      }
+
+      return `You have successfully transferred ${price} to ${payee}${forWhat}`;
+    }
+
+    case 'messageActionPaymentSentMe': {
+      // The payee's copy of the same receipt. Upstream has no wording for it at
+      // all (no case, no fallback entry), so this is the sentence its pair uses,
+      // read from the other side.
+      const price = await moneyText(action.total_amount, action.currency);
+      return `${actor} transferred ${price} to you`;
+    }
+
+    case 'messageActionPaymentRefunded':
+      return `${actor} refunded ${await moneyText(action.total_amount, action.currency)}`;
+
+    case 'messageActionPaidMessagesRefunded': {
+      const stars = starsText(Number(action.stars ?? 0));
+      const paidPeerId = servicePeerId(message.saved_peer_id) || peerId;
+      const payer = await peerNameById(paidPeerId, selfId);
+      return out ? `You refunded ${stars} to ${payer}` : `${payer} refunded ${stars} to you`;
+    }
+
+    case 'messageActionPaidMessagesPrice': {
+      const stars = Number(action.stars ?? 0);
+      if(await isBroadcast()) {
+        if(!action.pFlags?.broadcast_messages_allowed) return `${actor} disabled direct messages`;
+        return stars ?
+          `${actor} now accepts direct messages for ${starsText(stars)}` :
+          `${actor} now accepts direct messages for free`;
+      }
+
+      return stars ? `Messages now cost ${starsText(stars)} in this group` : 'Messages in this group are now free';
+    }
+
+    case 'messageActionSuggestedPostApproval': {
+      if(action.pFlags?.balance_too_low) return '❌ Balance too low to publish the suggested post';
+      if(action.pFlags?.rejected) return '❌ The post was rejected';
+      return '🤝 Agreement Reached!';
+    }
+
+    case 'messageActionSuggestedPostSuccess':
+      return `✅ The channel was awarded ${starsText(starsAmountOf(action.price))} for publishing the post`;
+
+    case 'messageActionSuggestedPostRefund':
+      return 'The stars were returned because the message was deleted';
+
+    /* --- everything else ------------------------------------------ */
+
+    case 'messageActionRequestedPeer': {
+      const peers = await Promise.all((action.peers ?? []).map((peer: any) => peerNameById(servicePeerId(peer), selfId)));
+      return `${speaker} shared ${joinNames(peers)} with ${await peerNameById(peerId, selfId)}.`;
+    }
+
+    case 'messageActionBotAllowed': {
+      if(action.pFlags?.attach_menu) return 'You allowed this bot to message you when you added it to your attachment menu.';
+      if(action.pFlags?.from_request) return 'You allowed this bot to message you when you accepted its request.';
+      if(action.domain) return `You allowed this bot to message you when you logged in on ${action.domain}`;
+      // No wording upstream either — the splitter's own text is the last resort.
+      break;
+    }
+
+    case 'messageActionWebViewDataSent':
+    case 'messageActionWebViewDataSentMe':
+      return `Data from the "${action.text ?? ''}" button was transferred to the bot.`;
+
+    case 'messageActionScreenshotTaken':
+      return out ? 'You took a screenshot' : 'Screenshot taken';
+
+    case 'messageActionGeoProximityReached': {
+      const fromId = servicePeerId(action.from_id);
+      const toId = servicePeerId(action.to_id);
+      const distance = `${Number(action.distance ?? 0)} m`;
+      if(fromId === selfId) return `You are now within ${distance} of ${await peerNameById(toId, selfId)}`;
+      if(toId === selfId) return `${await peerNameById(fromId, selfId)} is now within ${distance} of you`;
+      return `${await peerNameById(fromId, selfId)} is now within ${distance} of ${await peerNameById(toId, selfId)}`;
+    }
 
     case 'messageActionCustomAction':
       return action.message ?? 'Service message';
@@ -627,6 +1137,273 @@ async function serviceText(message: any): Promise<string> {
   // "messageActionChatAddUser" → "Chat add user"
   const words = (action._ ?? '').replace(/^messageAction/, '').replace(/([A-Z])/g, ' $1').trim();
   return words ? words.charAt(0).toUpperCase() + words.slice(1).toLowerCase() : 'Service message';
+}
+
+/* ------------------------------------------------------------------ */
+/* Service-message wording helpers                                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * "A, B and C" — upstream joins names with the language pack's own delimiters
+ * (`", "`, `" and "` for the last one) instead of `Array.join`.
+ */
+function joinNames(names: string[]): string {
+  if(names.length < 2) return names[0] ?? '';
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+}
+
+/** The same join with every name quoted — the checklist wording quotes its items. */
+function quoteNames(names: string[]): string {
+  return joinNames(names.map((name) => `"${name}"`));
+}
+
+/** "1 Star" / "5 Stars" — the `Stars` plural in the language pack. */
+function starsText(stars: number): string {
+  return countText(stars, 'Star');
+}
+
+function countText(count: number, unit: string): string {
+  return `${count} ${unit}${count === 1 ? '' : 's'}`;
+}
+
+/**
+ * A duration worded the way the language pack words it: the two largest units
+ * that are not zero, largest first — `formatDuration(…, 2)` in tweb.
+ */
+function durationText(seconds: number): string {
+  const units = [
+    {step: 1, unit: 'second'},
+    {step: 60, unit: 'minute'},
+    {step: 60, unit: 'hour'},
+    {step: 24, unit: 'day'},
+    {step: 7, unit: 'week'},
+    {step: 365 / 12 / 7, unit: 'month'},
+    {step: 12, unit: 'year'}
+  ];
+
+  const value = seconds || 1;
+  const parts: string[] = [];
+  let scale = 1;
+  units.forEach((entry, index) => {
+    scale = Math.round(scale * entry.step);
+    if(value < scale) return;
+
+    let count = value / scale;
+    // Every unit but the largest one is reported modulo the next unit up.
+    if(index !== units.length - 1) count %= units[index + 1].step;
+    parts.push(countText(count | 0, entry.unit));
+  });
+
+  return parts.slice(-2).reverse().filter((part) => !part.startsWith('0 ')).join(', ') || countText(1, 'second');
+}
+
+/**
+ * TTL periods get their own wording: anything above three weeks is rounded to
+ * whole months, and a year or more to whole years.
+ */
+function ttlDurationText(period: number): string {
+  if(period >= 31536000) return countText(period / 31536000 | 0, 'year');
+  if(period > 1814400) return countText(period / 2592000 | 0, 'month');
+  return durationText(period);
+}
+
+/** "today at 12:34" / "tomorrow at 12:34" / "31/12/24 at 12:34". */
+function dateAtTimeText(unixSeconds: number): string {
+  const date = new Date(unixSeconds * 1000);
+  const time = new Intl.DateTimeFormat(undefined, {hour: '2-digit', minute: '2-digit'}).format(date);
+
+  const today = new Date();
+  if(date.toDateString() === today.toDateString()) return `today at ${time}`;
+
+  const tomorrow = new Date(today);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  if(date.toDateString() === tomorrow.toDateString()) return `tomorrow at ${time}`;
+
+  const day = new Intl.DateTimeFormat(undefined, {day: '2-digit', month: '2-digit', year: '2-digit'}).format(date);
+  return `${day} at ${time}`;
+}
+
+/** Shortens a quoted fragment (a pinned message, a poll answer) to `max` characters. */
+function truncateText(text: string, max: number): string {
+  return text.length <= max ? text : text.slice(0, max - 1) + '…';
+}
+
+/** The chat a service message belongs to, or null when it cannot be resolved. */
+async function servicePeer(peerId: number): Promise<any> {
+  if(!peerId) return null;
+  try {
+    return await getPeer(peerId);
+  } catch(err) {
+    return null;
+  }
+}
+
+/** Title of any peer, including our own account — unlike `actorName`, no "You". */
+async function peerNameById(peerId: number, selfId: number): Promise<string> {
+  const peer = await servicePeer(peerId);
+  return peer ? peerTitle(peer, selfId) : 'Unknown';
+}
+
+/** The message a service message answers — a pin, a game score, an invoice, a checklist. */
+async function serviceReplied(message: any): Promise<any> {
+  const peerId = Number(message?.peerId ?? 0);
+  const mid = Number(message?.reply_to_mid ?? 0);
+  if(!peerId || !mid) return null;
+
+  const {managers} = await bootTelegram();
+  return managers.appMessagesManager.getMessageByPeer(peerId, mid).catch(() => null);
+}
+
+/** The `messageMediaToDo.todo` list a checklist action refers to, when cached. */
+async function serviceTodoList(message: any): Promise<any> {
+  const replied = await serviceReplied(message);
+  return replied?.media?._ === 'messageMediaToDo' ? replied.media.todo : null;
+}
+
+/** A `Peer`/`PeerId` field as a peer id: users positive, chats negative. */
+function servicePeerId(peer: any): number {
+  if(!peer) return 0;
+  if(typeof peer !== 'object') return Number(peer);
+
+  if(peer.user_id !== undefined) return Number(peer.user_id);
+  const chatId = peer.channel_id ?? peer.chat_id;
+  return chatId === undefined ? 0 : -Math.abs(Number(chatId));
+}
+
+/** `StarsAmount` (or a plain Long) as a number of stars, or of nanoton for TON. */
+function starsAmountOf(amount: any): number {
+  if(!amount) return 0;
+  if(typeof amount !== 'object') return Number(amount);
+  return amount.nanos !== undefined ?
+    Number(amount.amount) + Number(amount.nanos) / 1e9 :
+    Number(amount.amount) / 1e9;
+}
+
+/** "Plush Fox #42" — a collectible's name, as `getCollectibleName` builds it. */
+function collectibleName(gift: any): string {
+  return `${gift?.title ?? ''} #${Number(gift?.num ?? 0).toLocaleString()}`;
+}
+
+/** A price in the currency's own wording. `payments.ts` owns that mapping for
+ * every currency this client can meet — Stars, TON and fiat — so it is reused
+ * here rather than re-derived. */
+function moneyText(amount: any, currency: string): string {
+  return formatAmount(Number(amount ?? 0), currency ?? '');
+}
+
+/** The call state the manager stamps on a call action, recomputed when absent. */
+function phoneCallState(action: any): {video: boolean, state: 'ok' | 'missed' | 'cancelled'} {
+  const type: string = action.type ?? '';
+  const video = action.pFlags?.video !== undefined ? !!action.pFlags.video : type.startsWith('video_');
+
+  if(type.endsWith('ok')) return {video, state: 'ok'};
+  if(type.endsWith('missed')) return {video, state: 'missed'};
+  if(type.endsWith('cancelled')) return {video, state: 'cancelled'};
+
+  if(action.duration !== undefined) return {video, state: 'ok'};
+  return {video, state: action.reason?._ === 'phoneCallDiscardReasonMissed' ? 'missed' : action.reason ? 'cancelled' : 'ok'};
+}
+
+/** The text of `Giveaway.Results` and the three sentences it combines with. */
+function giveawayResultsText(action: any): string {
+  const winners = Number(action.winners_count ?? 0);
+  const unclaimed = Number(action.unclaimed_count ?? 0);
+
+  if(!winners) {
+    if(action.pFlags?.stars) {
+      return 'Due to the giveaway terms, no winners could be selected by Telegram, all stars were credited to channel administrators.';
+    }
+
+    if(unclaimed === 1) {
+      return 'Due to the giveaway terms, no winner could be selected by Telegram, 1 gift link was forwarded to channel administrators.';
+    }
+
+    return `Due to the giveaway terms, no winners could be selected by Telegram, all ${unclaimed} gift links were forwarded to channel administrators.`;
+  }
+
+  const selected = `${countText(winners, 'winner')} of the giveaway ${winners === 1 ? 'was' : 'were'}` +
+    ` randomly selected by Telegram and received private ${winners === 1 ? 'message with giftcode.' : 'messages with giftcodes.'}`;
+
+  if(!unclaimed) return selected;
+  const codes = countText(unclaimed, 'undistributed link code');
+  return `${selected} ${codes} ${unclaimed === 1 ? 'was' : 'were'} forwarded to channel administrators.`;
+}
+
+/** The wording of a star gift, which depends on who paid, who received and where. */
+async function starGiftText(message: any, action: any, selfId: number, out: boolean): Promise<string> {
+  const fromId = !action.pFlags?.prepaid_upgrade && action.from_id ?
+    servicePeerId(action.from_id) :
+    Number(message.fromId ?? 0);
+  const unique = action._ === 'messageActionStarGiftUnique' ? action : null;
+  const resale = unique?.resale_amount;
+  const peerId = Number(message.peerId ?? 0);
+
+  // A gift bought through our own offer is paid by us, even though it comes from
+  // its previous owner — and a resale in our own dialog is always the one we
+  // bought for ourselves.
+  const boughtThroughOffer = !!resale && !!unique?.pFlags?.from_offer && !message.pFlags?.out;
+  const direction = (boughtThroughOffer || (peerId === selfId && (resale || !fromId || fromId === selfId))) ?
+    'self' :
+    (out ? 'outgoing' : 'incoming');
+  const isMine = direction !== 'incoming';
+
+  const giftPeerId = servicePeerId(action.peer);
+  const channelId = giftPeerId < 0 ? giftPeerId : 0;
+  const channel = channelId ? `${await peerNameById(channelId, selfId)}` : '';
+  const from = fromId ? `${await peerNameById(fromId, selfId)}` : '';
+
+  const sentToChannel = (amount: string) => isMine ?
+    `You sent a gift to ${channel} for ${amount}` :
+    `${from} sent a gift to ${channel} for ${amount}`;
+
+  if(action._ === 'messageActionStarGift') {
+    const stars = starsText(Number(action.gift?.stars ?? 0));
+    if(channelId) return sentToChannel(stars);
+    if(direction === 'self') return `You bought a gift for ${stars}`;
+    if(direction === 'outgoing') return `You sent a gift for ${stars}`;
+    return `${from} sent you a gift for ${stars}`;
+  }
+
+  if(action.pFlags?.prepaid_upgrade) {
+    // Somebody else paid for this upgrade, so the sentence is about who unpacked it.
+    const helper = await peerNameById(peerId, selfId);
+    return out ?
+      `You unpacked the gift that ${helper} helped to upgrade.` :
+      `${helper} unpacked the gift that you helped to upgrade.`;
+  }
+
+  const sold = !!(action.pFlags?.from_offer && message.pFlags?.out);
+  if(resale && !sold) {
+    const isTon = resale._ === 'starsTonAmount';
+    const amount = isTon ? `${starsAmountOf(resale)} Grams` : starsText(starsAmountOf(resale));
+    if(channelId) return sentToChannel(amount);
+    if(direction === 'self') return `You bought a gift for ${amount}`;
+    if(direction === 'outgoing') return `You sent a gift for ${amount}`;
+    return `${from} sent you a gift for ${amount}`;
+  }
+
+  const upgraded = !!action.pFlags?.upgrade;
+  if(channelId) {
+    return isMine ?
+      (upgraded ? `You turned this gift to ${channel} into a unique collectible` : `You transferred a gift to ${channel}`) :
+      (upgraded ?
+        `${from} turned this gift to ${channel} into a unique collectible` :
+        `${from} transferred a gift to ${channel}`);
+  }
+
+  if(peerId === selfId) {
+    return upgraded ? 'You turned this gift into a unique collectible' : 'You transferred a unique collectible';
+  }
+
+  const chat = await peerNameById(peerId, selfId);
+  if(upgraded) {
+    return out ?
+      `You turned the gift from ${chat} into a unique collectible` :
+      `${chat} turned the gift from you into a unique collectible`;
+  }
+
+  if(sold) return `You sold a gift to ${chat}`;
+  return out ? `You transferred a gift to ${chat}` : `${chat} transferred a gift to you`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -654,7 +1431,9 @@ export async function loadDialogs(limit = 40, filterId = 0): Promise<DialogItem[
         unread: dialog.unread_count ?? 0,
         isSelf: peerId === selfId,
         isUser: peer?._ === 'user',
+        isMegagroup: peer?._ === 'channel' && !!peer?.pFlags?.megagroup,
         isBroadcast: peer?._ === 'channel' && !!peer?.pFlags?.broadcast,
+        left: peer?._ === 'channel' && !!peer?.pFlags?.left,
         isForum: isTopicChat(peer),
         pinned: !!dialog.pFlags?.pinned,
         muted: (dialog.notify_settings?.mute_until ?? 0) > Date.now() / 1000,
@@ -707,6 +1486,7 @@ async function toItem(message: any, peerId: number, selfId: number): Promise<Mes
     editable: out && message._ !== 'messageService',
     edited: !!message.edit_date,
     out,
+    pinned: !!message.pFlags?.pinned,
     date: message.date,
     fromTitle: fromId === selfId ? 'You' : peerTitle(fromPeer, selfId),
     fromId,
@@ -1093,6 +1873,26 @@ export async function hidePinnedMessage(peerId: number): Promise<void> {
   await managers.appMessagesManager.hidePinnedMessages(peerId);
 }
 
+/**
+ * Whether this chat's pin is ours to set: a private chat always, a group or
+ * channel only with the `pin_messages` right — the same rule tweb's own menu
+ * uses before it offers Pin.
+ */
+export async function canPin(peerId: number): Promise<boolean> {
+  const {managers} = await bootTelegram();
+  return !!(await managers.appPeersManager.canPinMessage(peerId));
+}
+
+/**
+ * Pin a message, or unpin it. The server defaults are what tweb's popup sends
+ * with its checkboxes untouched: the pin counts for both sides and notifies the
+ * chat. A silently-notified pin is a separate gesture we do not offer.
+ */
+export async function pinMessage(peerId: number, mid: number, unpin = false): Promise<void> {
+  const {managers} = await bootTelegram();
+  await managers.appMessagesManager.updatePinnedMessage(peerId, mid, unpin);
+}
+
 export async function editMessage(
   peerId: number,
   mid: number,
@@ -1244,7 +2044,9 @@ export async function searchDialogs(query: string, limit = 40): Promise<DialogIt
         unread: dialog.unread_count ?? 0,
         isSelf: peerId === selfId,
         isUser: peer?._ === 'user',
+        isMegagroup: peer?._ === 'channel' && !!peer?.pFlags?.megagroup,
         isBroadcast: peer?._ === 'channel' && !!peer?.pFlags?.broadcast,
+        left: peer?._ === 'channel' && !!peer?.pFlags?.left,
         isForum: isTopicChat(peer),
         pinned: !!dialog.pFlags?.pinned,
         muted: (dialog.notify_settings?.mute_until ?? 0) > Date.now() / 1000,
@@ -2032,6 +2834,16 @@ export async function togglePin(peerId: number, filterId = 0): Promise<void> {
 export async function toggleMute(peerId: number, mute: boolean, threadId?: number): Promise<void> {
   const {managers} = await bootTelegram();
   await managers.appMessagesManager.togglePeerMute({peerId, mute, threadId});
+}
+
+/**
+ * Join a chat we are not a member of — a public channel or supergroup found by
+ * username, or one we left. The manager picks the call the peer type needs, the
+ * same way tweb's own join button does.
+ */
+export async function joinChat(peerId: number): Promise<void> {
+  const {managers} = await bootTelegram();
+  await managers.appChatsManager.joinPeer(peerId);
 }
 
 export async function leaveOrDelete(peerId: number): Promise<void> {

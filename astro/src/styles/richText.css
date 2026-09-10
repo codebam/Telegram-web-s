@@ -1,0 +1,166 @@
+/*
+ * The runs `FormattedText` renders that need more than that component's own
+ * stylesheet: a formatted date, a collapsible quote, and a code block with the
+ * header tweb puts above it.
+ *
+ * This sheet is global, not one of the component stylesheets the build scopes
+ * with `data-ws` (see astro/scripts/scope-id.mjs), so it ships the rules for the
+ * whole page. Every selector therefore leans on a class only this renderer emits
+ * — all of them `ft-`-prefixed — or on the element it renders inside `.text`.
+ *
+ * Where a rule has to beat a component's own scoped rule, its selector carries
+ * one compound more than that rule (`[data-ws='x']` counts as class-level
+ * specificity) instead of relying on the order the two sheets happen to load in.
+ */
+
+/* --- Formatted dates (messageEntityFormattedDate) ------------------------- */
+
+.formatted-date {
+  color: inherit;
+  text-decoration: underline;
+}
+
+/* The date only offers a click when the app passed a handler for it. */
+.ft-date-clickable {
+  cursor: pointer;
+}
+
+/* --- Quotes (messageEntityBlockquote) ------------------------------------- */
+
+/*
+ * `blockquote.quote` rather than `.quote`: the ported `.quote` rule in
+ * FormattedText.css makes a quote an inline block, and a block-level quote —
+ * which is what the parser needs it to be — has to override that.
+ */
+blockquote.quote.ft-quote-block {
+  display: block;
+  position: relative;
+  width: fit-content;
+  max-width: 100%;
+  margin-inline-end: auto;
+}
+
+/*
+ * A `collapsed` quote shows three lines until it is clicked. The clamp is the
+ * line-height below times three, matching tweb's
+ * `calc(var(--messages-secondary-line-height) * 3)` in src/scss/partials/_quote.scss
+ * — this client has no such token, so the number lives here with the rule that
+ * needs it.
+ */
+.ft-quote-collapsable {
+  line-height: 1.35;
+  max-height: calc(1.35em * 3);
+  /* Room for the chevron, which would otherwise sit on the last line's tail. */
+  padding-inline-end: 1.25rem;
+  overflow: hidden;
+  transition: max-height 0.2s ease;
+}
+
+/* A quote that fits has nothing to open, so only a clipped one is clickable. */
+.ft-quote-collapsable.is-truncated,
+.ft-quote-collapsable.is-expanded {
+  cursor: pointer;
+}
+
+/* The measured height of the whole quote, set by the ResizeObserver; `none`
+   while it has not measured yet, which is an unclipped quote either way. */
+.ft-quote-collapsable.is-expanded {
+  max-height: var(--ft-quote-height, none);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ft-quote-collapsable {
+    transition: none;
+  }
+}
+
+/* Hidden while the quote fits, and while it is open: there is nothing to expand
+   and collapsing is what the quote's own click does. */
+.ft-quote-collapsable:not(.is-truncated):not(.is-expanded) .ft-quote-chevron {
+  display: none;
+}
+
+.ft-quote-chevron {
+  position: absolute;
+  inset-inline-end: 0;
+  bottom: 0;
+  width: 1rem;
+  height: 1rem;
+  pointer-events: none;
+  user-select: none;
+}
+
+.ft-quote-chevron::after {
+  content: '';
+  display: block;
+  width: 0.5rem;
+  height: 0.5rem;
+  margin: 0.2rem auto 0;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg);
+  transition: transform 0.2s ease;
+}
+
+.ft-quote-collapsable.is-expanded .ft-quote-chevron::after {
+  transform: rotate(-135deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ft-quote-chevron::after {
+    transition: none;
+  }
+}
+
+/* --- Code blocks (pre runs and rich-message code blocks) ------------------ */
+
+.ft-code-block {
+  min-width: 0;
+  margin: 4px 0;
+}
+
+.ft-code-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  font-size: 0.8em;
+  border-radius: 4px 4px 0 0;
+  background: color-mix(in srgb, currentColor 18%, transparent);
+  cursor: pointer;
+  user-select: none;
+}
+
+.ft-code-language {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ft-code-copy {
+  margin-inline-start: auto;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+  opacity: 0.7;
+  cursor: pointer;
+}
+
+.ft-code-copy:hover {
+  opacity: 1;
+  text-decoration: underline;
+}
+
+/*
+ * The body butts up against the header it belongs to: `div.ft-code-block` is
+ * there to outrank the ported `[data-ws=…]` rules that give `.pre` and `pre`
+ * their own margin and rounded corners.
+ */
+div.ft-code-block > pre,
+div.ft-code-block > code.pre {
+  margin: 0;
+  border-radius: 0 0 4px 4px;
+}

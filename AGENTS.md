@@ -19,9 +19,13 @@ file — edit AGENTS.md, never CLAUDE.md.
 still in the tree as the reference the port is checked against, but nothing
 builds or deploys it.
 
-`astro/src/lib/telegram/` is a copy of `svelte/src/lib/telegram/` (framework-clean,
-so the only edits were import paths and comments), and every one of the 85
-components has a Preact port.
+`astro/src/lib/telegram/` began as a copy of `svelte/src/lib/telegram/`
+(framework-clean, so the porting edits were import paths and comments), and every
+one of the 85 components has a Preact port. The two seams have since diverged on
+purpose: everything added after the port landed in the Astro copy only — dice and
+story messages, pin/unpin, join, delete-for-me, translation and voice-to-text,
+the service-message wording — because `svelte/` is no longer built or deployed.
+Keep new work in `astro/`, and edit the Svelte copy only when a task names it.
 
 Which one to work on:
 

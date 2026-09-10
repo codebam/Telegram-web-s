@@ -697,6 +697,23 @@ export class AppChatsManager extends AppManager {
     else return this.addChatUser(id, userId);
   }
 
+  /**
+   * Join a chat the client only knows by peer id: a public channel or supergroup
+   * found by username, or one that was left and is being re-entered.
+   *
+   * The client holds peer ids and `joinChannel`/`addChatUser` want chat ids, so
+   * the conversion lives here next to them rather than being re-derived by every
+   * caller — this is the same branch tweb's own join button takes (a channel is
+   * joined through `channels.joinChannel`, a legacy group by adding ourselves).
+   */
+  public joinPeer(peerId: PeerId) {
+    const id = peerId.toChatId();
+
+    return this.isChannel(id) ?
+      this.joinChannel(id) :
+      this.addChatUser(id, this.rootScope.myId);
+  }
+
   public addChatUser(id: ChatId, userId: UserId | UserId[], fwdLimit = 100): Promise<MissingInvitee[]> {
     if(Array.isArray(userId)) {
       return Promise.all(userId.map((u) => this.addChatUser(id, u, fwdLimit)))

@@ -244,6 +244,73 @@ export async function markStoriesRead(peerId: number, maxId: number): Promise<vo
   }
 }
 
+export type StoryLookup = StoryItem | null;
+
+/**
+ * Resolves a story id that arrived inside a message (a story shared into a chat,
+ * or a mention of one), or null when the story is gone. Mirrors tweb's own
+ * `getStoryReplyIfExpired`: `acknowledged` is what tells the caller whether the
+ * manager could answer from its store or had to ask the server — either way the
+ * result is the story item, so the wait is the only difference.
+ *
+ * The item is run through `toStoryItem`, which is what puts it in this module's
+ * raw cache — `loadStoryUrl` answers null for a story it has never seen, so it
+ * must not be called before this resolves.
+ */
+export async function lookupStory(peerId: number, id: number): Promise<StoryLookup> {
+  const {managers} = await bootTelegram();
+  // Present on the proxy at runtime, but not on the narrow `ProxiedManagers` type
+  // `bootTelegram()` declares.
+  const acknowledged = (managers as any).acknowledged;
+
+  try {
+    const acked = await acknowledged.appStoriesManager.getStoryById(Number(peerId), Number(id));
+    const story = await acked?.result;
+    if(!story || story._ !== 'storyItem') return null;
+
+    return toStoryItem(Number(peerId), story, await selfPeerId());
+  } catch(err) {
+    return null;
+  }
+}
+
+/** Every live story id of one peer, so a shared story can be opened in the viewer. */
+export async function loadPeerStoryIds(peerId: number): Promise<number[]> {
+  const {managers} = await bootTelegram();
+
+  try {
+    const selfId = await selfPeerId();
+    const res: any = await managers.appStoriesManager.getPeerStories(Number(peerId));
+    return (res?.stories ?? [])
+    .filter((story: any) => story?._ === 'storyItem')
+    .map((story: any) => toStoryItem(Number(peerId), story, selfId).id);
+  } catch(err) {
+    return [];
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Viewer requests                                                     */
+/* ------------------------------------------------------------------ */
+
+const viewerRequests = new Set<(peerId: number, storyId: number) => void>();
+
+/**
+ * Ask the story viewer to open at one story. The viewer is a component with its
+ * own state, so the request travels through this registry rather than props —
+ * the same shape as the `on…` subscriptions this layer already exposes.
+ */
+export function requestStoryViewer(peerId: number, storyId: number): void {
+  for(const listener of viewerRequests) listener(Number(peerId), Number(storyId));
+}
+
+export function onStoryViewerRequest(
+  callback: (peerId: number, storyId: number) => void
+): () => void {
+  viewerRequests.add(callback);
+  return () => viewerRequests.delete(callback);
+}
+
 /**
  * Counts a view on someone else's story. Separate from `markStoriesRead`: the
  * read marker moves the tray ring, this is what shows up in their views list.

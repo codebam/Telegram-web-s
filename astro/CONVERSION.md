@@ -295,3 +295,28 @@ Also confirm by reading your own diff:
 * every prop, default, event handler, early return and comment survived;
 * nothing under `$lib/telegram/`, `src/`, or `svelte/` was edited;
 * no `any` was introduced to silence an error the Svelte original did not have.
+
+---
+
+## This contract is now about maintenance, not conversion
+
+The port is finished and the Astro client is what ships, so the rules above are
+read as: keep the two in step where the Svelte file is the reference, and do not
+re-introduce differences that are really regressions. Two things have changed
+since §1-§8 were written:
+
+* **New features have no Svelte original.** Dice and story messages, pin/unpin,
+  join, delete-for-me, translation and voice-to-text, and the service-message
+  wording exist only in `astro/`. Their styles cannot go in a component
+  stylesheet — `astro/scripts/css-verbatim.test.mjs` byte-compares those with the
+  Svelte `<style>` blocks, and a new component sheet would have no original at all
+  — so they use `astro/src/styles/app.css` (or another sheet under
+  `astro/src/styles/`, which no guard owns). New class names are prefixed by the
+  thing they draw; the guards that read class names (`class-parity`,
+  `markup-parity`, `text-parity`) only fail when something is *dropped*, so
+  additions are safe.
+* **The seam has diverged.** `astro/src/lib/telegram/` and
+  `svelte/src/lib/telegram/` are no longer identical: every post-port feature
+  landed in the Astro copy only. Edit the Svelte copy only when a task names that
+  client.
+

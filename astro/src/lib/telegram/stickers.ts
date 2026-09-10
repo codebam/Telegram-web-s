@@ -275,3 +275,35 @@ export async function toggleSavedGif(docId: string, save: boolean): Promise<void
   const {managers} = await bootTelegram();
   await managers.appGifsManager.saveGif(docId, !save);
 }
+
+/* ------------------------------------------------------------------ */
+/* Dice / animated random                                              */
+/* ------------------------------------------------------------------ */
+
+/** One dice's sticker set, keyed by emoji — at most one fetch per emoji per session. */
+const diceSets = new Map<string, Promise<StickerItem[]>>();
+
+/**
+ * The documents of the sticker set an animated-random emoji is played from.
+ * Index semantics are tweb's (`src/components/chat/bubbleParts/dice.ts`): 0 is
+ * the rolling animation and 1..N the outcomes; for 🎰 the set is a sprite sheet
+ * instead, with the reels and symbol parts at fixed indexes.
+ *
+ * `getStickerSetByDice` already dedupes in-flight requests and caches the set for
+ * an hour, so this map only saves the worker round-trip.
+ */
+export function loadDiceDocuments(emoticon: string): Promise<StickerItem[]> {
+  let promise = diceSets.get(emoticon);
+  if(!promise) {
+    promise = bootTelegram()
+    .then(({managers}) => managers.appStickersManager.getStickerSetByDice(emoticon))
+    // toSticker registers each raw document in chats.ts's doc cache, which is what
+    // loadStickerBlob() reads — the documents are `application/x-tgsticker`, so the
+    // animated Lottie path already applies to them.
+    .then((set: any) => (set?.documents ?? []).map(toSticker))
+    .catch(() => []);
+    diceSets.set(emoticon, promise);
+  }
+
+  return promise;
+}

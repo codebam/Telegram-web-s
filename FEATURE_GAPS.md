@@ -35,6 +35,34 @@ in (dialogs, media downloads, day dividers, link previews, zero console errors).
 
 ---
 
+## What has landed since this audit
+
+The P0 and P1 slices below were implemented in the Astro client after the rebase.
+Everything here is verified by `pnpm typecheck:astro`, the 456 guard tests,
+`pnpm build:astro`, and a signed-in browser run against the built client.
+
+| Feature | What it does now |
+|---|---|
+| Dice / animated random 🎲 🎯 🎳 ⚽ 🏀 🎰 | Renders the sticker set Telegram keeps for the emoji: the roll loops while our own throw is unacknowledged, an outcome plays once, a message that was already read shows its settled frame. The slot machine composes its sprite-sheet parts. Verified end to end by sending a real dice. |
+| Stories in a chat | A shared story renders as its 9:16 preview and opens the viewer; a story *mention* renders Telegram's card (author avatar, "X mentioned you in a story", View Story); an expired story says so instead of showing an empty frame. |
+| Service messages | 77 of the 81 action types have Telegram's own wording (four bot/Passport actions fall back, since upstream has no wording for them either), with the actor/tense rules and the channel variants; the machine splitter that produced "Set messages t t l" survives only as the last resort. Also feeds the dialog and topic previews. |
+| Payment & gift cards | An early `message.service` branch used to swallow three card types before the bubble body could render them; a gift code, a receipt and a Star gift now render their cards, and the gift-code card reads the `days` field the action actually carries instead of a non-existent `months`. |
+| Pin / unpin a message | A Pin (or Unpin) entry in the message menu where `pin_messages` is ours, updating the pinned bar from what the server stored. |
+| Join / subscribe | A channel or supergroup you left (or found by username) is read-only: the composer is replaced by a banner with a Join button, which joins through the peer type's own call. |
+| Delete for me | A second delete that removes a message only for you — the only delete a member has for someone else's message — plus the same choice for a multi-selection. Supergroups and channels keep the for-everyone delete only, because `channels.deleteMessages` has no revoke flag and would delete for everyone regardless. |
+| Message translation, voice-to-text | Both are asked for from the message menu and shown under the message. They are Premium features on Telegram's side, so a free account sees the server's refusal rather than a control that fails silently. |
+| Hashtags, cashtags, bot commands | Clickable at last: a tag opens an in-chat search for it (and `#tag@channel` switches chat first), a command is sent — Telegram's own behaviour. |
+| Formatted dates, collapsible quotes, code blocks | `messageEntityFormattedDate` renders as a live-ticking relative date (or an absolute one) and copies on click; a collapsed blockquote clips to three lines and expands; a code block gets its language label and a copy header. |
+| Message menu reachability | The menu now anchors by its bottom edge when the click is in the lower half of the screen — with this many actions, its last entries used to fall off the bottom of the viewport. |
+
+Remaining from the P1 table below: copy-message-link and reporting a *specific*
+message, repeating scheduled messages, captions-above-media, favourite stickers,
+animated single-emoji messages, emoji suggestions, editing media messages,
+typing-action variety, and Clear History for a normal chat. The P2 areas
+(group calls, RTMP, conferences, star-gift actions, sign-up, passkey login,
+passcode lock, in-app browser and Instant View, channel statistics, settings
+search) are untouched.
+
 ## P0 — messages that render wrong or not at all
 
 | Gap | Effect for a user | Evidence |
@@ -115,20 +143,23 @@ colour picker (fixed 10-swatch palette) and a rotation wheel.
 
 ---
 
-## Suggested first slice
+## Where to go next
 
-Small, self-contained, and each one turns a wrong-or-blank rendering into the
-real thing — the manager layer already supports all of them:
+The first slice is done (see "What has landed since this audit" above). The next
+natural slices, smallest first:
 
-1. **Dice** — add the `messageMediaDice` media kind and the animated reveal
-   (port `src/components/chat/bubbleParts/dice.ts`).
-2. **Story messages** — render `messageMediaStory` as a tappable card.
-3. **Service-message text** — extend `serviceText` to the remaining
-   `messageAction*` types, with the actor, amount and tense Telegram uses
-   (port the wording from upstream's service parts).
-4. **Payment / gift-code cards** — stop the early `message.service` branch from
-   swallowing the card types.
-5. **Pin / unpin** — a Pin item in the message menu calling
-   `appMessagesManager.updatePinnedMessage`.
-6. **Join / subscribe** — a Join button on a chat you have left, calling
-   `channels.joinChannel` (`pFlags.left`).
+1. **The rest of the P1 table** — copy-message-link and reporting a specific
+   message, editing a media message, Clear History for a normal chat, repeating
+   scheduled messages, favourite stickers.
+2. **Chat administration** — six settings have no UI at all (content protection,
+   hidden members, join-to-send, pre-history, anti-spam, group location), the
+   admin log cannot be filtered or paged, and there is no bulk delete by user or
+   date range. Each is one manager call the layer already has.
+3. **Search & discovery** — a hashtag can be searched inside a chat now, but the
+   Public-posts scope (`channels.searchPosts`) and people-nearby are still
+   absent, and the in-chat search has no `#`-scope rows.
+4. **Calls** — group calls / voice chats are the largest missing area: nothing in
+   the client calls `appGroupCallsManager` or `groupCallsController`, so a voice
+   chat cannot be joined, and a video call cannot even be placed.
+5. **Stars & gifts** — gifts are receive-only: no info popup, upgrade, wear,
+   transfer, resale, collections or profile display.

@@ -1598,7 +1598,7 @@ export type PaymentPreview =
       converted: boolean;
       unique: boolean;
     }
-  | {kind: 'giftCode'; slug: string; months: number}
+  | {kind: 'giftCode'; slug: string; days: number}
   | {kind: 'paymentSent'; currency: string; amount: number; recurring: boolean};
 
 /**
@@ -1675,7 +1675,9 @@ export function paymentPreviewOf(message: any): PaymentPreview | null {
     return {
       kind: 'giftCode',
       slug: action.slug ?? '',
-      months: Number(action.months ?? 0)
+      // `messageActionGiftCode` carries days, not months — reading `months` here
+      // (a field the action does not have) is why the card always said "0 months".
+      days: Number(action.days ?? 0)
     };
   }
 

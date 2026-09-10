@@ -34,6 +34,21 @@ import {
 
 import './MessagePayment.css';
 
+/**
+ * How long a Premium gift code lasts, in Telegram's wording. The action carries
+ * days and the official cards talk in months, so a round number of months is
+ * shown as months and anything else stays in days.
+ */
+function giftCodePeriod(days: number): string {
+  if(!days) return 'Telegram Premium';
+  if(days % 30 === 0) {
+    const months = days / 30;
+    return months === 1 ? '1 month of Premium' : `${months} months of Premium`;
+  }
+
+  return days === 1 ? '1 day of Premium' : `${days} days of Premium`;
+}
+
 interface Props {
   peerId: number;
   mid: number;
@@ -170,7 +185,10 @@ export function MessagePayment({peerId, mid, payment, onboost}: Props) {
           ) : payment.kind === 'giftCode' ? (
             <>
               <span class="head">Premium gift code</span>
-              <span class="muted">{payment.months} months — redeem it in Settings → Premium → Gift code.</span>
+              {/* The action carries days; Telegram's own cards word it in months. */}
+              <span class="muted">
+                {giftCodePeriod(payment.days)} — redeem it in Settings → Premium → Gift code.
+              </span>
             </>
           ) : payment.kind === 'paymentSent' ? (
             <>
