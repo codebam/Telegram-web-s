@@ -1386,6 +1386,44 @@ export class AppChatsManager extends AppManager {
     })
   }
 
+  /**
+   * Public posts carrying a word or a hashtag, across every public channel the
+   * server indexes. `channels.searchPosts` is separate from the normal history
+   * search and was never wrapped, so this is the one place the client asks for
+   * posts. The raw messages are fed through `saveMessages` so callers get the
+   * same `peerId`/`mid`-carrying messages every other search returns.
+   */
+  public searchPosts({
+    hashtag,
+    query,
+    offsetRate,
+    offsetPeer,
+    offsetId,
+    limit = 20
+  }: {
+    hashtag?: string;
+    query?: string;
+    offsetRate?: number;
+    offsetPeer?: PeerId;
+    offsetId?: number;
+    limit?: number;
+  }) {
+    return this.apiManager.invokeApi('channels.searchPosts', {
+      hashtag,
+      query,
+      offset_rate: offsetRate ?? 0,
+      offset_peer: offsetPeer ? this.appPeersManager.getInputPeerById(offsetPeer) : {_: 'inputPeerEmpty'},
+      offset_id: offsetId ?? 0,
+      limit
+    }).then((result: any) => {
+      if(result._ === 'messages.messagesNotModified') return result;
+      this.appUsersManager.saveApiUsers(result.users);
+      this.saveApiChats(result.chats);
+      this.appMessagesManager.saveMessages(result.messages);
+      return result;
+    });
+  }
+
   private adminLogsFetcherMap = new Map<ChatId, SlicedCachedFetcher<AdminLog>>;
 
   public fetchAdminLogs({channelId, offsetId, search, flags, admins, limit}: FetchAdminLogsArgs) {

@@ -330,6 +330,55 @@ export async function searchGlobalMessages(
   return pageFrom(result, await toResults(result?.messages ?? []));
 }
 
+export type PostSearchOptions = {
+  limit?: number;
+  /** Paging cursor from the previous page. */
+  offsetRate?: number;
+  offsetPeerId?: number;
+  offsetId?: number;
+};
+
+/**
+ * Public channel posts (`channels.searchPosts`). The server indexes public
+ * posts separately from the user's own history, so this is what a hashtag or a
+ * topic search across channels should use; a leading `#` selects the hashtag
+ * form. The manager normalises the raw posts, so the rows are the same
+ * `MessageResultItem`s the other message searches return.
+ */
+export async function searchPublicPosts(
+  query: string,
+  options: PostSearchOptions = {}
+): Promise<MessagePage> {
+  const raw = query.trim();
+  const hashtag = raw.startsWith('#') ? raw.slice(1).trim() : '';
+  const text = hashtag ? '' : raw;
+  if(!hashtag && !text) return {...EMPTY_PAGE};
+
+  const {managers} = await bootTelegram();
+  const result: any = await managers.appChatsManager.searchPosts({
+    hashtag: hashtag || undefined,
+    query: text || undefined,
+    offsetRate: options.offsetRate,
+    offsetPeer: options.offsetPeerId,
+    offsetId: options.offsetId,
+    limit: options.limit ?? 20
+  });
+
+  const messages = (result?.messages ?? []).filter((message: any) => message?.peerId);
+  const items = await toResults(messages);
+  const last = messages[messages.length - 1];
+  // A bare `messages.messages` (not a slice) means the server returned everything.
+  const nextRate = result?.next_rate;
+  return {
+    items,
+    count: result?.count ?? items.length,
+    isEnd: nextRate == null,
+    nextRate,
+    offsetId: last?.mid ?? 0,
+    offsetPeerId: last?.peerId ?? 0
+  };
+}
+
 export type ChatSearchOptions = MessageSearchOptions & {
   threadId?: number;
   /** Restrict to one sender — groups and channels only. */

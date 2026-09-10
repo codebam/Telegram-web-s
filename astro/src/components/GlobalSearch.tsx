@@ -29,6 +29,7 @@ import {
   searchGlobalMessages,
   searchGlobalPeers,
   searchLocalPeers,
+  searchPublicPosts,
   type MessagePage,
   type MessageResultItem,
   type SearchPeerItem
@@ -42,7 +43,7 @@ interface Props {
   onOpenMessage: (peerId: number, mid: number) => void;
 }
 
-type Tab = 'chats' | 'global' | 'messages';
+type Tab = 'chats' | 'global' | 'messages' | 'posts';
 
 export function GlobalSearch({query, onOpenPeer, onOpenMessage}: Props) {
   const tab = useSignal<Tab>('chats');
@@ -56,8 +57,17 @@ export function GlobalSearch({query, onOpenPeer, onOpenMessage}: Props) {
   const loadingMore = useSignal(false);
   const failed = useSignal('');
 
+  // Public channel posts are fetched only when their tab is open: the server
+  // rate-limits `channels.searchPosts`, so they must not ride on every keystroke.
+  const posts = useSignal<MessageResultItem[]>([]);
+  const postsPage = useSignal<MessagePage | null>(null);
+  const loadingPosts = useSignal(false);
+  const loadingMorePosts = useSignal(false);
+
   // Guards every async result against a newer query having started meanwhile.
   const runId = useRef(0);
+  // The posts tab has its own guard so opening it cannot cancel the main search.
+  const postsRunId = useRef(0);
 
   async function refreshEmptyState() {
     const id = ++runId.current;
@@ -101,11 +111,14 @@ export function GlobalSearch({query, onOpenPeer, onOpenMessage}: Props) {
 
     if(!trimmed) {
       ++runId.current;
+      ++postsRunId.current;
       loading.value = false;
       localPeers.value = [];
       globalPeers.value = [];
       messages.value = [];
       page.value = null;
+      posts.value = [];
+      postsPage.value = null;
       tab.value = 'chats';
       refreshEmptyState();
       return;
@@ -114,6 +127,37 @@ export function GlobalSearch({query, onOpenPeer, onOpenMessage}: Props) {
     const timer = setTimeout(() => run(trimmed), 250);
     return () => clearTimeout(timer);
   }, [query]);
+
+  // Posts load lazily: only while the Posts tab is open.
+  useEffect(() => {
+    if(tab.value !== 'posts') return;
+
+    const trimmed = query.trim();
+    if(!trimmed) {
+      posts.value = [];
+      postsPage.value = null;
+      return;
+    }
+
+    const id = ++postsRunId.current;
+    loadingPosts.value = true;
+    failed.value = '';
+    posts.value = [];
+    postsPage.value = null;
+
+    searchPublicPosts(trimmed)
+      .then((result) => {
+        if(id !== postsRunId.current) return;
+        posts.value = result.items;
+        postsPage.value = result;
+      })
+      .catch((err: any) => {
+        if(id === postsRunId.current) failed.value = err?.message ?? 'Search failed';
+      })
+      .finally(() => {
+        if(id === postsRunId.current) loadingPosts.value = false;
+      });
+  }, [tab.value, query]);
 
   /** Next page of message results, appended as the list is scrolled. */
   async function loadMoreMessages() {
@@ -143,10 +187,39 @@ export function GlobalSearch({query, onOpenPeer, onOpenMessage}: Props) {
     }
   }
 
+  /** Next page of public posts, walked with the server's rate cursor. */
+  async function loadMorePosts() {
+    const current = postsPage.value;
+    if(!current || current.isEnd || loadingMorePosts.value || loadingPosts.value) return;
+
+    const id = postsRunId.current;
+    loadingMorePosts.value = true;
+    try {
+      const next = await searchPublicPosts(query, {
+        offsetRate: current.nextRate,
+        offsetPeerId: current.offsetPeerId,
+        offsetId: current.offsetId
+      });
+      if(id !== postsRunId.current) return;
+
+      const known = new Set(posts.value.map((item) => item.key));
+      const fresh = next.items.filter((item) => !known.has(item.key));
+      posts.value = [...posts.value, ...fresh];
+      postsPage.value = {...next, isEnd: next.isEnd || !fresh.length};
+    } catch(err: any) {
+      failed.value = err?.message ?? 'Search failed';
+    } finally {
+      if(id === postsRunId.current) loadingMorePosts.value = false;
+    }
+  }
+
   function onScroll(e: Event) {
-    if(tab.value !== 'messages') return;
+    if(tab.value !== 'messages' && tab.value !== 'posts') return;
     const el = e.currentTarget as HTMLElement;
-    if(el.scrollHeight - el.scrollTop - el.clientHeight < 240) loadMoreMessages();
+    if(el.scrollHeight - el.scrollTop - el.clientHeight < 240) {
+      if(tab.value === 'messages') loadMoreMessages();
+      else loadMorePosts();
+    }
   }
 
   function openPeer(peerId: number) {
@@ -178,10 +251,30 @@ export function GlobalSearch({query, onOpenPeer, onOpenMessage}: Props) {
   const counts = useComputed(() => ({
     chats: localPeers.value.length,
     global: globalPeers.value.length,
-    messages: page.value?.count ?? messages.value.length
+    messages: page.value?.count ?? messages.value.length,
+    posts: postsPage.value?.count ?? posts.value.length
   }));
 
   const list = tab.value === 'chats' ? localPeers.value : globalPeers.value;
+
+  /** One message/post row — both result lists render identically. */
+  function renderMessageRow(item: MessageResultItem) {
+    return (
+      <button class="peer-row" key={item.key} onClick={() => openMessage(item)}>
+        <Avatar peerId={item.peerId} title={item.chatTitle} size={38} />
+        <span class="meta">
+          <span class="row">
+            <span class="title">{item.chatTitle}</span>
+            <span class="time">{timeOf(item.message.date)}</span>
+          </span>
+          <span class="subtitle">
+            {!item.isUser && item.message.fromTitle ? <em>{item.message.fromTitle}:</em> : null}
+            {' '}{item.message.text || 'Media'}
+          </span>
+        </span>
+      </button>
+    );
+  }
 
   return (
     <div class="global-search" onScroll={onScroll}>
@@ -238,10 +331,24 @@ export function GlobalSearch({query, onOpenPeer, onOpenMessage}: Props) {
             <button class={tab.value === 'messages' ? 'active' : ''} onClick={() => (tab.value = 'messages')}>
               Messages{counts.value.messages ? ` ${counts.value.messages}` : ''}
             </button>
+            <button class={tab.value === 'posts' ? 'active' : ''} onClick={() => (tab.value = 'posts')}>
+              Posts{counts.value.posts ? ` ${counts.value.posts}` : ''}
+            </button>
           </div>
 
           {failed.value ? (
             <p class="muted">{failed.value}</p>
+          ) : tab.value === 'posts' ? (
+            loadingPosts.value ? (
+              <p class="muted">Searching…</p>
+            ) : !posts.value.length ? (
+              <p class="muted">No posts found.</p>
+            ) : (
+              <>
+                {posts.value.map(renderMessageRow)}
+                {loadingMorePosts.value ? <p class="muted">Loading more…</p> : null}
+              </>
+            )
           ) : loading.value ? (
             <p class="muted">Searching…</p>
           ) : tab.value === 'messages' ? (
@@ -249,21 +356,7 @@ export function GlobalSearch({query, onOpenPeer, onOpenMessage}: Props) {
               <p class="muted">No messages found.</p>
             ) : (
               <>
-                {messages.value.map((item) => (
-                  <button class="peer-row" key={item.key} onClick={() => openMessage(item)}>
-                    <Avatar peerId={item.peerId} title={item.chatTitle} size={38} />
-                    <span class="meta">
-                      <span class="row">
-                        <span class="title">{item.chatTitle}</span>
-                        <span class="time">{timeOf(item.message.date)}</span>
-                      </span>
-                      <span class="subtitle">
-                        {!item.isUser && item.message.fromTitle ? <em>{item.message.fromTitle}:</em> : null}
-                        {' '}{item.message.text || 'Media'}
-                      </span>
-                    </span>
-                  </button>
-                ))}
+                {messages.value.map(renderMessageRow)}
                 {loadingMore.value ? <p class="muted">Loading more…</p> : null}
               </>
             )
