@@ -326,10 +326,12 @@ export function MiniApp({request, onclose, onswitchinline, onlink}: Props) {
         break;
 
       case 'web_app_request_fullscreen':
-        send('fullscreen_failed', {error: 'UNSUPPORTED'});
+        fullscreen.value = true;
+        send('fullscreen_changed', {is_fullscreen: true});
         break;
 
       case 'web_app_exit_fullscreen':
+        fullscreen.value = false;
         send('fullscreen_changed', {is_fullscreen: false});
         break;
 
@@ -464,6 +466,8 @@ export function MiniApp({request, onclose, onswitchinline, onlink}: Props) {
   const height = useSignal(720);
   /** True while dragging or resizing: the iframe must not eat the pointer. */
   const moving = useSignal(false);
+  /** The bot asked for fullscreen; the window fills the viewport until it exits. */
+  const fullscreen = useSignal(false);
 
   function clampIntoView() {
     width.value = Math.max(MIN_WIDTH, Math.min(width.value, window.innerWidth - 16));
@@ -512,6 +516,7 @@ export function MiniApp({request, onclose, onswitchinline, onlink}: Props) {
   }
 
   function startMove(event: PointerEvent) {
+    if(fullscreen.value) return;
     const originLeft = left.value;
     const originTop = top.value;
     drag(event, (dx, dy) => {
@@ -523,11 +528,14 @@ export function MiniApp({request, onclose, onswitchinline, onlink}: Props) {
 
   // Apps lay themselves out against the viewport they were told about.
   useSignalEffect(() => {
+    // Reading `fullscreen` keeps a fullscreen toggle in this effect's dependencies.
+    const isFullscreen = fullscreen.value;
     const size = width.value + height.value;
     if(ready.value && size) send('viewport_changed', viewport());
   });
 
   function startResize(event: PointerEvent) {
+    if(fullscreen.value) return;
     const originWidth = width.value;
     const originHeight = height.value;
     drag(event, (dx, dy) => {
@@ -550,8 +558,14 @@ export function MiniApp({request, onclose, onswitchinline, onlink}: Props) {
 
   return (
     <div
-      class="window"
-      style={{
+      class={['window', fullscreen.value && 'fullscreen'].filter(Boolean).join(' ')}
+      style={fullscreen.value ? {
+        left: '0px',
+        top: '0px',
+        width: '100vw',
+        height: '100vh',
+        borderRadius: 0
+      } : {
         left: `${left.value}px`,
         top: `${top.value}px`,
         width: `${width.value}px`,
@@ -675,12 +689,14 @@ export function MiniApp({request, onclose, onswitchinline, onlink}: Props) {
         </div>
       }
 
-      <div
-        class="grip"
-        onPointerDown={startResize}
-        role="separator"
-        aria-label="Resize"
-      ></div>
+      {!fullscreen.value &&
+        <div
+          class="grip"
+          onPointerDown={startResize}
+          role="separator"
+          aria-label="Resize"
+        ></div>
+      }
     </div>
   );
 }
