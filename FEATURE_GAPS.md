@@ -75,6 +75,7 @@ Everything here is verified by `pnpm typecheck:astro`, the 456 guard tests,
 | Placing a video call | A second, camera-shaped action in the chat header calls `startCall(peerId, true)`; the whole stack under it — `startCallInternal`, the P2P instance and `CallScreen`'s video tiles — already supported video. It degrades to audio when the peer has `video_calls_available: false`. |
 | Speakers & Camera settings | A Calls tab in Settings picks the microphone, speakers and camera and toggles noise suppression; `changeCallDevice` persists the choice and applies it to a live call, and the main-thread `appSettings` store is now hydrated at boot so the choice survives a reload. The call pre-flight is acquired through `getStream` with the engine's own constraint helpers, so it honours the selected device and self-heals a stale id. |
 | Mini apps: fullscreen, location, emoji status, link safety | `web_app_request_fullscreen` fills the host window and reports `fullscreen_changed` (the browser Fullscreen API is unusable from a bot's postMessage, which is why it used to fail); `web_app_check_location` / `web_app_request_location` report the real browser permission, ask once per bot and return the position; `web_app_request_emoji_status_access` / `web_app_set_emoji_status` ask once and set the status (with the protocol's duration); and outbound links are vetted against `web_app_allowed_protocols` while same-origin apps get their messages pinned to the frame's origin. |
+| Public posts search | A lazy "Posts" tab in the sidebar search uses `channels.searchPosts` — a method nothing in either client called — for hashtags and topics across public channels, with its own rate cursor. `appChatsManager.searchPosts` normalises the raw posts so the rows match the other message searches. |
 
 The P1 table below is clear. Its last six entries — captions above media,
 animated single-emoji messages, emoji suggestions, typing-action variety,
@@ -158,9 +159,9 @@ above).
 per-chat notifications are mute-only; the language picker switches the shared
 lang pack but the client's own labels stay English; several animation toggles
 persist without a consumer; business chat links are absent and quick replies
-cannot be created (which also blocks greeting/away); no global posts search,
-people nearby or recommended channels; passkeys and multiple usernames are not
-manageable.
+cannot be created (which also blocks greeting/away); no people-nearby or
+recommended-channels surface (the global posts search landed — see above);
+passkeys and multiple usernames are not manageable.
 
 **Media editor** — the strongest area (crop, adjustments, five brush tools,
 text/sticker layers, real video re-encode all work); missing WebGL, a real
@@ -170,13 +171,13 @@ colour picker (fixed 10-swatch palette) and a rotation wheel.
 
 ## Where to go next
 
-The first three slices are done (see "What has landed since this audit" above):
-the last of the P1 table, and then chat administration. The next natural slices,
-smallest first:
+The public-posts scope landed (see "What has landed since this audit" above), as
+did the earlier slices. The next natural slices, smallest first:
 
-1. **Search & discovery** — a hashtag can be searched inside a chat now, but the
-   Public-posts scope (`channels.searchPosts`) and people-nearby are still
-   absent, and the in-chat search has no `#`-scope rows.
+1. **People nearby & recommended channels** — the last search/discovery gaps:
+   `contacts.getLocated` has a manager wrapper but no UI, and there is no
+   "recommended channels" surface. The in-chat filters (media, sender, date) are
+   already there.
 2. **Group calls / voice chats** — the largest missing area: nothing in the
    client calls `appGroupCallsManager` or `groupCallsController`, so a voice chat
    cannot be created, joined or scheduled. (1:1 calls — placing audio and video,
