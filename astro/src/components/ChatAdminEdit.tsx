@@ -22,11 +22,18 @@ import {
   leaveChat,
   makeChatPrivate,
   makeChatPublic,
+  removeChatLocation,
   removeChatPhoto,
   saveChatAbout,
   saveChatPhoto,
   saveChatTitle,
+  setAntiSpam,
+  setChatLocation,
+  setContentProtection,
   setForumEnabled,
+  setHiddenMembers,
+  setJoinToSend,
+  setPreHistoryHidden,
   setSignaturesEnabled,
   type AdminChat
 } from '$lib/telegram/admin';
@@ -52,6 +59,16 @@ export function ChatAdminEdit({chat, onchanged, onmigrated, onleft}: Props) {
   const forum = useSignal(chat.isForum);
   const signatures = useSignal(chat.signaturesEnabled);
 
+  // The privacy/access switches. Each mirrors a chat or full-chat flag.
+  const contentProtection = useSignal(chat.contentProtection);
+  const hiddenMembers = useSignal(chat.participantsHidden);
+  const preHistory = useSignal(chat.preHistoryHidden);
+  const antiSpam = useSignal(chat.antiSpam);
+  const joinToSend = useSignal(chat.joinToSend);
+
+  const hasLocation = useSignal(chat.hasLocation);
+  const locationAddress = useSignal(chat.locationAddress);
+
   const photoInput = useRef<HTMLInputElement>(null);
 
   const isPublic = useSignal(!!chat.username);
@@ -64,6 +81,99 @@ export function ChatAdminEdit({chat, onchanged, onmigrated, onleft}: Props) {
   const canSave = dirty && title.value.trim().length > 0 && !busy.value;
 
   const kind = chat.isChannel ? 'channel' : 'group';
+
+  // A basic group has none of the channel-only settings below; each toggle is
+  // gated by the shape of chat that actually carries it.
+  const isChannelLike = chat.isChannel || chat.isMegagroup;
+
+  /**
+   * Flip a boolean signal, call the server, and roll back on failure — the shape
+   * every switch in this pane uses. A fresh closure per render is fine; it only
+   * lives until the click.
+   */
+  function makeToggle(
+    signal: {value: boolean},
+    apply: (enabled: boolean) => Promise<void>,
+    fallback: string
+  ) {
+    return async() => {
+      const next = !signal.value;
+      signal.value = next;
+      try {
+        await apply(next);
+        onchanged();
+      } catch (err: any) {
+        signal.value = !next;
+        fail(err, fallback);
+      }
+    };
+  }
+
+  const toggleContentProtection = makeToggle(
+    contentProtection,
+    (enabled) => setContentProtection(chat.peerId, enabled),
+    'Failed to change content protection'
+  );
+  const toggleHiddenMembers = makeToggle(
+    hiddenMembers,
+    (enabled) => setHiddenMembers(chat.peerId, enabled),
+    'Failed to change the member list'
+  );
+  const togglePreHistory = makeToggle(
+    preHistory,
+    (enabled) => setPreHistoryHidden(chat.peerId, enabled),
+    'Failed to change the history setting'
+  );
+  const toggleAntiSpam = makeToggle(
+    antiSpam,
+    (enabled) => setAntiSpam(chat.peerId, enabled),
+    'Failed to change anti-spam'
+  );
+  const toggleJoinToSend = makeToggle(
+    joinToSend,
+    (enabled) => setJoinToSend(chat.peerId, enabled),
+    'Failed to change the join setting'
+  );
+
+  async function useMyLocation() {
+    if(!navigator.geolocation) {
+      fail(null, 'This browser does not support location');
+      return;
+    }
+
+    busy.value = true;
+    error.value = '';
+    try {
+      const position = await new Promise<GeolocationPosition>((resolve, reject) =>
+        navigator.geolocation.getCurrentPosition(resolve, reject, {timeout: 15000}));
+      const {latitude, longitude} = position.coords;
+      await setChatLocation(chat.peerId, latitude, longitude);
+      locationAddress.value = `${latitude.toFixed(5)}, ${longitude.toFixed(5)}`;
+      hasLocation.value = true;
+      flash('Location updated');
+      onchanged();
+    } catch (err: any) {
+      fail(err, 'Failed to set the location');
+    } finally {
+      busy.value = false;
+    }
+  }
+
+  async function dropLocation() {
+    busy.value = true;
+    error.value = '';
+    try {
+      await removeChatLocation(chat.peerId);
+      locationAddress.value = '';
+      hasLocation.value = false;
+      flash('Location removed');
+      onchanged();
+    } catch (err: any) {
+      fail(err, 'Failed to remove the location');
+    } finally {
+      busy.value = false;
+    }
+  }
 
   function fail(err: any, fallback: string) {
     error.value = err?.type || err?.message || fallback;
@@ -337,6 +447,88 @@ export function ChatAdminEdit({chat, onchanged, onmigrated, onleft}: Props) {
             <span>Sign messages</span>
           </label>
           <p class="admin-hint">Show the author's name under each post.</p>
+        </section>
+      )}
+
+      {chat.access.changeInfo && isChannelLike && (
+        <section>
+          <p class="admin-label">Access</p>
+
+          <label class="admin-toggle">
+            <input
+              type="checkbox"
+              checked={contentProtection.value}
+              onChange={toggleContentProtection}
+              disabled={busy.value}
+            />
+            <span>Restrict saving content</span>
+          </label>
+          <p class="admin-hint">Forbid forwarding and saving media from this {kind}.</p>
+
+          <label class="admin-toggle">
+            <input
+              type="checkbox"
+              checked={hiddenMembers.value}
+              onChange={toggleHiddenMembers}
+              disabled={busy.value}
+            />
+            <span>Hide members</span>
+          </label>
+          <p class="admin-hint">Only admins can see the member list.</p>
+
+          <label class="admin-toggle">
+            <input
+              type="checkbox"
+              checked={preHistory.value}
+              onChange={togglePreHistory}
+              disabled={busy.value}
+            />
+            <span>Hide history for new members</span>
+          </label>
+          <p class="admin-hint">New members see only what is sent after they join.</p>
+
+          {chat.isMegagroup && (
+            <>
+              <label class="admin-toggle">
+                <input
+                  type="checkbox"
+                  checked={joinToSend.value}
+                  onChange={toggleJoinToSend}
+                  disabled={busy.value}
+                />
+                <span>Approve new members</span>
+              </label>
+              <p class="admin-hint">Admins must approve people before they can write.</p>
+
+              <label class="admin-toggle">
+                <input
+                  type="checkbox"
+                  checked={antiSpam.value}
+                  onChange={toggleAntiSpam}
+                  disabled={busy.value}
+                />
+                <span>Anti-spam</span>
+              </label>
+              <p class="admin-hint">Restrict new members until they prove they are human.</p>
+            </>
+          )}
+        </section>
+      )}
+
+      {chat.canSetLocation && (
+        <section>
+          <p class="admin-label">Location</p>
+          {locationAddress.value ?
+            <p class="admin-hint">{locationAddress.value}</p> :
+            <p class="admin-hint">No location set.</p>}
+          <div class="admin-actions left">
+            <button class="admin-btn" onClick={useMyLocation} disabled={busy.value}>
+              Use my location
+            </button>
+            {hasLocation.value && (
+              <button class="admin-btn danger" onClick={dropLocation} disabled={busy.value}>Remove</button>
+            )}
+          </div>
         </section>
       )}
 

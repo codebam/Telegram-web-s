@@ -8,7 +8,7 @@
 import deepEqual from '@helpers/object/deepEqual';
 import isObject from '@helpers/object/isObject';
 import safeReplaceObject from '@helpers/object/safeReplaceObject';
-import {ChannelAdminLogEvent, ChannelParticipant, ChannelsCreateChannel, ChannelsGetAdminLog, ChannelsGetAdminedPublicChannels, ChannelsSendAsPeers, Chat, ChatAdminRights, ChatBannedRights, ChatFull, ChatInvite, ChatParticipant, ChatPhoto, ChatReactions, EmojiStatus, InputChannel, InputChatPhoto, InputFile, InputPeer, InputUser, MessagesChats, MessagesChatInviteJoinResult, MessagesSponsoredMessages, MissingInvitee, Peer, SponsoredMessage, SponsoredPeer, StickerSet, Update, Updates} from '@layer';
+import {ChannelAdminLogEvent, ChannelParticipant, ChannelsCreateChannel, ChannelsGetAdminLog, ChannelsGetAdminedPublicChannels, ChannelsSendAsPeers, Chat, ChatAdminRights, ChatBannedRights, ChatFull, ChatInvite, ChatParticipant, ChatPhoto, ChatReactions, EmojiStatus, InputChannel, InputChatPhoto, InputFile, InputGeoPoint, InputPeer, InputUser, MessagesChats, MessagesChatInviteJoinResult, MessagesSponsoredMessages, MissingInvitee, Peer, SponsoredMessage, SponsoredPeer, StickerSet, Update, Updates} from '@layer';
 import {AppManager} from '@appManagers/manager';
 import hasRights from '@appManagers/utils/chats/hasRights';
 import getParticipantPeerId from '@appManagers/utils/chats/getParticipantPeerId';
@@ -964,6 +964,31 @@ export class AppChatsManager extends AppManager {
     }).then(() => {
       this.appProfileManager.modifyCachedFullChat(id, (chatFull) => {
         chatFull.about = about;
+      });
+    });
+  }
+
+  /**
+   * A group's or channel's location, shown under its profile. Call with no
+   * coordinates to clear it. tweb's own Solid UI never set this one, so both of
+   * our clients had no way to; the admin panel needed a way.
+   */
+  public async editLocation(chatId: ChatId, latitude?: number, longitude?: number, address = '') {
+    const id = await this.migrateChat(chatId);
+    const hasLocation = latitude !== undefined && longitude !== undefined;
+    const geoPoint: InputGeoPoint = hasLocation ?
+      {_: 'inputGeoPoint', lat: latitude, long: longitude} :
+      {_: 'inputGeoPointEmpty'};
+
+    return this.apiManager.invokeApi('channels.editLocation', {
+      channel: this.getChannelInput(id),
+      geo_point: geoPoint,
+      address
+    }).then(() => {
+      this.appProfileManager.modifyCachedFullChat(id, (fullChat: any) => {
+        fullChat.location = hasLocation ?
+          {_: 'channelLocation', geo_point: geoPoint, address} :
+          {_: 'channelLocationEmpty'};
       });
     });
   }

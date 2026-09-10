@@ -115,6 +115,20 @@ export type AdminChat = {
   signaturesEnabled: boolean;
   slowModeSeconds: number;
   membersCount: number;
+  /** Content protection (`noforwards`) is on. */
+  contentProtection: boolean;
+  /** The member list is hidden from non-admins. */
+  participantsHidden: boolean;
+  /** History before a member joined is hidden from them. */
+  preHistoryHidden: boolean;
+  /** Telegram's anti-spam restriction on new members. */
+  antiSpam: boolean;
+  /** New members must be approved before they can write. */
+  joinToSend: boolean;
+  /** The chat can carry a location, and the current user may change it. */
+  canSetLocation: boolean;
+  hasLocation: boolean;
+  locationAddress: string;
   /** Discussion group linked to this channel, or the channel linked to this group. */
   linkedChatId: number;
   permissions: Permissions;
@@ -142,6 +156,14 @@ export async function loadAdminChat(peerId: number): Promise<AdminChat> {
     signaturesEnabled: !!chat?.pFlags?.signatures,
     slowModeSeconds: 0,
     membersCount: chat?.participants_count ?? 0,
+    contentProtection: !!chat?.pFlags?.noforwards,
+    participantsHidden: false,
+    preHistoryHidden: false,
+    antiSpam: false,
+    joinToSend: !!chat?.pFlags?.join_to_send,
+    canSetLocation: false,
+    hasLocation: false,
+    locationAddress: '',
     linkedChatId: 0,
     permissions: permissionsFrom(chat?.default_banned_rights),
     access: accessOf(chat)
@@ -155,6 +177,17 @@ export async function loadAdminChat(peerId: number): Promise<AdminChat> {
     info.slowModeSeconds = Number(full?.slowmode_seconds ?? 0);
     info.linkedChatId = Number(full?.linked_chat_id ?? 0);
     info.membersCount = full?.participants_count ?? info.membersCount;
+    info.participantsHidden = !!full?.pFlags?.participants_hidden;
+    info.preHistoryHidden = !!full?.pFlags?.hidden_prehistory;
+    info.antiSpam = !!full?.pFlags?.antispam;
+    info.canSetLocation = !!full?.pFlags?.can_set_location;
+    const location = full?.location;
+    if(location?._ === 'channelLocation') {
+      const lat = Number(location.geo_point?.lat ?? 0);
+      const long = Number(location.geo_point?.long ?? 0);
+      info.hasLocation = true;
+      info.locationAddress = location.address || `${lat.toFixed(5)}, ${long.toFixed(5)}`;
+    }
   } catch(err) {
   }
 
@@ -258,6 +291,55 @@ export async function setForumEnabled(peerId: number, enabled: boolean): Promise
 export async function setSignaturesEnabled(peerId: number, enabled: boolean): Promise<void> {
   const {managers} = await bootTelegram();
   await managers.appChatsManager.toggleSignatures(chatIdOf(peerId), enabled, false);
+}
+
+/**
+ * Content protection: forbid forwarding and saving media out of the chat. A
+ * user-level flag, so `toggleNoForwards` lives on the profile manager and takes
+ * the peer id rather than a chat id.
+ */
+export async function setContentProtection(peerId: number, enabled: boolean): Promise<void> {
+  const {managers} = await bootTelegram();
+  await managers.appProfileManager.toggleNoForwards(peerId, enabled);
+}
+
+/** Hide the member list from everyone but admins. */
+export async function setHiddenMembers(peerId: number, enabled: boolean): Promise<void> {
+  const {managers} = await bootTelegram();
+  await managers.appChatsManager.toggleParticipantsHidden(chatIdOf(peerId), enabled);
+}
+
+/** New members must be approved by an admin before they can write. */
+export async function setJoinToSend(peerId: number, enabled: boolean): Promise<void> {
+  const {managers} = await bootTelegram();
+  await managers.appChatsManager.toggleJoinToSend(chatIdOf(peerId), enabled);
+}
+
+/** Hide the history that predates a member's join. */
+export async function setPreHistoryHidden(peerId: number, enabled: boolean): Promise<void> {
+  const {managers} = await bootTelegram();
+  await managers.appChatsManager.togglePreHistoryHidden(chatIdOf(peerId), enabled);
+}
+
+/** Telegram's anti-spam: new members are restricted until they prove human. */
+export async function setAntiSpam(peerId: number, enabled: boolean): Promise<void> {
+  const {managers} = await bootTelegram();
+  await managers.appChatsManager.toggleAntiSpam(chatIdOf(peerId), enabled);
+}
+
+/**
+ * The location shown on a group's or channel's profile. There is no map picker
+ * in this client, so the address is the coordinate pair the browser reports.
+ */
+export async function setChatLocation(peerId: number, latitude: number, longitude: number): Promise<void> {
+  const {managers} = await bootTelegram();
+  const address = `${latitude.toFixed(5)}, ${longitude.toFixed(5)}`;
+  await managers.appChatsManager.editLocation(chatIdOf(peerId), latitude, longitude, address);
+}
+
+export async function removeChatLocation(peerId: number): Promise<void> {
+  const {managers} = await bootTelegram();
+  await managers.appChatsManager.editLocation(chatIdOf(peerId));
 }
 
 /** Delete the chat for everyone. Only the creator can. */
