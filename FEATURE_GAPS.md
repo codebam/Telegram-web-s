@@ -71,6 +71,9 @@ Everything here is verified by `pnpm typecheck:astro`, the 456 guard tests,
 | The six missing admin settings | Content protection, hidden members, join-to-send, pre-history and anti-spam are toggles in the edit pane, each a `channels.toggle*` call the layer already had; the group location is new — `channels.editLocation` had no wrapper in either client, so `appChatsManager.editLocation` was added, and "Use my location" takes the browser's coordinates since there is no map picker. |
 | Admin log paging, search and filtering | The log was one page of 50 with no controls; it now uses the manager's own `getAdminLogs` (a cached fetcher per search/filter) so "Load more" walks a cursor and five event categories map onto the server's `channelAdminLogEventsFilter`. |
 | Bulk delete | "Delete messages" on a member row deletes everything that user sent (`channels.deleteParticipantHistory`, tweb's own moderation call, gated by the `delete_messages` right); a basic group gets a From/To date-range section (`messages.deleteHistory`), while a channel does not, because `channels.deleteHistory` carries no date bounds. |
+| Adding members to a basic group | The Members pane grows an "Add members" button on a basic group, behind the `invite_users` right, over the shared `PeerPicker`; `messages.addChatUser` reports anyone the server refused as a missing invitee, so the pane says how many were not added. A channel still fills through its invite links. |
+| Placing a video call | A second, camera-shaped action in the chat header calls `startCall(peerId, true)`; the whole stack under it — `startCallInternal`, the P2P instance and `CallScreen`'s video tiles — already supported video. It degrades to audio when the peer has `video_calls_available: false`. |
+| Speakers & Camera settings | A Calls tab in Settings picks the microphone, speakers and camera and toggles noise suppression; `changeCallDevice` persists the choice and applies it to a live call, and the main-thread `appSettings` store is now hydrated at boot so the choice survives a reload. The call pre-flight is acquired through `getStream` with the engine's own constraint helpers, so it honours the selected device and self-heals a stale id. |
 
 The P1 table below is clear. Its last six entries — captions above media,
 animated single-emoji messages, emoji suggestions, typing-action variety,
@@ -78,8 +81,10 @@ replacing the *file* of a media message, and reporting a multi-selection — lan
 in the slice recorded above; the P0 and P1 tables are kept as the audit found
 them, and the "landed" table is what is true now. **Chat administration** has
 since landed too: the six settings that had no UI, the admin log's paging/search/
-filtering, and the two bulk deletes. What remains is the rest of the P2 areas
-(group calls, RTMP, conferences, star-gift actions, sign-up, passkey login,
+filtering, the two bulk deletes, and adding members to a basic group. **1:1
+calls** grew a video-call button and a Speakers & Camera settings tab, and the
+call pre-flight now goes through `getStream`. What remains is the rest of the P2
+areas (group calls, RTMP, conferences, star-gift actions, sign-up, passkey login,
 passcode lock, in-app browser and Instant View, channel statistics, settings
 search), which are untouched.
 
@@ -110,13 +115,12 @@ search), which are untouched.
 
 ## P2 — whole feature areas
 
-**Calls** — group calls / voice chats have no create, join, participant list,
-video, scheduling or settings UI (`appGroupCallsManager`, `groupCallsController`
-never called); RTMP live streaming is absent ("rtmp" is not a string in the
-client); conference calls and shareable call links are absent; a video call
-cannot be *placed* (`startCall` never receives `isVideo`); there is no
-Speakers & Camera device selection, and the mic pre-flight bypasses the
-`getStream` chokepoint (`extras.ts:166`).
+**Calls** — 1:1 calls are complete now: a video call can be placed, and the
+Speakers & Camera settings pick the devices (see above). Still missing: group
+calls / voice chats have no create, join, participant list, video, scheduling or
+settings UI (`appGroupCallsManager`, `groupCallsController` never called); RTMP
+live streaming is absent ("rtmp" is not a string in the client); conference calls
+and shareable call links are absent.
 
 **Stars & gifts** — star gifts are receive-only: no info popup, upgrade to
 collectible, wear, transfer, resale/buy-resale, collections, gifts on profiles,
@@ -138,10 +142,10 @@ honoured; no age verification, no frozen-account handling *(upstream partially)*
 and articles all eject to an OS browser tab (`Chat.tsx:2262`,
 `GameBubble.tsx:44-47`); web-page previews drop the page photo.
 
-**Admin** — the six settings, the admin-log filtering and the two bulk deletes
-landed (see above). Still missing: no channel/group statistics, no revenue, no
-suggested posts, no paid messages; no ownership transfer and no way to add
-members to an existing group.
+**Admin** — the six settings, the admin-log filtering, the two bulk deletes and
+adding members to a basic group landed (see above). Still missing: no
+channel/group statistics, no revenue, no suggested posts, no paid messages; no
+ownership transfer.
 
 **Mini apps** — location access answers a hardcoded `available: false`
 (`MiniApp.tsx:300-306`); fullscreen is refused; emoji-status access is
@@ -171,8 +175,9 @@ smallest first:
 1. **Search & discovery** — a hashtag can be searched inside a chat now, but the
    Public-posts scope (`channels.searchPosts`) and people-nearby are still
    absent, and the in-chat search has no `#`-scope rows.
-2. **Calls** — group calls / voice chats are the largest missing area: nothing in
-   the client calls `appGroupCallsManager` or `groupCallsController`, so a voice
-   chat cannot be joined, and a video call cannot even be placed.
+2. **Group calls / voice chats** — the largest missing area: nothing in the
+   client calls `appGroupCallsManager` or `groupCallsController`, so a voice chat
+   cannot be created, joined or scheduled. (1:1 calls — placing audio and video,
+   and the Speakers & Camera tab — are done.)
 3. **Stars & gifts** — gifts are receive-only: no info popup, upgrade, wear,
    transfer, resale, collections or profile display.
