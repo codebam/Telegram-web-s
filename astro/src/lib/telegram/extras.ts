@@ -156,6 +156,12 @@ export type CallStartResult =
  * setup where a rejection surfaces as a silent failure — the UI would open and
  * the call would never ring. Probing first turns "nothing happens" into a
  * message that says which permission is missing.
+ *
+ * The probe goes through `getStream`, the single chokepoint for every
+ * `getUserMedia` in the calls stack, with the same constraint helpers the engine
+ * uses: that way it honours the microphone and camera picked in Settings and
+ * self-heals a saved `deviceId` that no longer exists, instead of opening the OS
+ * default behind the user's back.
  */
 async function checkMicrophone(isVideo: boolean): Promise<CallStartResult> {
   if(!navigator.mediaDevices?.getUserMedia) {
@@ -163,7 +169,20 @@ async function checkMicrophone(isVideo: boolean): Promise<CallStartResult> {
   }
 
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({audio: true, video: isVideo});
+    const [
+      {default: getStream},
+      {default: getAudioConstraints},
+      {default: getVideoConstraints}
+    ] = await Promise.all([
+      import('@lib/calls/helpers/getStream'),
+      import('@lib/calls/helpers/getAudioConstraints'),
+      import('@lib/calls/helpers/getVideoConstraints')
+    ]);
+
+    const stream = await getStream({
+      audio: getAudioConstraints(),
+      video: isVideo ? getVideoConstraints() : false
+    });
     // Release it immediately; the engine opens its own.
     stream.getTracks().forEach((track) => track.stop());
     return {ok: true};
