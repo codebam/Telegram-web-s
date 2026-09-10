@@ -74,6 +74,7 @@ Everything here is verified by `pnpm typecheck:astro`, the 456 guard tests,
 | Adding members to a basic group | The Members pane grows an "Add members" button on a basic group, behind the `invite_users` right, over the shared `PeerPicker`; `messages.addChatUser` reports anyone the server refused as a missing invitee, so the pane says how many were not added. A channel still fills through its invite links. |
 | Placing a video call | A second, camera-shaped action in the chat header calls `startCall(peerId, true)`; the whole stack under it — `startCallInternal`, the P2P instance and `CallScreen`'s video tiles — already supported video. It degrades to audio when the peer has `video_calls_available: false`. |
 | Speakers & Camera settings | A Calls tab in Settings picks the microphone, speakers and camera and toggles noise suppression; `changeCallDevice` persists the choice and applies it to a live call, and the main-thread `appSettings` store is now hydrated at boot so the choice survives a reload. The call pre-flight is acquired through `getStream` with the engine's own constraint helpers, so it honours the selected device and self-heals a stale id. |
+| Mini apps: fullscreen, location, emoji status, link safety | `web_app_request_fullscreen` fills the host window and reports `fullscreen_changed` (the browser Fullscreen API is unusable from a bot's postMessage, which is why it used to fail); `web_app_check_location` / `web_app_request_location` report the real browser permission, ask once per bot and return the position; `web_app_request_emoji_status_access` / `web_app_set_emoji_status` ask once and set the status (with the protocol's duration); and outbound links are vetted against `web_app_allowed_protocols` while same-origin apps get their messages pinned to the frame's origin. |
 
 The P1 table below is clear. Its last six entries — captions above media,
 animated single-emoji messages, emoji suggestions, typing-action variety,
@@ -83,10 +84,11 @@ them, and the "landed" table is what is true now. **Chat administration** has
 since landed too: the six settings that had no UI, the admin log's paging/search/
 filtering, the two bulk deletes, and adding members to a basic group. **1:1
 calls** grew a video-call button and a Speakers & Camera settings tab, and the
-call pre-flight now goes through `getStream`. What remains is the rest of the P2
-areas (group calls, RTMP, conferences, star-gift actions, sign-up, passkey login,
-passcode lock, in-app browser and Instant View, channel statistics, settings
-search), which are untouched.
+call pre-flight now goes through `getStream`. **Mini apps** closed the four gaps
+the audit listed. What remains is the rest of the P2 areas (group calls, RTMP,
+conferences, star-gift actions, sign-up, passkey login, passcode lock, in-app
+browser and Instant View, channel statistics, settings search), which are
+untouched.
 
 ## P0 — messages that render wrong or not at all
 
@@ -147,9 +149,9 @@ adding members to a basic group landed (see above). Still missing: no
 channel/group statistics, no revenue, no suggested posts, no paid messages; no
 ownership transfer.
 
-**Mini apps** — location access answers a hardcoded `available: false`
-(`MiniApp.tsx:300-306`); fullscreen is refused; emoji-status access is
-unhandled; `web_app_allowed_protocols` is unenforced and events post to `'*'`.
+**Mini apps** — the four gaps the audit listed are closed: fullscreen, location
+access, emoji-status access, and link-protocol vetting / message pinning (see
+above).
 
 **Settings & personalisation** — per-chat wallpaper/theme/TTL do not exist
 (the UI admits the wallpaper gap at `AppearanceSettings.tsx:445-449`);
