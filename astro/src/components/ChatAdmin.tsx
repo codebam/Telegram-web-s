@@ -20,6 +20,7 @@ import {ChatAdminPermissions} from './ChatAdminPermissions';
 import {ChatAdminMembers} from './ChatAdminMembers';
 import {ChatAdminInvites} from './ChatAdminInvites';
 import {ChatAdminLog} from './ChatAdminLog';
+import {ChatAdminDelete} from './ChatAdminDelete';
 import {ChatAdminDiscussion} from './ChatAdminDiscussion';
 import {loadAdminChat, type AdminChat} from '$lib/telegram/admin';
 
@@ -43,6 +44,7 @@ type Section =
   | 'invites'
   | 'requests'
   | 'log'
+  | 'delete'
   | 'discussion';
 
 export function ChatAdmin({peerId, onclose, onmigrated, onpeer}: Props) {
@@ -86,6 +88,9 @@ export function ChatAdmin({peerId, onclose, onmigrated, onpeer}: Props) {
     if(access.inviteLinks) list.push(['invites', 'Invite links']);
     if(access.inviteLinks && !isBasicGroup) list.push(['requests', 'Requests']);
     if(access.viewAdminLog) list.push(['log', 'Recent actions']);
+    // A date-range clear is only honoured on the messages.deleteHistory path,
+    // i.e. a basic group; a channel gets the per-member delete instead.
+    if(access.deleteMessages && isBasicGroup) list.push(['delete', 'Delete messages']);
     if(isChannel && access.isCreator) list.push(['discussion', 'Discussion']);
 
     return list;
@@ -132,6 +137,8 @@ export function ChatAdmin({peerId, onclose, onmigrated, onpeer}: Props) {
     body = <ChatAdminInvites chat={chat.value} mode="requests" onpeer={onpeer} />;
   } else if(section.value === 'log') {
     body = <ChatAdminLog chat={chat.value} onpeer={onpeer} />;
+  } else if(section.value === 'delete') {
+    body = <ChatAdminDelete chat={chat.value} onchanged={changed} />;
   } else if(section.value === 'discussion') {
     body = <ChatAdminDiscussion chat={chat.value} onchanged={changed} />;
   }

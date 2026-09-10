@@ -22,6 +22,7 @@ import {
   adminRightKeysFor,
   adminRightLabel,
   banMember,
+  deleteMessagesFromUser,
   demoteAdmin,
   formatExpiry,
   loadAdmins,
@@ -250,6 +251,14 @@ export function ChatAdminMembers({chat, mode, onchanged, onpeer}: Props) {
   const unban = (participant: Participant) =>
     run(() => unbanMember(chat.peerId, participant.peerId), 'Failed to let them back in');
 
+  async function deleteAllMessages(participant: Participant) {
+    if(!confirm(`Delete every message ${participant.title} sent? This cannot be undone.`)) return;
+    await run(
+      () => deleteMessagesFromUser(chat.peerId, participant.peerId),
+      'Failed to delete the messages'
+    );
+  }
+
   const emptyText =
     mode === 'admins' ? 'No admins yet.' : mode === 'removed' ? 'Nobody is removed.' : 'No members.';
 
@@ -403,6 +412,11 @@ export function ChatAdminMembers({chat, mode, onchanged, onpeer}: Props) {
                               {chat.access.banUsers && !chat.isBasicGroup && (
                                 <button class="admin-btn" onClick={() => openRestrict(participant)} disabled={busy.value}>
                                   Restrict
+                                </button>
+                              )}
+                              {chat.access.deleteMessages && !chat.isBasicGroup && (
+                                <button class="admin-btn danger" onClick={() => deleteAllMessages(participant)} disabled={busy.value}>
+                                  Delete messages
                                 </button>
                               )}
                               {chat.access.banUsers && (

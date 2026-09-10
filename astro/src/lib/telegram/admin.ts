@@ -41,6 +41,7 @@ export type AdminAccess = {
   addAdmins: boolean;
   inviteLinks: boolean;
   deleteChat: boolean;
+  deleteMessages: boolean;
   viewAdminLog: boolean;
 };
 
@@ -54,6 +55,7 @@ const NO_ACCESS: AdminAccess = {
   addAdmins: false,
   inviteLinks: false,
   deleteChat: false,
+  deleteMessages: false,
   viewAdminLog: false
 };
 
@@ -79,12 +81,14 @@ function accessOf(chat: any): AdminAccess {
     // A basic group can always be deleted by its creator; a channel too, but
     // "leave" is the option everyone else gets and that lives elsewhere.
     deleteChat: creator,
+    deleteMessages: allow('delete_messages'),
     // The admin log is a channel/supergroup feature and needs some admin right.
     viewAdminLog: isChannel && (creator || Object.keys(rights).length > 0)
   };
 
   access.canManage = access.changeInfo || access.changeType || access.changePermissions ||
-    access.banUsers || access.addAdmins || access.inviteLinks || access.deleteChat;
+    access.banUsers || access.addAdmins || access.inviteLinks || access.deleteChat ||
+    access.deleteMessages;
 
   return access;
 }
@@ -720,6 +724,56 @@ export const RESTRICTION_DURATIONS: {seconds: number; label: string}[] = [
 
 export const untilDateFrom = (seconds: number) =>
   seconds ? Math.floor(Date.now() / 1000) + seconds : 0;
+
+/* ------------------------------------------------------------------ */
+/* Deleting messages                                                   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Delete every message a member ever sent, for everyone. This is the moderation
+ * action tweb offers on a megagroup message; `channels.deleteParticipantHistory`
+ * is the call behind it, so it needs a channel or supergroup, not a basic group.
+ */
+export async function deleteMessagesFromUser(peerId: number, userPeerId: number): Promise<void> {
+  const {managers} = await bootTelegram();
+  await managers.appMessagesManager.doFlushHistory({
+    peerId,
+    justClear: false,
+    revoke: true,
+    participantPeerId: userPeerId
+  });
+}
+
+/**
+ * Delete the messages in a date range, for everyone. `minDate`/`maxDate` are
+ * inclusive unix seconds. Telegram only honours the range on the
+ * `messages.deleteHistory` path — private chats and basic groups — so the admin
+ * panel offers this for a basic group and leaves channels to the per-member
+ * delete above.
+ */
+export async function deleteMessagesByDate(
+  peerId: number,
+  minDate: number,
+  maxDate: number
+): Promise<void> {
+  const {managers} = await bootTelegram();
+  await managers.appMessagesManager.flushHistory({
+    peerId,
+    justClear: false,
+    revoke: true,
+    minDate,
+    maxDate
+  });
+}
+
+/** Start/end of a `YYYY-MM-DD` day, as inclusive unix seconds. */
+export function dayBounds(isoDate: string): {minDate: number; maxDate: number} | null {
+  if(!isoDate) return null;
+  const date = new Date(`${isoDate}T00:00:00`);
+  if(isNaN(date.getTime())) return null;
+  const minDate = Math.floor(date.getTime() / 1000);
+  return {minDate, maxDate: minDate + 86400 - 1};
+}
 
 /* ------------------------------------------------------------------ */
 /* Invite links                                                        */
