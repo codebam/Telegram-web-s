@@ -72,6 +72,12 @@ interface Props {
   ondocument: (docId: string) => void;
   /** A custom emoji picked for the composer — inserted as an entity. */
   oncustomemoji?: (item: {docId: string; emoji: string}) => void;
+  /**
+   * The peer is told "choosing a sticker" while the sticker pane is the one on
+   * screen — the status Telegram shows for this panel, and the only pane that
+   * has one. `null` means no activity to report.
+   */
+  onactivity?: (kind: 'sticker' | null) => void;
 }
 
 type Tab = 'emoji' | 'custom' | 'stickers' | 'gifs';
@@ -114,7 +120,7 @@ function useClientWidth(width: Signal<number>) {
   }, []);
 }
 
-export function Picker({onemoji, ondocument, oncustomemoji}: Props) {
+export function Picker({onemoji, ondocument, oncustomemoji, onactivity}: Props) {
   const tab = useSignal<Tab>('emoji');
   const loading = useSignal(false);
 
@@ -193,8 +199,17 @@ export function Picker({onemoji, ondocument, oncustomemoji}: Props) {
   // the section grids are mutually exclusive and share `.body`'s padding.
   const gridRef = useClientWidth(gridWidth);
 
+  // Closing the panel has to withdraw the "choosing a sticker" status, and the
+  // callback comes from the composer (which knows the peer), so the newest one is
+  // kept in a ref: a cleanup that closed over the first render's props would
+  // report to whichever chat was open when the panel mounted.
+  const latestActivity = useRef(onactivity);
+  latestActivity.current = onactivity;
+  useEffect(() => () => latestActivity.current?.(null), []);
+
   async function select(next: Tab) {
     tab.value = next;
+    onactivity?.(next === 'stickers' ? 'sticker' : null);
 
     if(next === 'emoji' && !categories.value.length) {
       loading.value = true;

@@ -150,6 +150,7 @@ import {
   readParticipants,
   onTyping,
   onUserUpdate,
+  typingActionText,
   pressCallbackButton,
   readUpTo,
   resolveUsername,
@@ -167,7 +168,8 @@ import {
   type MessageButton,
   type MessageItem,
   type PollPreview,
-  type SponsoredItem
+  type SponsoredItem,
+  type TypingKind
 } from '$lib/telegram/chats';
 import {sendContact} from '$lib/telegram/messageTypes';
 import {transcribeVoice, translateMessage} from '$lib/telegram/translation';
@@ -440,6 +442,8 @@ export function Chat() {
   const windowAtLatest = useSignal(true);
   const presence = useSignal('');
   const typingNames = useSignal<string[]>([]);
+  /** What those peers are doing — the header's verb comes from it. */
+  const typingKind = useSignal<TypingKind | undefined>(undefined);
   const editing = useSignal<MessageItem | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const mediaInput = useRef<HTMLInputElement>(null);
@@ -475,7 +479,7 @@ export function Chat() {
   /** Peer ids currently online, for the dot on private rows. */
   const onlinePeerIds = useSignal<number[]>([]);
   /** peerId → names typing in that chat right now, for the row preview. */
-  const typingByPeer = useSignal<Record<number, string[]>>({});
+  const typingByPeer = useSignal<Record<number, {names: string[]; kind?: TypingKind}>>({});
   /** Peer whose "Add to folder" submenu is open, if any. */
   const folderMenuFor = useSignal<number | null>(null);
   const folderMemberships = useSignal<FolderMembership[]>([]);
@@ -773,8 +777,8 @@ export function Chat() {
 
       // The list shows "typing…" for any chat, not just the open one, so it
       // keeps its own subscription rather than widening the header's.
-      const offTyping = await onTyping((peerId, _threadId, names) => {
-        typingByPeer.value = {...typingByPeer.value, [peerId]: names};
+      const offTyping = await onTyping((peerId, _threadId, names, kind) => {
+        typingByPeer.value = {...typingByPeer.value, [peerId]: {names, kind}};
       });
 
       const offUsers = await onUserUpdate(async (userId) => {
@@ -818,10 +822,14 @@ export function Chat() {
     };
   });
 
+  /**
+   * The chat list's substitute for a preview while someone is active in a chat —
+   * "Alice is typing…", "Alice and Bob are sending a photo".
+   */
   function typingTextFor(peerId: number): string {
-    const names = typingByPeer.value[peerId] ?? [];
-    if(!names.length) return '';
-    return `${names.join(', ')} ${names.length > 1 ? 'are' : 'is'} typing…`;
+    const state = typingByPeer.value[peerId];
+    if(!state?.names.length) return '';
+    return `${state.names.join(', ')} ${state.names.length > 1 ? 'are' : 'is'} ${typingActionText(state.kind)}`;
   }
 
   async function openArchive() {
@@ -1208,9 +1216,10 @@ export function Chat() {
         }
       });
 
-      const offTyping = await onTyping((peerId, threadId, names) => {
+      const offTyping = await onTyping((peerId, threadId, names, kind) => {
         if(peerId === activePeerId.value && (activeThreadId.value === undefined || threadId === activeThreadId.value)) {
           typingNames.value = names;
+          typingKind.value = kind;
         }
       });
 
@@ -3523,6 +3532,7 @@ export function Chat() {
     reachedStart.value = false;
     windowAtLatest.value = true;
     typingNames.value = [];
+    typingKind.value = undefined;
     editing.value = null;
     getPresence(peerId).then((info) => (presence.value = info.text)).catch(() => (presence.value = ''));
     refreshPinned(peerId, threadId);
@@ -4672,7 +4682,7 @@ export function Chat() {
                     </span>
                     <span class={['presence', 'peer-status', typingNames.value.length && 'typing'].filter(Boolean).join(' ')}>
                       {typingNames.value.length
-                        ? `${typingNames.value.join(', ')} ${typingNames.value.length > 1 ? 'are' : 'is'} typing…`
+                        ? `${typingNames.value.join(', ')} ${typingNames.value.length > 1 ? 'are' : 'is'} ${typingActionText(typingKind.value)}`
                         : presence.value}
                     </span>
                   </span>
@@ -5445,6 +5455,10 @@ export function Chat() {
                       oncustomemoji={(item) => {
                         draft.value += item.emoji;
                         pendingCustomEmoji.value = [...pendingCustomEmoji.value, item];
+                      }}
+                      onactivity={(kind) => {
+                        if(activePeerId.value === null) return;
+                        sendTyping(activePeerId.value, activeThreadId.value, kind ?? 'cancel').catch(() => {});
                       }}
                     />
                   ) : null}

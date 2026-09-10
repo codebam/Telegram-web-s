@@ -5,7 +5,7 @@ import {extraOf, type MessageExtra} from './messageTypes';
 import {formatAmount, paymentPreviewOf, type PaymentPreview} from './payments';
 import {buildForwardInfo, buildReplyInfo, type ForwardInfo, type ReplyInfo} from './reply';
 import {peerRestrictionText, restrictionTextOf} from './restrictions';
-import type {MessageEntity} from '@layer';
+import type {MessageEntity, SendMessageAction} from '@layer';
 
 /**
  * Data layer between tweb's worker-side managers and the Svelte UI.
@@ -1961,21 +1961,85 @@ export async function sendFiles(
 }
 
 /**
- * Tell the peer we are typing.
+ * What we can be doing in a chat, and what a peer can be doing in one.
  *
- * The server expires a typing status after ~6s, so a long message needs the
- * action re-sent periodically — the caller throttles to ~4s. Sending the cancel
- * action clears it immediately once the message goes out.
+ * Telegram gives each one its own action, and the client is expected to send the
+ * right one: a contact who is recording a voice message should read "recording
+ * voice", not "typing". `cancel` is not an activity — it is the action that
+ * clears ours.
+ */
+export type TypingKind =
+  | 'typing'
+  | 'cancel'
+  | 'sticker'
+  | 'game'
+  | 'voice'
+  | 'round'
+  | 'video'
+  | 'photo'
+  | 'audio'
+  | 'document';
+
+/**
+ * Telegram's action name for each kind — the one table, so a kind cannot exist
+ * without an action and the literals stay literal for the API's own union type.
+ */
+const TYPING_ACTION_NAMES = {
+  typing: 'sendMessageTypingAction',
+  cancel: 'sendMessageCancelAction',
+  sticker: 'sendMessageChooseStickerAction',
+  game: 'sendMessageGamePlayAction',
+  voice: 'sendMessageRecordAudioAction',
+  round: 'sendMessageRecordRoundAction',
+  video: 'sendMessageRecordVideoAction',
+  photo: 'sendMessageUploadPhotoAction',
+  audio: 'sendMessageUploadAudioAction',
+  document: 'sendMessageUploadDocumentAction'
+} as const satisfies Record<TypingKind, string>;
+
+/** The same table backwards, for the activity a peer is showing us. */
+const TYPING_KIND_BY_ACTION_NAME = Object.fromEntries(
+  Object.entries(TYPING_ACTION_NAMES).map(([kind, name]) => [name, kind as TypingKind])
+) as Record<string, TypingKind | undefined>;
+
+/**
+ * The phrase under a peer's name while something is going on — Telegram's own
+ * wording for each action (the `Peer.Activity.User.*` strings). The caller puts
+ * the names and the verb in front of it: "Alice is sending a photo".
+ */
+export function typingActionText(kind: TypingKind | undefined): string {
+  switch(kind) {
+    case 'photo': return 'sending a photo';
+    case 'video': return 'sending a video';
+    case 'round': return 'recording video';
+    case 'voice': return 'recording voice';
+    case 'audio':
+    case 'document': return 'sending file';
+    case 'sticker': return 'choosing a sticker';
+    case 'game': return 'playing a game';
+    default: return 'typing…';
+  }
+}
+
+/**
+ * Tell the peer what we are doing.
+ *
+ * The server expires a status after ~6s, so a long message needs the action
+ * re-sent periodically — the caller throttles to ~4s. Sending the cancel action
+ * clears it immediately once the message goes out, and the recorder and the
+ * sticker picker send their own kind while they are open.
  */
 export async function sendTyping(
   peerId: number,
   threadId?: number,
-  action: 'typing' | 'cancel' = 'typing'
+  kind: TypingKind = 'typing'
 ): Promise<void> {
   const {managers} = await bootTelegram();
   await managers.appMessagesManager.setTyping(
     peerId,
-    {_: action === 'cancel' ? 'sendMessageCancelAction' : 'sendMessageTypingAction'},
+    // The API types each action as its own object, so the table's literal has to
+    // be narrowed back into that union rather than the union of literals.
+    {_: TYPING_ACTION_NAMES[kind]} as SendMessageAction,
     undefined,
     threadId
   );
@@ -2073,18 +2137,30 @@ export async function searchDialogs(query: string, limit = 40): Promise<DialogIt
   );
 }
 
-/** Peers currently typing in a chat; returns an unsubscribe callback. */
+/**
+ * Peers currently active in a chat, and what they are doing; returns an
+ * unsubscribe callback.
+ *
+ * Telegram reports an action per user, so a chat where everyone happens to be
+ * doing the same thing reads as that one thing ("Alice and Bob are sending a
+ * photo"); a mix collapses to plain typing, which is what upstream does too.
+ */
 export async function onTyping(
-  callback: (peerId: number, threadId: number | undefined, names: string[]) => void
+  callback: (peerId: number, threadId: number | undefined, names: string[], kind?: TypingKind) => void
 ): Promise<() => void> {
   const {default: rootScope} = await import('@lib/rootScope');
   const selfId = await getSelfId();
 
   const handler = async({peerId, threadId, typings}: any) => {
+    const list = typings ?? [];
     const names = await Promise.all(
-      (typings ?? []).map(async(typing: any) => peerTitle(await getPeer(Number(typing.userId)), selfId))
+      list.map(async(typing: any) => peerTitle(await getPeer(Number(typing.userId)), selfId))
     );
-    callback(Number(peerId), threadId, names);
+
+    const kinds = list.map((typing: any) => TYPING_KIND_BY_ACTION_NAME[typing.action?._]);
+    const shared = kinds.length && kinds.every((kind: TypingKind | undefined) => kind === kinds[0]) ? kinds[0] : undefined;
+
+    callback(Number(peerId), threadId, names, shared);
   };
 
   rootScope.addEventListener('peer_typings', handler);

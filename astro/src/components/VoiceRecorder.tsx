@@ -30,6 +30,7 @@ import {
   ROUND_VIDEO_MAX_MS,
   RECORD_MIN_MS
 } from '$lib/telegram/voice';
+import {sendTyping} from '$lib/telegram/chats';
 
 import './VoiceRecorder.css';
 
@@ -127,6 +128,8 @@ export function VoiceRecorder({peerId, threadId, replyToMsgId, onsent, onerror}:
       return;
     }
     voice.current = recorder;
+    // The peer reads "recording voice" rather than "typing" while this runs.
+    sendTyping(peerId, threadId, 'voice').catch(() => {});
     startTimer(recorder);
   }
 
@@ -145,6 +148,7 @@ export function VoiceRecorder({peerId, threadId, replyToMsgId, onsent, onerror}:
     }
     video.current = recorder;
     previewStream.value = recorder.stream ?? null;
+    sendTyping(peerId, threadId, 'round').catch(() => {});
     startTimer(recorder);
   }
 
@@ -186,6 +190,9 @@ export function VoiceRecorder({peerId, threadId, replyToMsgId, onsent, onerror}:
     } finally {
       sending.value = false;
       reset();
+      // The recording status gives way to the send itself (whose upload the
+      // manager reports as its own action).
+      sendTyping(peerId, threadId, 'cancel').catch(() => {});
     }
   }
 
@@ -194,6 +201,7 @@ export function VoiceRecorder({peerId, threadId, replyToMsgId, onsent, onerror}:
     const recorder = mode.value === 'voice' ? voice.current : video.current;
     stopTimer();
     reset();
+    sendTyping(peerId, threadId, 'cancel').catch(() => {});
     try {
       await recorder?.cancel();
     } catch(err) {
