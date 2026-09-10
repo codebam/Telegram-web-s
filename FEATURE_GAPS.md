@@ -62,12 +62,21 @@ Everything here is verified by `pnpm typecheck:astro`, the 456 guard tests,
 | Favourite stickers | A Favourites grid at the top of the picker's sticker pane, hidden entirely while empty, with a star on the recent and favourite tiles; the list and the live `stickers_updated` refresh come from the manager. |
 | Repeating schedules | A Repeat row in the send-options sheet (Never, daily, weekly, every 2 weeks, monthly, every 3/6 months, yearly), gated behind Premium the way Telegram's own picker is; the period is shown on the scheduled row, and editing a repeating message keeps its period (upstream drops it). |
 
-Remaining from the P1 table below: captions-above-media, animated single-emoji
-messages, emoji suggestions, typing-action variety, replacing the *file* of a
-media message (the caption can be edited today), and reporting several messages
-at once (the flow sends one). The P2 areas (group calls, RTMP, conferences,
-star-gift actions, sign-up, passkey login, passcode lock, in-app browser and
-Instant View, channel statistics, settings search) are untouched.
+| Typing-action variety | The composer sends the action for what is actually happening (`sendMessageRecordAudioAction` while a voice note is being recorded, `sendMessageChooseStickerAction` while the sticker pane is open), and shows the peer's action with Telegram's own wording — "sending a photo", "recording video" — instead of "typing…" for everything. File uploads were already right: the manager reports those itself. |
+| Captions above media | `invert_media` is read and the bubble puts its caption above the attachment the way the flag asks, moving the attachment in the DOM rather than reordering it with CSS, so the reading order matches the screen. Sending it works too: a "Caption above" pill in the attach sheet's send screen. |
+| Animated single-emoji messages | A message that is nothing but emoji is drawn large (Telegram's 96/90/84/72/60/48/36px for one to seven of them, counted over graphemes), and a single emoji plays its animated sticker when the server has one. |
+| Emoji suggestions | The suggestion strip answers an ordinary word as well as `/`, `@` and `#`: two letters or more is looked up in the emoji keyword index and the distinct matches are offered beside the word, Enter replacing it. |
+| Replacing a media message's file | Edit offers "Replace media" for a photo, video, GIF or document of our own, sending the new file through `editMessageMedia` with the caption, so the message keeps its id, reactions and position. This also fixed the media URL cache, which was keyed by the message alone and would have served the replaced file's URL for the rest of the tab's life. |
+| Reporting a multi-selection | Report is in the multi-selection bar beside Forward and Delete, and the flow carries the whole id list — the server's report state machine was always keyed to the peer and a list of messages; only the entry point sent one. |
+
+The P1 table below is clear. Its last six entries — captions above media,
+animated single-emoji messages, emoji suggestions, typing-action variety,
+replacing the *file* of a media message, and reporting a multi-selection — landed
+in the slice recorded above; the P0 and P1 tables are kept as the audit found
+them, and the "landed" table is what is true now. What remains is the P2 areas
+(group calls, RTMP, conferences, star-gift actions, sign-up, passkey login,
+passcode lock, in-app browser and Instant View, channel statistics, settings
+search), which are untouched.
 
 ## P0 — messages that render wrong or not at all
 
