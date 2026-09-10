@@ -7,11 +7,13 @@
  * (`.group-call*` in styles/app.css): a new component has no Svelte stylesheet
  * for the verbatim-copy rule to compare against.
  */
-import {useEffect} from 'preact/hooks';
-import {useSignal} from '@preact/signals';
+import {useEffect, useRef} from 'preact/hooks';
+import {useSignal, useSignalEffect} from '@preact/signals';
 
 import {
+  canManageGroupCall,
   leaveGroupCall,
+  muteGroupCallParticipant,
   onGroupCallState,
   toggleGroupCallMute,
   toggleGroupCallScreen,
@@ -23,6 +25,8 @@ import {Avatar} from './Avatar';
 export function GroupCallScreen() {
   const call = useSignal<GroupCallState | null>(null);
   const error = useSignal('');
+  const canManage = useSignal(false);
+  const manageRequest = useRef(0);
 
   useEffect(() => {
     let off: (() => void) | undefined;
@@ -38,6 +42,25 @@ export function GroupCallScreen() {
       off?.();
     };
   }, []);
+
+  // Whether the current user may mute others; re-read only when the call changes
+  // (the snapshot is replaced every second, so compare the chat id, not the value).
+  const manageChatId = useRef<number | undefined>(undefined);
+  useSignalEffect(() => {
+    const chatId = call.value?.chatId;
+    if(chatId === manageChatId.current) return;
+    manageChatId.current = chatId;
+
+    const request = ++manageRequest.current;
+    if(chatId === undefined) {
+      canManage.value = false;
+      return;
+    }
+
+    canManageGroupCall(-chatId).then((rights) => {
+      if(request === manageRequest.current) canManage.value = rights;
+    }).catch(() => {});
+  });
 
   async function run(action: () => Promise<void>, fallback: string) {
     error.value = '';
@@ -83,6 +106,16 @@ export function GroupCallScreen() {
                     participant.muted ? 'Muted' : ''}
                 </span>
               </span>
+              {canManage.value && !participant.self ? (
+                <button
+                  class="group-call-action"
+                  onClick={() => run(
+                    () => muteGroupCallParticipant(participant.peerId, !participant.muted),
+                    'Could not change that microphone'
+                  )}
+                  aria-label={participant.muted ? 'Unmute' : 'Mute'}
+                >{participant.muted ? '🎙' : '🔇'}</button>
+              ) : null}
               <span class="group-call-icon">
                 {participant.raisedHand ? '✋' : participant.video ? '🎥' : participant.muted ? '🔇' : ''}
               </span>
@@ -93,11 +126,11 @@ export function GroupCallScreen() {
 
       <div class="group-call-controls">
         <button
-          class={['round', state.muted && 'active'].filter(Boolean).join(' ')}
+          class={['round', state.canSelfUnmute ? state.muted && 'active' : state.handRaised && 'active'].filter(Boolean).join(' ')}
           onClick={() => run(toggleGroupCallMute, 'Could not change the microphone')}
-          disabled={state.phase === 'muted-by-admin'}
-          aria-label={state.muted ? 'Unmute' : 'Mute'}
-        >{state.muted ? '🔇' : '🎙'}</button>
+          disabled={!state.canSelfUnmute && state.handRaised}
+          aria-label={state.canSelfUnmute ? (state.muted ? 'Unmute' : 'Mute') : (state.handRaised ? 'Hand raised' : 'Raise hand')}
+        >{state.canSelfUnmute ? (state.muted ? '🔇' : '🎙') : '✋'}</button>
         <button
           class={['round', state.sharingVideo && 'active'].filter(Boolean).join(' ')}
           onClick={() => run(toggleGroupCallVideo, 'Could not change the camera')}

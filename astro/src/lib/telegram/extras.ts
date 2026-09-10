@@ -351,6 +351,10 @@ export type GroupCallState = {
   title: string;
   phase: 'connecting' | 'unmuted' | 'muted' | 'muted-by-admin' | 'ended';
   muted: boolean;
+  /** False when an admin denied us the microphone — the action becomes "raise hand". */
+  canSelfUnmute: boolean;
+  /** Our hand is up, waiting to be allowed to speak. */
+  handRaised: boolean;
   sharingVideo: boolean;
   sharingScreen: boolean;
   participants: GroupCallParticipantItem[];
@@ -411,6 +415,8 @@ async function groupCallSnapshot(instance: any, managers: any): Promise<GroupCal
 
   participants.sort((a, b) => (a.self === b.self ? 0 : a.self ? -1 : 1));
 
+  const self = instance.participant;
+
   return {
     chatId: Number(instance.chatId),
     title: instance.groupCall?.title || 'Voice chat',
@@ -420,6 +426,8 @@ async function groupCallSnapshot(instance: any, managers: any): Promise<GroupCal
       state === GROUP_CALL_STATE.MUTED_BY_ADMIN ? 'muted-by-admin' :
       state === GROUP_CALL_STATE.UNMUTED ? 'unmuted' : 'muted',
     muted: instance.isMuted,
+    canSelfUnmute: self ? !!self.pFlags?.can_self_unmute : true,
+    handRaised: self ? self.raise_hand_rating !== undefined : false,
     sharingVideo: instance.isSharingVideo,
     sharingScreen: instance.isSharingScreen,
     participants
@@ -523,9 +531,31 @@ export async function leaveGroupCall(): Promise<void> {
   await controller.groupCall?.hangUp();
 }
 
+/**
+ * Toggle our microphone. When an admin has taken the microphone away
+ * (`can_self_unmute` is false) the only action is to raise a hand, which is
+ * what the microphone button does in that state.
+ */
 export async function toggleGroupCallMute(): Promise<void> {
   const controller = await getGroupCallsController();
-  await controller.groupCall?.toggleMuted();
+  const instance = controller.groupCall;
+  if(!instance) return;
+
+  const participant = instance.participant;
+  if(participant && !participant.pFlags.can_self_unmute) {
+    if(participant.raise_hand_rating === undefined) {
+      await instance.changeRaiseHand(true);
+    }
+    return;
+  }
+
+  await instance.toggleMuted();
+}
+
+/** An admin mutes or unmutes someone else in the call. */
+export async function muteGroupCallParticipant(peerId: number, muted: boolean): Promise<void> {
+  const controller = await getGroupCallsController();
+  await controller.groupCall?.changeUserMuted(peerId, muted);
 }
 
 export async function toggleGroupCallVideo(): Promise<void> {

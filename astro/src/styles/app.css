@@ -2073,6 +2073,21 @@ button {
   color: var(--text-dim);
 }
 
+.group-call-action {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.group-call-action:hover {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+
 .group-call-empty {
   padding: 14px;
   margin: 0;
