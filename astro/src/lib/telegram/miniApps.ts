@@ -321,6 +321,33 @@ export async function clearDeviceStorage(botId: number): Promise<void> {
 }
 
 /* ------------------------------------------------------------------ */
+/* Web-app permissions (internal bot storage)                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * A per-bot decision the client records in the bot's own internal storage —
+ * the same place tweb keeps the location choice, so it is keyed to the bot
+ * rather than the tab and survives a reload. `null` means it was never asked.
+ */
+export async function readMiniAppPermission(
+  botId: number,
+  key: 'locationPermission'
+): Promise<string | null> {
+  const {managers} = await bootTelegram();
+  const value = await managers.appBotsManager.readBotInternalStorage(botId, key);
+  return value ?? null;
+}
+
+export async function writeMiniAppPermission(
+  botId: number,
+  key: 'locationPermission',
+  value: string
+): Promise<void> {
+  const {managers} = await bootTelegram();
+  await managers.appBotsManager.writeBotInternalStorage(botId, key, value);
+}
+
+/* ------------------------------------------------------------------ */
 /* Bot menu button                                                     */
 /* ------------------------------------------------------------------ */
 

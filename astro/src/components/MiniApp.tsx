@@ -24,6 +24,8 @@ import {
   readDeviceStorage,
   writeDeviceStorage,
   clearDeviceStorage,
+  readMiniAppPermission,
+  writeMiniAppPermission,
   getPreparedMessage,
   sendPreparedMessage,
   themeParams,
@@ -127,6 +129,75 @@ export function MiniApp({request, onclose, onswitchinline, onlink}: Props) {
   function declinePrepared() {
     prepared.value = null;
     send('prepared_message_failed', {error: 'USER_DECLINED'});
+  }
+
+  /** Whether the browser will even consider a location request. */
+  async function locationAvailable(): Promise<boolean> {
+    if(!navigator.geolocation) return false;
+    try {
+      const permission = await navigator.permissions?.query({name: 'geolocation' as PermissionName});
+      return permission?.state !== 'denied';
+    } catch(err) {
+      // `permissions.query` is unavailable in some browsers; fall back to
+      // whether the API exists at all.
+      return true;
+    }
+  }
+
+  async function handleCheckLocation() {
+    if(!(await locationAvailable())) {
+      send('location_checked', {available: false});
+      return;
+    }
+
+    const stored = await readMiniAppPermission(request.botId, 'locationPermission');
+    send('location_checked', {
+      available: true,
+      access_requested: stored != null,
+      access_granted: stored === 'true'
+    });
+  }
+
+  /**
+   * The bot wants our coordinates. The decision is ours, asked once per bot and
+   * kept in the bot's internal storage; only then is the browser asked for a
+   * position, and its own refusal is reported as unavailable too.
+   */
+  async function handleRequestLocation() {
+    const stored = await readMiniAppPermission(request.botId, 'locationPermission');
+
+    if(stored == null) {
+      const granted = confirm(`Share your location with ${title.value}?`);
+      await writeMiniAppPermission(request.botId, 'locationPermission', String(granted));
+      if(!granted) {
+        send('location_requested', {available: false});
+        return;
+      }
+    } else if(stored !== 'true') {
+      send('location_requested', {available: false});
+      return;
+    }
+
+    if(!navigator.geolocation) {
+      send('location_requested', {available: false});
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => send('location_requested', {
+        available: true,
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude,
+        altitude: position.coords.altitude,
+        course: position.coords.heading,
+        speed: position.coords.speed,
+        horizontal_accuracy: position.coords.accuracy,
+        vertical_accuracy: position.coords.altitudeAccuracy,
+        course_accuracy: null,
+        speed_accuracy: null
+      }),
+      () => send('location_requested', {available: false})
+    );
   }
 
   async function handle(eventType: string, data: any) {
@@ -298,11 +369,11 @@ export function MiniApp({request, onclose, onswitchinline, onlink}: Props) {
         break;
 
       case 'web_app_check_location':
-        send('location_checked', {available: false});
+        handleCheckLocation();
         break;
 
       case 'web_app_request_location':
-        send('location_requested', {available: false});
+        handleRequestLocation();
         break;
 
       case 'web_app_check_home_screen':
