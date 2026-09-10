@@ -148,6 +148,7 @@ import {
   onReadStateChange,
   readMediaContents,
   readParticipants,
+  editMessageMedia,
   onTyping,
   onUserUpdate,
   bigEmojiSize,
@@ -448,6 +449,8 @@ export function Chat() {
   const editing = useSignal<MessageItem | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const mediaInput = useRef<HTMLInputElement>(null);
+  /** The picker behind "Replace media" while a media message is being edited. */
+  const replaceInput = useRef<HTMLInputElement>(null);
   /*
    * A signal rather than a ref: the element itself is handed to FormatBar, which
    * only learns about it through a re-render. The setter is memoised because a
@@ -1571,6 +1574,33 @@ export function Chat() {
       messages.value = messages.value.filter((m) => !mids.includes(m.mid));
     } catch (err: any) {
       error.value = errorOf(err, 'Delete failed');
+    }
+  }
+
+  /**
+   * Whether Telegram lets this message's file be swapped: our own message, with
+   * media that has a file behind it. A sticker, a voice note, a round video and
+   * anything self-destructing are excluded, as they are upstream.
+   */
+  function canReplaceMedia(message: MessageItem | null): boolean {
+    if(!message?.out || !message.media) return false;
+    return ['photo', 'video', 'gif', 'file'].includes(message.media.kind);
+  }
+
+  /** Swap the file behind the message being edited, caption and all. */
+  async function replaceMedia(files: FileList | null) {
+    const message = editing.value;
+    const file = files?.[0];
+    if(!message || activePeerId.value === null || !file) return;
+
+    try {
+      await editMessageMedia(activePeerId.value, message.mid, file, {caption: draft.value});
+      editing.value = null;
+      draft.value = '';
+    } catch (err: any) {
+      error.value = errorOf(err, 'Could not replace the media');
+    } finally {
+      if(replaceInput.current) replaceInput.current.value = '';
     }
   }
 
@@ -5436,6 +5466,13 @@ export function Chat() {
                       {activeReplyContext.value?.quote?.text || (editing.value ?? replyTo.value)?.text || 'Media'}
                     </span>
                   </span>
+                  {editing.value && canReplaceMedia(editing.value) ? (
+                    <button
+                      class="cancel"
+                      onClick={() => replaceInput.current?.click()}
+                      title="Replace the photo, video or file itself"
+                    >Replace media</button>
+                  ) : null}
                   {activeReplyContext.value?.quote ? (
                     <button class="cancel" onClick={dropQuote} title="Reply without the quote">❝✕</button>
                   ) : null}
@@ -5588,6 +5625,12 @@ export function Chat() {
                   />
                   {/* Same queue as the file input; only the picker's filter differs, and
                        each item still gets its own photo/file choice in the dialog. */}
+                  <input
+                    class="file"
+                    type="file"
+                    ref={replaceInput}
+                    onChange={(e) => replaceMedia(e.currentTarget.files)}
+                  />
                   <input
                     class="file"
                     type="file"

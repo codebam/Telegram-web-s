@@ -1983,6 +1983,32 @@ export async function editMessage(
   await managers.appMessagesManager.editMessage(message, text, {entities});
 }
 
+/**
+ * Replace the *file* of a media message, keeping the message and its caption.
+ *
+ * Telegram allows this wherever it allows the caption to be edited — the same
+ * 48-hour window and the same authorship rules — so the caller gates it with
+ * `canEditMessage` and its own media check; this only does the swap.
+ */
+export async function editMessageMedia(
+  peerId: number,
+  mid: number,
+  file: File,
+  options: {caption?: string; asPhoto?: boolean} = {}
+): Promise<void> {
+  const {managers} = await bootTelegram();
+  const message = rawMessages.get(messageKey(peerId, mid)) ??
+    await managers.appMessagesManager.getMessageByPeer(peerId, mid);
+  if(!message) throw new Error('Message not found');
+
+  await managers.appMessagesManager.editMessageMedia({
+    message,
+    text: options.caption ?? '',
+    sendFileDetails: {file},
+    options: {isMedia: options.asPhoto !== false}
+  });
+}
+
 export async function deleteMessage(peerId: number, mid: number, revoke = true): Promise<void> {
   const {managers} = await bootTelegram();
   await managers.appMessagesManager.deleteMessages(peerId, [mid], revoke);
@@ -2376,24 +2402,31 @@ export async function loadMediaUrl(
   full = false
 ): Promise<string | null> {
   const key = messageKey(peerId, mid);
-  // Keyed by what was actually asked for: the bubble wants a 480px thumb and the
-  // lightbox the full file, and a single key handed the lightbox back the
-  // bubble's thumb — the "larger view" was the small one, scaled up.
-  const cacheKey = `${key}_${full ? 'full' : boxWidth}`;
-  if(mediaUrls.has(cacheKey)) return mediaUrls.get(cacheKey)!;
-
   const message = rawMessages.get(key);
   const media = message?.media;
   if(!media) return null;
+
+  const target = media._ === 'messageMediaPhoto' ? media.photo : media.document;
+  if(!target) return null;
+
+  /*
+   * Keyed by what was actually asked for — the bubble wants a 480px thumb and the
+   * lightbox the full file, and a single key handed the lightbox back the bubble's
+   * thumb, so the "larger view" was the small one, scaled up.
+   *
+   * The file's own id is part of the key as well, because a media message can be
+   * *edited* to hold a different one: without it the bubble would be handed the
+   * replaced file's URL for the rest of the tab's life, and the edit would look
+   * like it had not happened.
+   */
+  const cacheKey = `${key}_${target.id}_${full ? 'full' : boxWidth}`;
+  if(mediaUrls.has(cacheKey)) return mediaUrls.get(cacheKey)!;
 
   await bootTelegram();
   const [{default: appDownloadManager}, {default: choosePhotoSize}] = await Promise.all([
     import('@lib/appDownloadManager'),
     import('@appManagers/utils/photos/choosePhotoSize')
   ]);
-
-  const target = media._ === 'messageMediaPhoto' ? media.photo : media.document;
-  if(!target) return null;
 
   const attributes: any[] = target.attributes ?? [];
   const isAudio = attributes.some((a: any) => a._ === 'documentAttributeAudio');
