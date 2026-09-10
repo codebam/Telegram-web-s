@@ -10,11 +10,14 @@ import Base from '../layouts/Base.astro';
 // Named, not default: every component in this client is a named export, and the
 // island carries the export it needs in `component-export`.
 import {App} from '../components/App';
+// Static, not an island: the splash is prerendered HTML, so the mark is drawn
+// once at build time and never hydrates.
+import {Logo} from '../components/Logo';
 ---
 
 <Base>
   <div id="splash" class="splash">
-    <div class="logo"></div>
+    <div class="logo"><Logo size={46} /></div>
     <h1>Connecting…</h1>
     <p class="sub">Starting the MTProto worker.</p>
   </div>
@@ -39,11 +42,14 @@ import {App} from '../components/App';
   }
 
   .splash .logo {
+    display: grid;
+    place-items: center;
     width: 84px;
     height: 84px;
     margin: 0 auto 20px;
     border-radius: 50%;
-    background: radial-gradient(circle at 30% 25%, var(--accent-hover), var(--accent));
+    background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 72%, #fff), var(--accent));
+    color: #fff;
   }
 
   .splash h1 {

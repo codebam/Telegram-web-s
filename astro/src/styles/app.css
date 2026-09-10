@@ -1,109 +1,166 @@
 /*
- * Soft Depth
+ * Web S — the native skin.
  *
- * Panes float as translucent cards over a gradient field rather than sitting in
- * flat columns. Two accents do different jobs: --accent is identity (selection,
- * outgoing messages, links), --action is reserved for things you can act on —
- * unread counts, the send button, active reactions. Keeping them separate is
- * what stops the interface reading as uniformly "branded".
+ * The client wears Telegram's own design language: flat surfaces separated by
+ * hairlines instead of floating translucent cards, the two palettes Telegram
+ * ships (day and night-blue), and the classic message bubbles — white in, the
+ * pale green out. One accent, Telegram blue, does every job: selection, links,
+ * the send button, unread counts.
  *
- * --pane is the floating surface; --bg-elevated is everything small that sits
- * on it (chips, the search field, hover). They were one token, which is what
- * made the light theme read as a white filter over the whole app: a sheet of
- * 88% white, with more white stacked on top of it, over a ground barely
- * darker than either. In light the pane is now the only white and the ground
- * carries real colour; in dark, where a white tint on a dark ground was
- * always doing the right thing, nothing changes.
+ * This file is the whole skin. The ported component stylesheets
+ * (`astro/src/components/**.css`) are byte-compared with their Svelte originals
+ * by `astro/scripts/css-verbatim.test.mjs`, so a rule that has to change what a
+ * component draws lives here, not there. That is what `data-ui="native"` on
+ * <html> (see layouts/Base.astro) is for: it names the skin and carries the
+ * extra specificity an override needs — a scoped selector such as
+ * `.bubble[data-ws='chat']` is two classes, `:root[data-ui='native'] .messages
+ * .bubble` is four, so the override wins without `!important` and without
+ * touching the ported sheet.
  *
- * The accent marks an outgoing message rather than filling it. A solid violet
- * bubble wrapped every screenshot in a violet frame and fought the image
- * inside it; a translucent tint with a lit edge still reads as yours while
- * leaving the content its own colour. The derived tokens below are declared
- * once, not per theme — they are relative to --accent, which both themes
- * share.
+ * Two appearance features layer on top and must keep winning: console density
+ * (its own attribute, written after this block) and the user's own knobs —
+ * accent, wallpaper, text size, bubble spacing, power saving — which are set as
+ * custom properties on <html> by `$lib/telegram/appearance`.
  */
 :root {
-  --bg: #0e0f1a;
-  --pane: rgba(255, 255, 255, 0.055);
-  --bg-elevated: rgba(255, 255, 255, 0.055);
-  --bg-solid: #14161f;
-  --bubble-in: rgba(255, 255, 255, 0.08);
-  --border: rgba(255, 255, 255, 0.09);
-  --text: #f0f1f8;
-  --text-dim: #9ba0bb;
-  --accent: #6e63ff;
-  --accent-hover: #8f6bff;
-  --action: #ff7a5c;
-  --action-ink: #21100b;
-  --danger: #e5484d;
-  --radius: 14px;
-  --pane-radius: 16px;
-  --bubble-radius: 16px;
-  --blur: 14px;
+  /* Surfaces. Day: white window, grey-filled controls, hairline dividers. */
+  --bg: #ffffff;
+  --pane: #ffffff;
+  --bg-solid: #ffffff;
+  --bg-elevated: #f4f4f5;
+  --bg-hover: rgba(0, 0, 0, 0.045);
+  --border: #e6e6e8;
+  --divider: rgba(0, 0, 0, 0.08);
 
-  /* Outgoing messages and the selected chat row: marked by the accent, never
-     flooded by it. */
-  --bubble-out: color-mix(in srgb, var(--accent) 24%, transparent);
-  --bubble-out-border: color-mix(in srgb, var(--accent) 50%, transparent);
-  /* An accent tint rather than --bg-elevated, which is nearly invisible against
-     a white pane in the light theme. */
+  /* Text. */
+  --text: #000000;
+  --text-dim: #707579;
+  --text-faint: #a2acb4;
+
+  /* One accent (identity, selection, links) and one call to action (send,
+     unread). Native Telegram uses the same blue for both. */
+  --accent: #3390ec;
+  --accent-hover: #4ea4f6;
+  --accent-ink: #ffffff;
+  --action: #3390ec;
+  --action-ink: #ffffff;
+  --danger: #e53935;
+  --online: #0ac630;
+
+  /* The conversation. */
+  --chat-bg: #dfe8ef;
+  --chat-pattern: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160' viewBox='0 0 160 160'%3E%3Cg fill='none' stroke='%23000' stroke-opacity='.055' stroke-width='1.3' stroke-linecap='round'%3E%3Cpath d='M18 24l11 7-11 7z'/%3E%3Ccircle cx='122' cy='28' r='9'/%3E%3Cpath d='M50 94c8-11 19-11 27 0'/%3E%3Cpath d='M124 104l8 13h-16z'/%3E%3Cpath d='M78 18v16M70 26h16'/%3E%3Cpath d='M24 126c11 0 11 13 22 13'/%3E%3Cpath d='M100 74h18M109 65v18'/%3E%3Cpath d='M12 66h10v10h-10z'/%3E%3C/g%3E%3C/svg%3E");
+  --bubble-in: #ffffff;
+  --bubble-in-ink: #000000;
+  --bubble-out: #eeffde;
+  --bubble-out-ink: #000000;
+  --bubble-meta: #a0acb6;
+  --bubble-out-meta: #5fa855;
+  --bubble-shadow: 0 1px 2px rgba(16, 35, 47, 0.15);
+  --service-bg: rgba(0, 0, 0, 0.18);
+  --service-ink: #ffffff;
+
+  /* Geometry. Panes tile the window; the radii are for what still floats. */
+  --radius: 10px;
+  --pane-radius: 10px;
+  --bubble-radius: 12px;
+  --blur: 0px;
+  --field: none;
+  --header-height: 56px;
+
+  /* Derived from the accent, so they follow the user's accent choice. A row tint
+     stays translucent: half a dozen ported components select `.active` or
+     `.on` on top of `--row-active` and keep `color: inherit`, so a solid fill
+     there paints their text black on blue. The chat list's own selection is the
+     one place that wants the solid accent, and it asks for it by name. */
   --row-active: color-mix(in srgb, var(--accent) 12%, transparent);
-  --row-active-rail: var(--accent);
+  --row-active-rail: transparent;
+  --bubble-out-border: transparent;
+  --accent-soft: color-mix(in srgb, var(--accent) 12%, transparent);
 
-  /* The field the panes float over. */
-  --field:
-    radial-gradient(120% 90% at 8% 0%, rgba(110, 99, 255, 0.30), transparent 55%),
-    radial-gradient(90% 80% at 95% 110%, rgba(255, 122, 92, 0.22), transparent 55%);
+  /* Names the ported sheets reference without a fallback. */
+  --surface: var(--bg);
+  --surface-2: var(--bg-elevated);
+  --panel: var(--bg-solid);
+  --muted: var(--text-dim);
+  --fill: var(--bg-elevated);
 
-  color-scheme: dark;
+  color-scheme: light;
 }
 
-/* System preference (theme mode "system" leaves data-theme unset). */
-@media (prefers-color-scheme: light) {
+/* Night — Telegram's night-blue, not a dimmed day palette: the window is
+   #17212b, the conversation sits on #0e1621, and an outgoing bubble is #2b5278
+   rather than a tint of the accent. */
+@media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
-    --bg: #a9b5dc;
-    --pane: rgba(255, 255, 255, 0.46);
-    --bg-elevated: rgba(19, 22, 40, 0.06);
-    --bg-solid: #f6f7fc;
-    --bubble-in: rgba(255, 255, 255, 0.72);
-    --border: rgba(19, 22, 40, 0.15);
-    --text: #0f1222;
-    --text-dim: #545b73;
-    --field:
-      radial-gradient(120% 90% at 8% 0%, rgba(110, 99, 255, 0.34), transparent 58%),
-      radial-gradient(90% 80% at 95% 110%, rgba(255, 122, 92, 0.24), transparent 58%);
-    color-scheme: light;
+    --bg: #17212b;
+    --pane: #17212b;
+    --bg-solid: #1f2c38;
+    --bg-elevated: #232e3c;
+    --bg-hover: rgba(255, 255, 255, 0.055);
+    --border: #101921;
+    --divider: rgba(255, 255, 255, 0.08);
+
+    --text: #ffffff;
+    --text-dim: #8296a8;
+    --text-faint: #6c7883;
+
+    --accent: #5c9ce6;
+    --accent-hover: #6fabe8;
+    --action: #5c9ce6;
+
+    --chat-bg: #0e1621;
+    --chat-pattern: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160' viewBox='0 0 160 160'%3E%3Cg fill='none' stroke='%23fff' stroke-opacity='.035' stroke-width='1.3' stroke-linecap='round'%3E%3Cpath d='M18 24l11 7-11 7z'/%3E%3Ccircle cx='122' cy='28' r='9'/%3E%3Cpath d='M50 94c8-11 19-11 27 0'/%3E%3Cpath d='M124 104l8 13h-16z'/%3E%3Cpath d='M78 18v16M70 26h16'/%3E%3Cpath d='M24 126c11 0 11 13 22 13'/%3E%3Cpath d='M100 74h18M109 65v18'/%3E%3Cpath d='M12 66h10v10h-10z'/%3E%3C/g%3E%3C/svg%3E");
+    --bubble-in: #182533;
+    --bubble-in-ink: #ffffff;
+    --bubble-out: #2b5278;
+    --bubble-out-ink: #ffffff;
+    --bubble-meta: #7d8b96;
+    --bubble-out-meta: #a8c9e8;
+    --bubble-shadow: none;
+    --service-bg: rgba(0, 0, 0, 0.32);
+
+    color-scheme: dark;
   }
 }
 
-/* Explicit choices from Settings → Appearance win over the media query. */
+/* An explicit choice from Settings → Appearance beats the preference. The two
+   night blocks hold the same palette on purpose — CSS cannot share one between a
+   media query and an attribute selector, and `light-dark()` would leave the
+   client unstyled on a browser that predates it. `light` only has to pin
+   `color-scheme`, because day is what `:root` already carries. */
 :root[data-theme='light'] {
-  --bg: #a9b5dc;
-  --pane: rgba(255, 255, 255, 0.46);
-  --bg-elevated: rgba(19, 22, 40, 0.06);
-  --bg-solid: #f6f7fc;
-  --bubble-in: rgba(255, 255, 255, 0.72);
-  --border: rgba(19, 22, 40, 0.15);
-  --text: #0f1222;
-  --text-dim: #545b73;
-  --field:
-    radial-gradient(120% 90% at 8% 0%, rgba(110, 99, 255, 0.34), transparent 58%),
-    radial-gradient(90% 80% at 95% 110%, rgba(255, 122, 92, 0.24), transparent 58%);
   color-scheme: light;
 }
 
 :root[data-theme='dark'] {
-  --bg: #0e0f1a;
-  --pane: rgba(255, 255, 255, 0.055);
-  --bg-elevated: rgba(255, 255, 255, 0.055);
-  --bg-solid: #14161f;
-  --bubble-in: rgba(255, 255, 255, 0.08);
-  --border: rgba(255, 255, 255, 0.09);
-  --text: #f0f1f8;
-  --text-dim: #9ba0bb;
-  --field:
-    radial-gradient(120% 90% at 8% 0%, rgba(110, 99, 255, 0.30), transparent 55%),
-    radial-gradient(90% 80% at 95% 110%, rgba(255, 122, 92, 0.22), transparent 55%);
+  --bg: #17212b;
+  --pane: #17212b;
+  --bg-solid: #1f2c38;
+  --bg-elevated: #232e3c;
+  --bg-hover: rgba(255, 255, 255, 0.055);
+  --border: #101921;
+  --divider: rgba(255, 255, 255, 0.08);
+
+  --text: #ffffff;
+  --text-dim: #8296a8;
+  --text-faint: #6c7883;
+
+  --accent: #5c9ce6;
+  --accent-hover: #6fabe8;
+  --action: #5c9ce6;
+
+  --chat-bg: #0e1621;
+  --chat-pattern: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160' viewBox='0 0 160 160'%3E%3Cg fill='none' stroke='%23fff' stroke-opacity='.035' stroke-width='1.3' stroke-linecap='round'%3E%3Cpath d='M18 24l11 7-11 7z'/%3E%3Ccircle cx='122' cy='28' r='9'/%3E%3Cpath d='M50 94c8-11 19-11 27 0'/%3E%3Cpath d='M124 104l8 13h-16z'/%3E%3Cpath d='M78 18v16M70 26h16'/%3E%3Cpath d='M24 126c11 0 11 13 22 13'/%3E%3Cpath d='M100 74h18M109 65v18'/%3E%3Cpath d='M12 66h10v10h-10z'/%3E%3C/g%3E%3C/svg%3E");
+  --bubble-in: #182533;
+  --bubble-in-ink: #ffffff;
+  --bubble-out: #2b5278;
+  --bubble-out-ink: #ffffff;
+  --bubble-meta: #7d8b96;
+  --bubble-out-meta: #a8c9e8;
+  --bubble-shadow: none;
+  --service-bg: rgba(0, 0, 0, 0.32);
+
   color-scheme: dark;
 }
 
@@ -118,27 +175,43 @@ body {
 }
 
 body {
-  background: var(--field), var(--bg);
-  background-attachment: fixed;
+  background: var(--bg);
   color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  /* Telegram renders in the platform's own UI font — system-ui first, so the
+     client inherits San Francisco, Segoe UI or Roboto rather than imitating it. */
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  font-size: 15px;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  /* The client is a fixed shell; nothing outside it may rubber-band. */
+  overscroll-behavior: none;
 }
 
 input,
-button {
+button,
+textarea {
   font: inherit;
   color: inherit;
 }
 
+button {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Focus: one ring, drawn outside the element so nothing shifts. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 /*
- * Scrollbars: thin, transparent until the area is hovered. Firefox gets the
- * standard properties; WebKit/Blink need the pseudo-elements for a track that
- * does not paint its own background over the pane.
+ * Scrollbars: a thin thumb that only appears while the area is hovered — the
+ * message list and the chat list are the two long scrollers in the app, and a
+ * permanent gutter reads as a web page rather than a client.
  */
 * {
   scrollbar-width: thin;
-  scrollbar-color: color-mix(in srgb, var(--text) 22%, transparent) transparent;
+  scrollbar-color: color-mix(in srgb, var(--text) 20%, transparent) transparent;
 }
 
 ::-webkit-scrollbar {
@@ -160,7 +233,7 @@ button {
 }
 
 :hover::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--text) 30%, transparent);
+  background: color-mix(in srgb, var(--text) 28%, transparent);
   background-clip: content-box;
 }
 
@@ -174,292 +247,1109 @@ button {
 }
 
 /* ------------------------------------------------------------------ */
-/* Console density                                                     */
+/* The shell                                                           */
 /*                                                                     */
-/* An appearance option, not a separate theme: the same markup drops    */
-/* its bubbles and becomes an aligned monospace grid — timestamp,       */
-/* sender, text — so a busy chat can be scanned in one eye movement.    */
-/* These selectors carry a :root attribute so they outrank Svelte's     */
-/* scoped component styles.                                            */
+/* Two panes that tile the window, separated by a hairline. Everything  */
+/* below overrides a ported stylesheet, hence the data-ui prefix.       */
 /* ------------------------------------------------------------------ */
-:root[data-density='console'] {
-  --bubble-in: transparent;
-  --pane: var(--bg-solid);
-  --pane-radius: 6px;
-  --bubble-radius: 4px;
-  --blur: 0px;
-  --field: none;
-  --bg-elevated: var(--bg-solid);
-  font-size: 13px;
+
+:root[data-ui='native'] .shell {
+  gap: 0;
+  padding: 0;
+  background: var(--bg);
 }
 
-:root[data-density='console'] body {
-  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
-}
-
-:root[data-density='console'] .messages {
-  gap: 1px;
-  padding: 10px 12px;
-}
-
-/* Rows, not bubbles: the sender column lines up down the whole thread. Outgoing
-   rows must not right-justify, or their columns shift out of the grid. */
-/* .messages in the selector so this outranks the component's own
-   `.line.out { justify-content: flex-end }` — without it the two tie on
-   specificity and the later-loaded component style wins. */
-:root[data-density='console'] .messages .line,
-:root[data-density='console'] .messages .line.out {
-  align-items: baseline;
-  justify-content: flex-start;
-  gap: 8px;
-}
-
-:root[data-density='console'] .line-avatar {
-  display: none;
-}
-
-:root[data-density='console'] .bubble {
-  max-width: 100%;
-  width: 100%;
-  padding: 1px 0;
-  background: none;
+:root[data-ui='native'] .shell > aside,
+:root[data-ui='native'] .shell > section {
   border: none;
   border-radius: 0;
-  display: grid;
-  /* time · sender · text, so all three line up down the whole thread */
-  grid-template-columns: 78px 104px minmax(0, 1fr);
-  gap: 2px 10px;
-  align-items: baseline;
+  backdrop-filter: none;
+  box-shadow: none;
 }
 
-:root[data-density='console'] .bubble.out {
-  align-self: stretch;
-  background: none;
-  color: inherit;
+/* The chat list: the window surface. */
+:root[data-ui='native'] .shell > aside:first-child {
+  background: var(--pane);
+  border-right: 1px solid var(--border);
 }
 
-:root[data-density='console'] .bubble .author {
-  grid-column: 2;
-  grid-row: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+/* The panels that open beside the conversation (settings, profile). */
+:root[data-ui='native'] .shell > aside:not(:first-child) {
+  background: var(--pane);
+  border-left: 1px solid var(--border);
+}
+
+/* One title bar height across all three columns. */
+:root[data-ui='native'] .shell > aside:not(:first-child) > header {
+  height: var(--header-height);
+  padding: 0 8px 0 16px;
+  font-size: 17px;
+}
+
+/* The conversation itself: the wallpaper, and a floating composer over it. */
+:root[data-ui='native'] .shell > section {
+  background: var(--chat-bg);
+}
+
+/* ------------------------------------------------------------------ */
+/* Chat list                                                           */
+/* ------------------------------------------------------------------ */
+
+:root[data-ui='native'] .shell > aside > header {
+  height: var(--header-height);
+  padding: 0 8px 0 14px;
+  gap: 2px;
+  border-bottom: none;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+/* Header actions: round icon buttons, the shape every Telegram client uses. */
+:root[data-ui='native'] .icon-button {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  font-size: 17px;
+  color: var(--text);
+  transition: background-color 0.12s;
+}
+
+:root[data-ui='native'] .icon-button:hover {
+  background: var(--bg-hover);
+}
+
+:root[data-ui='native'] .settings-open,
+:root[data-ui='native'] .new-chat,
+:root[data-ui='native'] .accounts-open {
+  font-size: 18px;
+}
+
+/* Search: a filled well, no border — the field Telegram puts under the title. */
+:root[data-ui='native'] .shell > aside > .search {
+  padding: 0 12px 10px;
+  border-bottom: none;
+}
+
+:root[data-ui='native'] .shell > aside > .search input {
+  height: 42px;
+  padding: 0 14px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: var(--bg-elevated);
+  font-size: 15px;
+  transition: border-color 0.12s, background-color 0.12s;
+}
+
+:root[data-ui='native'] .shell > aside > .search input::placeholder {
+  color: var(--text-faint);
+}
+
+:root[data-ui='native'] .shell > aside > .search input:focus {
+  border-color: var(--accent);
+  background: var(--pane);
+}
+
+:root[data-ui='native'] .shell > aside > .search-cancel {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  color: var(--text-dim);
+}
+
+:root[data-ui='native'] .shell > aside > .search-cancel:hover {
+  background: var(--bg-hover);
+}
+
+/* Folder tabs: a row of labels, the open one tinted — not a row of pills. */
+:root[data-ui='native'] .folders {
+  gap: 2px;
+  padding: 0 8px 8px;
+  border-bottom: none;
+}
+
+:root[data-ui='native'] .folders button {
+  padding: 6px 10px;
+  border-radius: 8px;
+  color: var(--text-dim);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+:root[data-ui='native'] .folders button:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+:root[data-ui='native'] .folders button.active {
+  background: var(--accent-soft);
   color: var(--accent);
-  font-weight: 400;
 }
 
-:root[data-density='console'] .bubble.out::before {
-  content: 'you';
-  grid-column: 2;
-  grid-row: 1;
-  color: var(--action);
+:root[data-ui='native'] .folders button.active:hover {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
-:root[data-density='console'] .bubble .text,
-:root[data-density='console'] .bubble .reply-quote,
-:root[data-density='console'] .bubble .webpage,
-:root[data-density='console'] .bubble .poll,
-:root[data-density='console'] .bubble .reactions,
-:root[data-density='console'] .bubble .frame,
-:root[data-density='console'] .bubble .file,
-:root[data-density='console'] .bubble .read-by {
-  grid-column: 3;
+:root[data-ui='native'] .folder-badge {
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 12px;
+  font-weight: 600;
 }
 
-/* The stamp becomes the leading time column; its buttons stay hover-only. */
-:root[data-density='console'] .bubble .stamp {
-  grid-column: 1;
-  grid-row: 1;
-  justify-content: flex-start;
-  gap: 6px;
-  opacity: 0.55;
+/* Chat rows: 72px, the full row tinted when it is the open chat — the way a
+   Telegram desktop list marks where you are. */
+:root[data-ui='native'] .row-button {
+  gap: 12px;
+  padding: 8px 12px;
+  border-left: none;
+  transition: background-color 0.1s;
+}
+
+:root[data-ui='native'] .row-button:hover {
+  background: var(--bg-hover);
+}
+
+:root[data-ui='native'] .row-button.active,
+:root[data-ui='native'] .row-button.active:hover {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+:root[data-ui='native'] .row-button.drag-over {
+  background: var(--bg-hover);
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+:root[data-ui='native'] .row-button .meta {
+  gap: 2px;
+}
+
+:root[data-ui='native'] .row-button .title {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+:root[data-ui='native'] .row-button .preview {
+  font-size: 14px;
+}
+
+:root[data-ui='native'] .row-button .time {
+  font-size: 12px;
+  opacity: 1;
+  color: var(--text-faint);
+}
+
+:root[data-ui='native'] .row-button.active .title,
+:root[data-ui='native'] .row-button.active .preview,
+:root[data-ui='native'] .row-button.active .time,
+:root[data-ui='native'] .row-button.active .flag,
+:root[data-ui='native'] .row-button.active .preview.typing {
+  color: var(--accent-ink);
+}
+
+:root[data-ui='native'] .row-button.active .preview,
+:root[data-ui='native'] .row-button.active .time {
+  opacity: 0.85;
+}
+
+:root[data-ui='native'] .row-button.active .badge {
+  background: var(--accent-ink);
+  color: var(--accent);
+}
+
+/* Unread count: a filled pill. Muted chats get the grey one. */
+:root[data-ui='native'] .row-button .badge {
+  min-width: 22px;
+  height: 22px;
+  padding: 0 7px;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--accent);
+  color: var(--accent-ink);
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
 }
 
-:root[data-density='console'] .bubble .stamp .reply-btn,
-:root[data-density='console'] .bubble .stamp .ticks,
-:root[data-density='console'] .bubble .stamp .views,
-:root[data-density='console'] .bubble .stamp .replies {
-  position: absolute;
-  right: 12px;
-  background: var(--bg-solid);
-  padding-left: 6px;
+:root[data-ui='native'] .row-button.muted .badge {
+  background: var(--text-faint);
 }
 
-:root[data-density='console'] .bubble {
-  position: relative;
+:root[data-ui='native'] .topic-glyph {
+  background: var(--bg-elevated);
+  font-size: 18px;
 }
 
-:root[data-density='console'] .bubble .frame {
-  max-width: 220px;
+:root[data-ui='native'] .online-dot {
+  width: 12px;
+  height: 12px;
+  background: var(--online);
+  border: 2px solid var(--pane);
 }
 
-:root[data-density='console'] .sticker-bubble,
-:root[data-density='console'] .sticker-bubble.out {
-  align-self: flex-start;
-  justify-items: start;
-  transform: scale(0.5);
-  transform-origin: left center;
-  margin: -26px 0;
+:root[data-ui='native'] .row-button.active .online-dot {
+  border-color: var(--accent);
 }
 
-/* One line per chat in the list. */
-:root[data-density='console'] .row-button {
-  padding: 4px 10px;
+/* -------------------------------------------------------------- */
+/* Stories                                                         */
+/*                                                                 */
+/* The strip of story rings above the chat list — the same row      */
+/* Telegram puts it in, dressed in the same 56px circles.           */
+/* -------------------------------------------------------------- */
+
+:root[data-ui='native'] .shell > aside > .strip {
   gap: 8px;
+  padding: 4px 12px 10px;
+  border-bottom: none;
 }
 
-:root[data-density='console'] .row-button .avatar {
-  width: 16px !important;
-  height: 16px !important;
-  border-radius: 3px;
-  font-size: 9px !important;
+:root[data-ui='native'] .shell > aside > .strip .story {
+  width: 64px;
+  gap: 4px;
 }
 
-:root[data-density='console'] .row-button .meta {
-  grid-auto-flow: column;
-  grid-template-columns: minmax(0, 1fr) max-content;
-  align-items: baseline;
-  gap: 8px;
+:root[data-ui='native'] .shell > aside > .strip .ring {
+  border-width: 2px;
 }
 
-:root[data-density='console'] .row-button .preview {
-  display: none;
+:root[data-ui='native'] .shell > aside > .strip .ring.unread {
+  border-color: var(--accent);
 }
 
-:root[data-density='console'] .row-button .title {
-  font-weight: 400;
-  text-transform: lowercase;
+:root[data-ui='native'] .shell > aside > .strip .ring.own {
+  border-color: var(--border);
 }
 
-:root[data-density='console'] .row-button .time {
-  display: none;
+:root[data-ui='native'] .shell > aside > .strip .ring.plus {
+  width: 56px;
+  height: 56px;
+  line-height: 52px;
+  border-color: transparent;
+  background: var(--bg-elevated);
+  color: var(--accent);
+  font-size: 24px;
 }
 
-/* Signal dot in place of the avatar: filled when the chat has activity. */
-:root[data-density='console'] .row-button .avatar {
-  width: 8px !important;
-  height: 8px !important;
-  border-radius: 50% !important;
-  font-size: 0 !important;
-  background: color-mix(in srgb, var(--text) 35%, transparent) !important;
+:root[data-ui='native'] .shell > aside > .strip .name {
+  max-width: 62px;
+  font-size: 12px;
+  color: var(--text-dim);
 }
 
-:root[data-density='console'] .row-button .avatar img {
-  display: none;
+/* The "select a chat" pane: the logo and one line, centred. */
+:root[data-ui='native'] .empty {
+  gap: 10px;
+  color: var(--text-dim);
 }
 
-:root[data-density='console'] .row-button:has(.badge) .avatar {
-  background: var(--accent) !important;
+:root[data-ui='native'] .empty-logo {
+  display: grid;
+  place-items: center;
+  width: 128px;
+  height: 128px;
+  margin-bottom: 12px;
+  border-radius: 50%;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 72%, #fff), var(--accent));
+  color: #fff;
+  box-shadow: 0 6px 24px color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
-/* Uppercase headers, terminal-style. */
-:root[data-density='console'] header {
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  font-size: 11px;
-}
-
-:root[data-density='console'] .badge,
-:root[data-density='console'] .folder-badge {
-  font-variant-numeric: tabular-nums;
-  background: transparent;
-  color: var(--action);
-  padding: 0;
-}
-
-:root[data-density='console'] .day-divider,
-:root[data-density='console'] .unread-divider {
-  border-radius: 0;
-  background: none;
-  border-top: 1px solid var(--border);
-  align-self: stretch;
-  text-align: left;
-  padding-left: 0;
-}
-
-/* At console density the per-message action row is noise on every line —
-   reveal it on hover instead, the way a dense client would. */
-:root[data-density='console'] .bubble .stamp .reply-btn,
-:root[data-density='console'] .bubble .stamp .edited {
-  visibility: hidden;
-}
-
-:root[data-density='console'] .bubble:hover .stamp .reply-btn,
-:root[data-density='console'] .bubble:hover .stamp .edited {
-  visibility: visible;
-}
-
-:root[data-density='console'] form button[type='submit'] {
-  border-radius: 4px;
-}
-
-:root[data-density='console'] form textarea {
-  font-family: inherit;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  * {
-    animation-duration: 0.01ms !important;
-    transition-duration: 0.01ms !important;
+/* A phone has no room for it, and Telegram drops it there too. */
+@media (max-height: 560px), (max-width: 860px) {
+  :root[data-ui='native'] .empty-logo {
+    display: none;
   }
 }
 
+:root[data-ui='native'] .empty .muted {
+  margin: 0;
+  padding: 0;
+  font-size: 15px;
+  color: var(--text-dim);
+  text-align: center;
+}
+
+:root[data-ui='native'] .empty .disclosure {
+  max-width: 300px;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
 /* ------------------------------------------------------------------ */
-/* Appearance                                                          */
-/*                                                                     */
-/* Settings → Appearance writes custom properties on <html>; these are */
-/* the rules that consume them. `data-appearance` is stamped by        */
-/* applyAppearance() purely so the selectors outrank Chat.svelte's     */
-/* scoped styles without touching the component. Console density keeps */
-/* its own geometry, so the spacing rules step aside there.            */
+/* Conversation header                                                 */
 /* ------------------------------------------------------------------ */
-:root[data-appearance] .messages {
+
+:root[data-ui='native'] .shell > section > header {
+  height: var(--header-height);
+  padding: 0 8px;
+  gap: 6px;
+  background: var(--pane);
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+}
+
+:root[data-ui='native'] .peer-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 2px 8px 2px 4px;
+  background: none;
+  border: none;
+  border-radius: 10px;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+:root[data-ui='native'] .peer-head:hover {
+  background: var(--bg-hover);
+}
+
+:root[data-ui='native'] .peer-titles {
+  display: grid;
+  min-width: 0;
+}
+
+:root[data-ui='native'] .peer-name {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Absorbs the slack between the peer and the header's action buttons, so a
+   thread tag stays beside the name instead of drifting to the far end. */
+:root[data-ui='native'] .peer-gap {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+:root[data-ui='native'] .peer-status {
+  margin-left: 0;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.25;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:root[data-ui='native'] .peer-status.typing {
+  color: var(--accent);
+}
+
+:root[data-ui='native'] .thread-tag {
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 1px 6px;
+}
+
+:root[data-ui='native'] .back-mobile {
+  width: 40px;
+  height: 40px;
+  display: none;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--text);
+  font-size: 20px;
+}
+
+:root[data-ui='native'] .back-mobile:hover {
+  background: var(--bg-hover);
+}
+
+/* ------------------------------------------------------------------ */
+/* Messages                                                            */
+/* ------------------------------------------------------------------ */
+
+/* The wallpaper is painted here rather than on the pane so a chosen wallpaper
+   (appearance.ts) still lands behind the bubbles and not behind the chrome. */
+:root[data-ui='native']:not([data-wallpaper]) .messages {
+  background-image: var(--chat-pattern);
+  background-size: 320px;
+}
+
+:root[data-ui='native'] .messages {
+  /* `gap: 0` because the spacing between messages is not uniform: runs set their
+     own margins below. */
+  gap: 0;
+  padding: var(--messages-padding, 16px 20px 10px);
+}
+
+/*
+ * Runs. A sender's consecutive messages are one block: the lines inside it sit
+ * 2px apart, only its last bubble points at its sender, and its other bubbles are
+ * rounded all round. `.line-avatar.hidden` is the app's own "same sender as the
+ * message above" marker, and outgoing lines never render an avatar at all
+ * (consecutive own messages are always one run), so the two directions need
+ * different tests for the same thing.
+ */
+:root[data-ui='native'] .messages > .line + .line {
+  margin-top: var(--bubble-gap, 6px);
+}
+
+:root[data-ui='native'] .messages > .line.out:has(+ .line.out),
+:root[data-ui='native'] .messages > .line:not(.out):has(+ .line:not(.out) > .line-avatar.hidden) {
+  margin-top: 2px;
+}
+
+:root[data-ui='native'] .messages .line:not(.out):has(+ .line:not(.out) > .line-avatar.hidden) > .bubble {
+  border-bottom-left-radius: var(--bubble-radius, 12px);
+}
+
+:root[data-ui='native'] .messages .line.out:has(+ .line.out) > .bubble.out {
+  border-bottom-right-radius: var(--bubble-radius, 12px);
+}
+
+/* Bubbles: white in, pale green out, a hairline tail toward the speaker. */
+:root[data-ui='native'] .messages .bubble {
+  max-width: min(480px, 78%);
+  padding: var(--bubble-padding, 7px 11px 6px);
+  gap: var(--bubble-inner-gap, 5px);
+  border: none;
+  border-radius: var(--bubble-radius, 12px) var(--bubble-radius, 12px) var(--bubble-radius, 12px) 4px;
+  background: var(--bubble-in);
+  color: var(--bubble-in-ink);
+  box-shadow: var(--bubble-shadow);
+}
+
+:root[data-ui='native'] .messages .bubble.out {
+  border-radius: var(--bubble-radius, 12px) var(--bubble-radius, 12px) 4px var(--bubble-radius, 12px);
+  background: var(--bubble-out);
+  color: var(--bubble-out-ink);
+}
+
+:root[data-ui='native'] .messages .bubble .author {
+  font-size: 13.5px;
+  font-weight: 500;
+}
+
+:root[data-ui='native'] .messages .bubble .stamp {
+  gap: 6px;
+  font-size: 11.5px;
+  opacity: 1;
+  color: var(--bubble-meta);
+}
+
+:root[data-ui='native'] .messages .bubble.out .stamp {
+  color: var(--bubble-out-meta);
+}
+
+:root[data-ui='native'] .messages .bubble .ticks.read {
+  color: inherit;
+  opacity: 1;
+}
+
+:root[data-ui='native'] .messages .bubble .reply-btn {
+  text-decoration: none;
+  font-weight: 500;
+}
+
+:root[data-ui='native'] .messages .bubble .reply-btn:hover {
+  color: var(--accent);
+}
+
+:root[data-ui='native'] .messages .bubble .reply-quote {
+  border-left-color: var(--accent);
+  border-left-width: 3px;
+  border-radius: 1px;
+  opacity: 1;
+  font-size: 13.5px;
+}
+
+:root[data-ui='native'] .messages .bubble .reply-text,
+:root[data-ui='native'] .messages .bubble .reply-title {
+  color: var(--text-dim);
+}
+
+:root[data-ui='native'] .messages .bubble a {
+  color: var(--accent);
+}
+
+:root[data-ui='native'] .messages .line-avatar {
+  margin-bottom: 2px;
+}
+
+/* Date and unread dividers read as glass pills laid on the wallpaper. */
+:root[data-ui='native'] .messages .day-divider,
+:root[data-ui='native'] .messages .service {
+  align-self: center;
+  margin: 8px 0;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: var(--service-bg);
+  color: var(--service-ink);
+  font-size: 13px;
+  font-weight: 500;
+  backdrop-filter: blur(2px);
+}
+
+:root[data-ui='native'] .messages .unread-divider {
+  align-self: stretch;
+  margin: 8px 0;
+  padding: 5px 0;
+  border-top: none;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: center;
+}
+
+/* Jump to the newest message: the round floating button Telegram puts above
+   the composer. */
+:root[data-ui='native'] .to-bottom {
+  right: 20px;
+  bottom: 88px;
+  width: 46px;
+  height: 46px;
+  border: none;
+  border-radius: 50%;
+  background: var(--pane);
+  color: var(--text-dim);
+  box-shadow: 0 2px 8px rgba(16, 35, 47, 0.22);
+}
+
+:root[data-ui='native'] .to-bottom:hover {
+  color: var(--text);
+}
+
+/* The pinned-message bar, the join banner and the business bar are all the same
+   piece of chrome: a strip on the window surface above the conversation. */
+:root[data-ui='native'] .pinned-bar,
+:root[data-ui='native'] .join-bar,
+:root[data-ui='native'] .business-bar {
+  border-left: none;
+  border-bottom: 1px solid var(--border);
+  background: var(--pane);
+}
+
+:root[data-ui='native'] .pinned-label {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* ------------------------------------------------------------------ */
+/* Composer                                                            */
+/* ------------------------------------------------------------------ */
+
+/* One rounded field holding the whole row — attach, text, emoji, send — the way
+   Telegram's own clients lay it out. It floats over the wallpaper. */
+:root[data-ui='native'] .shell > section > form {
+  margin: 0 12px 12px;
+  padding: 3px;
+  gap: 2px;
+  align-items: flex-end;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--pane);
+  box-shadow: 0 1px 2px rgba(16, 35, 47, 0.08);
+}
+
+:root[data-ui='native'] .shell > section > form:focus-within {
+  border-color: var(--accent);
+}
+
+:root[data-ui='native'] .shell > section > form textarea {
+  order: 1;
+  padding: 9px 4px;
   font-size: var(--message-text-size, 15px);
+  line-height: 1.35;
 }
 
-:root[data-appearance]:not([data-density]) .messages {
-  gap: var(--bubble-gap, 8px);
-  padding: var(--messages-padding, 18px);
+:root[data-ui='native'] .shell > section > form textarea::placeholder {
+  color: var(--text-faint);
 }
 
-:root[data-appearance]:not([data-density]) .messages .bubble {
-  padding: var(--bubble-padding, 8px 12px);
-  gap: var(--bubble-inner-gap, 6px);
+:root[data-ui='native'] .shell > section > form .attach {
+  order: 1;
+  width: 40px;
+  height: 40px;
+  flex: none;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  opacity: 1;
+  color: var(--text-dim);
+  font-size: 19px;
+  transition: background-color 0.12s, color 0.12s;
 }
 
-/* The wallpaper sits under the bubbles, fixed to the viewport so it does not
-   crawl as the thread scrolls. */
-:root[data-wallpaper] .messages {
-  background-image: var(--chat-wallpaper, none);
-  background-size: cover;
-  background-position: center;
-  background-attachment: fixed;
+:root[data-ui='native'] .shell > section > form .attach:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
 }
 
-/* Power saving: the Svelte components do not read tweb's liteMode, so the two
-   flags that are purely visual are enforced here. */
-:root[data-lite-animations] * {
-  animation-duration: 0.01ms !important;
-  transition-duration: 0.01ms !important;
+/* The paperclip leads the field; emoji closes it, just before the send button. */
+:root[data-ui='native'] .shell > section > form .attach-wrap {
+  order: 0;
 }
 
-:root[data-lite-blur] {
-  --blur: 0px;
+:root[data-ui='native'] .shell > section > form .emoji {
+  order: 3;
+}
+
+/* The two recorder buttons are the same slot as the send button: quiet icons
+   while they wait, and the row's one accented circle for whichever of them is
+   the primary action — the last button in the row. */
+:root[data-ui='native'] .shell > section > form .icon.record {
+  order: 4;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  color: var(--text-dim);
+  background: transparent;
+}
+
+:root[data-ui='native'] .shell > section > form .icon.record:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+:root[data-ui='native'] .shell > section > form .icon.record:last-of-type {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+:root[data-ui='native'] .shell > section > form .icon.record:last-of-type:hover:not(:disabled) {
+  background: var(--accent-hover);
+  color: var(--accent-ink);
+}
+
+:root[data-ui='native'] .shell > section > form > button[type='submit'] {
+  order: 4;
+  width: 40px;
+  height: 40px;
+  margin-left: 2px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 17px;
+}
+
+:root[data-ui='native'] .shell > section > form > button[type='submit']:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+/* While a recording runs the composer is covered by the recorder's own panel. */
+:root[data-ui='native'] .shell > section > form .panel {
+  border-radius: inherit;
+  background: var(--pane);
+}
+
+:root[data-ui='native'] .shell > section > form .panel .icon {
+  color: var(--text-dim);
+}
+
+:root[data-ui='native'] .shell > section > form .panel .icon.danger {
+  color: var(--danger);
+}
+
+:root[data-ui='native'] .shell > section > form .panel .icon.send {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+:root[data-ui='native'] .shell > section > form button:disabled {
+  opacity: 0.45;
+}
+
+:root[data-ui='native'] .shell > section > form .send-button.silent {
+  background: color-mix(in srgb, var(--accent) 60%, transparent);
+}
+
+:root[data-ui='native'] .shell > section > form .effect-button.armed {
+  color: var(--accent);
+  filter: none;
+}
+
+:root[data-ui='native'] .shell > section > form .scheduled-count {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+/* The reply/edit strip above the composer. */
+:root[data-ui='native'] .shell > section > .reply-bar {
+  margin: 0 12px 8px;
+  padding: 6px 10px;
+  border: none;
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  background: var(--pane);
+  box-shadow: 0 1px 2px rgba(16, 35, 47, 0.08);
+}
+
+:root[data-ui='native'] .shell > section > .reply-bar .reply-quote {
+  border-left: none;
+  padding-left: 0;
+}
+
+:root[data-ui='native'] .attach-menu {
+  padding: 5px;
+  border: none;
+  border-radius: 12px;
+  background: var(--bg-solid);
+  box-shadow: 0 4px 24px rgba(16, 35, 47, 0.2);
+}
+
+:root[data-ui='native'] .attach-menu button {
+  padding: 9px 12px;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+:root[data-ui='native'] .attach-menu button:hover {
+  background: var(--bg-hover);
+}
+
+/* ------------------------------------------------------------------ */
+/* Menus, sheets, overlays                                             */
+/* ------------------------------------------------------------------ */
+
+:root[data-ui='native'] .context-menu,
+/* The chat-list menu is anchored under its row, so it keeps a margin. */
+:root[data-ui='native'] .list .menu,
+:root[data-ui='native'] .submenu,
+:root[data-ui='native'] .from-picker {
+  padding: 5px;
+  border: none;
+  border-radius: 12px;
+  background: var(--bg-solid);
+  box-shadow: 0 4px 24px rgba(16, 35, 47, 0.2);
+}
+
+:root[data-ui='native'] .context-menu button,
+:root[data-ui='native'] .list .menu button {
+  padding: 9px 12px;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+:root[data-ui='native'] .context-menu button:hover,
+:root[data-ui='native'] .list .menu button:hover {
+  background: var(--bg-hover);
+}
+
+/* Search inside a conversation: the same field as the one in the chat list. */
+:root[data-ui='native'] .chat-search {
+  padding: 8px 12px;
+  gap: 6px;
+  background: var(--pane);
+}
+
+:root[data-ui='native'] .chat-search input {
+  height: 38px;
+  padding: 0 14px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: var(--bg-elevated);
+}
+
+:root[data-ui='native'] .chat-search input:focus {
+  border-color: var(--accent);
+  background: var(--pane);
+}
+
+:root[data-ui='native'] .chat-filters,
+:root[data-ui='native'] .results,
+:root[data-ui='native'] .selection-bar {
+  background: var(--pane);
+}
+
+:root[data-ui='native'] .chat-filters .chip {
+  padding: 5px 11px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 13px;
+}
+
+:root[data-ui='native'] .chat-filters .chip.on {
+  border-color: transparent;
+  background: var(--accent-soft);
+}
+
+/* The confirmation toast: a floating bubble over the composer. */
+:root[data-ui='native'] .chat-notice {
+  bottom: 84px;
+  padding: 8px 16px;
+  border: none;
+  border-radius: 10px;
+  background: var(--bg-solid);
+  color: var(--text);
+  font-size: 14px;
+  box-shadow: 0 4px 24px rgba(16, 35, 47, 0.22);
+}
+
+:root[data-ui='native'] button.error {
+  bottom: 84px;
+  padding: 10px 16px;
+  border-radius: 10px;
+  background: var(--danger);
+  box-shadow: 0 4px 24px rgba(16, 35, 47, 0.22);
+}
+
+/* ------------------------------------------------------------------ */
+/* Collisions with the ported sheets                                   */
+/*                                                                     */
+/* The skin above is written against the shell, so its selectors are    */
+/* specific on purpose — which means a rule meant for one element can   */
+/* land on another component that happens to reuse the class. The      */
+/* rules below are the ones that would otherwise cross over: every      */
+/* entry here exists because a ported sheet draws the same class name   */
+/* for something else.                                                  */
+/* ------------------------------------------------------------------ */
+
+/* The picker's search field is an `<input class="search">` (and so is the
+   admin member search), not the chat-list well — it needs its own padding and
+   its bottom hairline back. */
+:root[data-ui='native'] .picker .search,
+:root[data-ui='native'] .dialog .search,
+:root[data-ui='native'] .admin-dialog .search {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* The emoji/sticker panel is a floating sheet like every other popover. */
+:root[data-ui='native'] .picker {
+  border: none;
+  background: var(--bg-solid);
+  box-shadow: 0 4px 24px rgba(16, 35, 47, 0.2);
+}
+
+/* The video player's speed and quality menus are dark overlays on video, not
+   the chat-list context menu. */
+:root[data-ui='native'] .video-player .menu {
+  margin: 0;
+  padding: 4px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.9);
+  box-shadow: none;
+}
+
+:root[data-ui='native'] .video-player .chip {
+  padding: 3px 8px;
+  border: none;
+  font-size: 12px;
+}
+
+/* Reaction pills sit inside a bubble, so they take the bubble's own tint
+   rather than a border or a darkening wash. */
+:root[data-ui='native'] .reaction-bar .chip {
+  padding: 2px 8px;
+  border: none;
+  font-size: 12px;
+  background: var(--bg-hover);
+}
+
+:root[data-ui='native'] .reaction-bar .chip.chosen {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+/* Profile badges (verified, premium, SCAM/FAKE) are their own shapes: the read
+   receipt pill above must not repaint a safety warning. */
+:root[data-ui='native'] .info .badge {
+  min-width: 0;
+  height: auto;
+  padding: 0 5px;
+  background: none;
+  color: inherit;
+  font-size: 10px;
+}
+
+:root[data-ui='native'] .info .badge.verified {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+/* The repeat-one marker and the filmstrip's play mark are tiny overlays, not
+   unread counters. */
+:root[data-ui='native'] .player-bar .badge,
+:root[data-ui='native'] .backdrop .badge {
+  min-width: 0;
+  height: auto;
+  padding: 0;
+  background: none;
+  color: var(--accent);
+  font-size: 9px;
+}
+
+/* Over a thumbnail the play mark is white, not accent. */
+:root[data-ui='native'] .backdrop .badge {
+  color: #fff;
+}
+
+/* The media player bar floats over the conversation: a white card with the
+   skin's shadow, not the dark chrome it used to be. */
+:root[data-ui='native'] .player-bar {
+  border-color: var(--border);
+  background: var(--bg-solid);
+  box-shadow: 0 4px 20px rgba(16, 35, 47, 0.2);
+}
+
+/* Comment faces are ringed in the bubble they sit on. */
+:root[data-ui='native'] .messages .bubble .comments .face {
+  box-shadow: 0 0 0 2px var(--bubble-in);
+}
+
+:root[data-ui='native'] .messages .bubble.out .comments .face {
+  box-shadow: 0 0 0 2px var(--bubble-out);
+}
+
+/* A location preview is a panel inside the bubble, whatever colour that is. */
+:root[data-ui='native'] .messages .bubble .geo .map {
+  border-color: transparent;
+  background: color-mix(in srgb, currentColor 6%, transparent);
+}
+
+/* Saved-tag pills live on the wallpaper, so they need a fill to be visible. */
+:root[data-ui='native'] .shell > section > .tags {
+  border-bottom: none;
+  background: var(--pane);
+}
+
+:root[data-ui='native'] .shell > section > .tags .tag,
+:root[data-ui='native'] .shell > section > .tags .rename input {
+  border-color: transparent;
+  background: var(--bg-elevated);
+}
+
+/* The send-as picker and the effect picker float over the wallpaper. */
+:root[data-ui='native'] .send-as-popover,
+:root[data-ui='native'] .effect-popover {
+  border: none;
+  background: var(--bg-solid);
+  box-shadow: 0 4px 24px rgba(16, 35, 47, 0.2);
+}
+
+/* Dialogs and sheets: the same white card the skin uses for menus, rather than
+   the grey fill the token used to stand for. */
+:root[data-ui='native'] .dialog,
+:root[data-ui='native'] .admin-dialog,
+:root[data-ui='native'] .sheet,
+:root[data-ui='native'] .reactors-dialog,
+:root[data-ui='native'] .checkout-sheet {
+  border-color: var(--divider);
+  background: var(--bg-solid);
+  box-shadow: 0 12px 40px rgba(16, 35, 47, 0.24);
+}
+
+:root[data-ui='native'] .dialog .list,
+:root[data-ui='native'] .admin-dialog .list {
+  border-color: var(--divider);
+}
+
+/* Fields anywhere in a dialog are filled wells, like the ones on the sign-in
+   card — an outlined box on a white card is a hairline you cannot see. */
+:root[data-ui='native'] .dialog input:not([type='radio']):not([type='checkbox']),
+:root[data-ui='native'] .admin-dialog input:not([type='radio']):not([type='checkbox']),
+:root[data-ui='native'] .sheet input:not([type='radio']):not([type='checkbox']),
+:root[data-ui='native'] .panel input:not([type='radio']):not([type='checkbox']),
+:root[data-ui='native'] .dialog textarea,
+:root[data-ui='native'] .sheet textarea,
+:root[data-ui='native'] .panel textarea,
+:root[data-ui='native'] .dialog select,
+:root[data-ui='native'] .panel select,
+:root[data-ui='native'] .field input,
+:root[data-ui='native'] .field select {
+  border-color: transparent;
+  background: var(--bg-elevated);
+}
+
+:root[data-ui='native'] .dialog input:focus,
+:root[data-ui='native'] .admin-dialog input:focus,
+:root[data-ui='native'] .sheet input:focus,
+:root[data-ui='native'] .panel input:focus {
+  border-color: var(--accent);
+  background: var(--pane);
+}
+
+/* The media editor's slice strip is not the story strip. */
+:root[data-ui='native'] .editor .strip {
+  gap: 1px;
+  padding: 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* Sign-in                                                             */
+/*                                                                     */
+/* The card is the only surface before the shell exists, so it carries  */
+/* the native look on its own: white, centred, one accent button.       */
+/* ------------------------------------------------------------------ */
+
+:root[data-ui='native'] .card {
+  padding: 36px 28px 32px;
+  border: none;
+  border-radius: 16px;
+  background: var(--pane);
+  box-shadow: 0 4px 32px rgba(16, 35, 47, 0.16);
+}
+
+/* Sign-in inputs are Telegram's filled wells, not outlined boxes. */
+:root[data-ui='native'] main input {
+  padding: 12px 14px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: var(--bg-elevated);
+}
+
+:root[data-ui='native'] main input:focus {
+  border-color: var(--accent);
+  background: var(--pane);
+}
+
+:root[data-ui='native'] main button[type='submit'] {
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 500;
+}
+
+:root[data-ui='native'] main h1 {
+  font-size: 22px;
+}
+
+:root[data-ui='native'] .card .logo {
+  display: grid;
+  place-items: center;
+  width: 96px;
+  height: 96px;
+  margin: 0 auto 20px;
+  border-radius: 50%;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 72%, #fff), var(--accent));
+  color: #fff;
+  box-shadow: 0 6px 24px color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
 /* ------------------------------------------------------------------ */
 /* Features newer than the port                                        */
 /* ------------------------------------------------------------------ */
 /*
- * Everything below belongs to features that exist in neither of the clients
- * this app was ported from, so there is no component stylesheet to carry it:
- * the stylesheets under `astro/src/components` are byte-compared with their
- * Svelte originals by `astro/scripts/css-verbatim.test.mjs`, and a rule added to
- * one of those would fail that guard (a brand new component stylesheet would
- * have no original at all). New classes therefore live here, named after what
- * they draw.
+ * These belong to features neither client this app was ported from had, so no
+ * component stylesheet carries them — they are written here, named after what
+ * they draw. (The wallpapers, dice and story styles below were here before the
+ * skin; they are kept native-coloured rather than re-designed.)
  */
 
 /* Dice / animated-random messages. The animation is a stack of full-canvas
@@ -492,7 +1382,7 @@ button {
   align-items: center;
   justify-content: center;
   padding: 0;
-  border: 1px solid var(--border);
+  border: none;
   border-radius: var(--bubble-radius);
   background: var(--bg-elevated);
   overflow: hidden;
@@ -531,16 +1421,18 @@ button {
 }
 
 .story-mention-view {
-  padding: 4px 12px;
-  border: 1px solid var(--border);
+  padding: 5px 14px;
+  border: none;
   border-radius: 999px;
-  background: none;
-  color: var(--accent);
-  font-size: 12px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 13px;
+  font-weight: 500;
   cursor: pointer;
 }
 
 .story-mention-view:disabled {
+  background: var(--bg-elevated);
   color: var(--text-dim);
   cursor: default;
 }
@@ -564,7 +1456,6 @@ button {
   gap: 10px;
   padding: 8px 18px;
   border-bottom: 1px solid var(--border);
-  border-left: 3px solid var(--accent);
   flex: none;
 }
 
@@ -576,12 +1467,13 @@ button {
 
 .join-action {
   flex: none;
-  padding: 5px 14px;
+  padding: 6px 14px;
   border: none;
   border-radius: 999px;
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
   font-size: 13px;
+  font-weight: 500;
   cursor: pointer;
 }
 
@@ -594,7 +1486,7 @@ button {
 .message-translation {
   margin: 4px 0 0;
   padding-top: 4px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--divider);
   color: var(--text-dim);
   font-size: 14px;
   white-space: pre-wrap;
@@ -611,14 +1503,14 @@ button {
   bottom: 76px;
   transform: translateX(-50%);
   z-index: 70;
-  padding: 6px 14px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
+  padding: 8px 16px;
+  border: none;
+  border-radius: 10px;
   background: var(--bg-solid);
   color: var(--text);
-  font-size: 13px;
+  font-size: 14px;
   cursor: pointer;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+  box-shadow: 0 4px 24px rgba(16, 35, 47, 0.22);
 }
 
 /* The report flow: the server's option list, then its comment step. */
@@ -630,7 +1522,7 @@ button {
 }
 
 .report-options button {
-  padding: 8px 12px;
+  padding: 9px 12px;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: none;
@@ -641,7 +1533,7 @@ button {
 }
 
 .report-options button:hover:not(:disabled) {
-  background: var(--bg-elevated);
+  background: var(--bg-hover);
 }
 
 .report-options button:disabled {
@@ -652,10 +1544,368 @@ button {
 .report-comment {
   width: 100%;
   margin: 8px 0 4px;
-  padding: 8px 10px;
+  padding: 9px 11px;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--bg-elevated);
   color: var(--text);
   font-size: 14px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Appearance                                                          */
+/*                                                                     */
+/* Settings → Appearance writes custom properties on <html>; these are */
+/* the rules that consume them.                                        */
+/* ------------------------------------------------------------------ */
+
+:root[data-appearance] .messages {
+  font-size: var(--message-text-size, 15px);
+}
+
+:root[data-appearance] .messages .bubble {
+  padding: var(--bubble-padding, 7px 11px 6px);
+  gap: var(--bubble-inner-gap, 5px);
+}
+
+/* The wallpaper sits under the bubbles, fixed to the viewport so it does not
+   crawl as the thread scrolls. */
+:root[data-wallpaper] .messages {
+  background-image: var(--chat-wallpaper, none);
+  background-size: cover;
+  background-position: center;
+  background-attachment: fixed;
+}
+
+/* Power saving: the components do not read tweb's liteMode, so the two flags
+   that are purely visual are enforced here. */
+:root[data-lite-animations] * {
+  animation-duration: 0.01ms !important;
+  transition-duration: 0.01ms !important;
+}
+
+:root[data-lite-blur] {
+  --blur: 0px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Console density                                                     */
+/*                                                                     */
+/* An appearance option, not a separate theme: the same markup drops    */
+/* its bubbles and becomes an aligned monospace grid — timestamp,       */
+/* sender, text — so a busy chat can be scanned in one eye movement.    */
+/*                                                                     */
+/* Every selector carries both attributes so it outranks the skin above */
+/* whatever the two have in common: the prefix is one attribute heavier */
+/* than the matching `:root[data-ui='native']` rule, and this block is  */
+/* last in the file.                                                    */
+/* ------------------------------------------------------------------ */
+:root[data-ui='native'][data-density='console'] {
+  --bubble-in: transparent;
+  --pane: var(--bg-solid);
+  --pane-radius: 0px;
+  --bubble-radius: 4px;
+  --blur: 0px;
+  --field: none;
+  --bg-elevated: var(--bg-solid);
+  --bubble-shadow: none;
+  font-size: 13px;
+}
+
+:root[data-ui='native'][data-density='console'] .shell {
+  gap: 0;
+  padding: 0;
+}
+
+:root[data-ui='native'][data-density='console'] .shell > section {
+  background: var(--bg);
+}
+
+:root[data-ui='native'][data-density='console'] body {
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
+}
+
+:root[data-ui='native'][data-density='console'] .messages {
+  gap: 1px;
+  padding: 10px 12px;
+  background-image: none;
+}
+
+/* Console density is already one line per message: runs add nothing there. */
+:root[data-ui='native'][data-density='console'] .messages > .line + .line,
+:root[data-ui='native'][data-density='console'] .messages > .line.out:has(+ .line.out),
+:root[data-ui='native'][data-density='console'] .messages > .line:not(.out):has(+ .line:not(.out) > .line-avatar.hidden) {
+  margin-top: 0;
+}
+
+/* Rows, not bubbles: the sender column lines up down the whole thread. Outgoing
+   rows must not right-justify, or their columns shift out of the grid. */
+:root[data-ui='native'][data-density='console'] .messages .line,
+:root[data-ui='native'][data-density='console'] .messages .line.out {
+  align-items: baseline;
+  justify-content: flex-start;
+  gap: 8px;
+}
+
+:root[data-ui='native'][data-density='console'] .line-avatar {
+  display: none;
+}
+
+:root[data-ui='native'][data-density='console'] .messages .bubble,
+:root[data-ui='native'][data-density='console'] .messages .bubble.out {
+  max-width: 100%;
+  width: 100%;
+  padding: 1px 0;
+  background: none;
+  border: none;
+  border-radius: 0;
+  color: inherit;
+  display: grid;
+  /* time · sender · text, so all three line up down the whole thread */
+  grid-template-columns: 78px 104px minmax(0, 1fr);
+  gap: 2px 10px;
+  align-items: baseline;
+  box-shadow: none;
+}
+
+:root[data-ui='native'][data-density='console'] .messages .bubble .author {
+  grid-column: 2;
+  grid-row: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--accent);
+  font-weight: 400;
+}
+
+:root[data-ui='native'][data-density='console'] .messages .bubble.out::before {
+  content: 'you';
+  grid-column: 2;
+  grid-row: 1;
+  color: var(--accent);
+}
+
+:root[data-ui='native'][data-density='console'] .messages .bubble .text,
+:root[data-ui='native'][data-density='console'] .messages .bubble .reply-quote,
+:root[data-ui='native'][data-density='console'] .messages .bubble .webpage,
+:root[data-ui='native'][data-density='console'] .messages .bubble .poll,
+:root[data-ui='native'][data-density='console'] .messages .bubble .reactions,
+:root[data-ui='native'][data-density='console'] .messages .bubble .frame,
+:root[data-ui='native'][data-density='console'] .messages .bubble .file,
+:root[data-ui='native'][data-density='console'] .messages .bubble .read-by {
+  grid-column: 3;
+}
+
+/* The stamp becomes the leading time column; its buttons stay hover-only. */
+:root[data-ui='native'][data-density='console'] .messages .bubble .stamp {
+  grid-column: 1;
+  grid-row: 1;
+  justify-content: flex-start;
+  gap: 6px;
+  opacity: 0.55;
+  color: inherit;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+:root[data-ui='native'][data-density='console'] .messages .bubble .stamp .reply-btn,
+:root[data-ui='native'][data-density='console'] .messages .bubble .stamp .ticks,
+:root[data-ui='native'][data-density='console'] .messages .bubble .stamp .views,
+:root[data-ui='native'][data-density='console'] .messages .bubble .stamp .replies {
+  position: absolute;
+  right: 12px;
+  background: var(--bg-solid);
+  padding-left: 6px;
+}
+
+:root[data-ui='native'][data-density='console'] .messages .bubble {
+  position: relative;
+}
+
+:root[data-ui='native'][data-density='console'] .messages .bubble .frame {
+  max-width: 220px;
+}
+
+:root[data-ui='native'][data-density='console'] .sticker-bubble,
+:root[data-ui='native'][data-density='console'] .sticker-bubble.out {
+  align-self: flex-start;
+  justify-items: start;
+  transform: scale(0.5);
+  transform-origin: left center;
+  margin: -26px 0;
+}
+
+/* One line per chat in the list. */
+:root[data-ui='native'][data-density='console'] .row-button {
+  padding: 4px 10px;
+  gap: 8px;
+}
+
+:root[data-ui='native'][data-density='console'] .row-button .avatar {
+  width: 16px !important;
+  height: 16px !important;
+  border-radius: 3px;
+  font-size: 9px !important;
+}
+
+:root[data-ui='native'][data-density='console'] .row-button .meta {
+  grid-auto-flow: column;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: baseline;
+  gap: 8px;
+}
+
+:root[data-ui='native'][data-density='console'] .row-button .preview {
+  display: none;
+}
+
+:root[data-ui='native'][data-density='console'] .row-button .title {
+  font-weight: 400;
+  text-transform: lowercase;
+}
+
+:root[data-ui='native'][data-density='console'] .row-button .time {
+  display: none;
+}
+
+/* Signal dot in place of the avatar: filled when the chat has activity. */
+:root[data-ui='native'][data-density='console'] .row-button .avatar {
+  width: 8px !important;
+  height: 8px !important;
+  border-radius: 50% !important;
+  font-size: 0 !important;
+  background: color-mix(in srgb, var(--text) 35%, transparent) !important;
+}
+
+:root[data-ui='native'][data-density='console'] .row-button .avatar img {
+  display: none;
+}
+
+:root[data-ui='native'][data-density='console'] .row-button:has(.badge) .avatar {
+  background: var(--accent) !important;
+}
+
+/* Uppercase headers, terminal-style. */
+:root[data-ui='native'][data-density='console'] header {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 11px;
+}
+
+:root[data-ui='native'][data-density='console'] .badge,
+:root[data-ui='native'][data-density='console'] .folder-badge {
+  font-variant-numeric: tabular-nums;
+  background: transparent;
+  color: var(--accent);
+  padding: 0;
+  min-width: 0;
+  height: auto;
+}
+
+:root[data-ui='native'][data-density='console'] .day-divider,
+:root[data-ui='native'][data-density='console'] .unread-divider {
+  border-radius: 0;
+  background: none;
+  border-top: 1px solid var(--border);
+  align-self: stretch;
+  text-align: left;
+  padding-left: 0;
+  color: var(--text-dim);
+  backdrop-filter: none;
+}
+
+/* At console density the per-message action row is noise on every line —
+   reveal it on hover instead, the way a dense client would. */
+:root[data-ui='native'][data-density='console'] .messages .bubble .stamp .reply-btn,
+:root[data-ui='native'][data-density='console'] .messages .bubble .stamp .edited {
+  visibility: hidden;
+}
+
+:root[data-ui='native'][data-density='console'] .messages .bubble:hover .stamp .reply-btn,
+:root[data-ui='native'][data-density='console'] .messages .bubble:hover .stamp .edited {
+  visibility: visible;
+}
+
+:root[data-ui='native'][data-density='console'] form {
+  margin: 0;
+  padding: 8px 12px;
+  gap: 8px;
+  border: none;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--bg);
+  box-shadow: none;
+}
+
+:root[data-ui='native'][data-density='console'] form button[type='submit'] {
+  border-radius: 4px;
+}
+
+:root[data-ui='native'][data-density='console'] form textarea {
+  font-family: inherit;
+}
+
+/* ------------------------------------------------------------------ */
+/* Phones                                                              */
+/*                                                                     */
+/* One pane at a time, no hairline between them, and the composer       */
+/* pinned to the safe area. Chat.css owns the pane switch itself        */
+/* (`.show-sidebar` / `.show-chat`); this only re-dresses it.           */
+/* ------------------------------------------------------------------ */
+@media (max-width: 860px) {
+  :root[data-ui='native'] .shell > aside:first-child,
+  :root[data-ui='native'] .shell > aside:not(:first-child) {
+    border-right: none;
+    border-left: none;
+  }
+
+  :root[data-ui='native'] .shell > section > header,
+  :root[data-ui='native'] .shell > aside > header {
+    padding-left: max(8px, env(safe-area-inset-left));
+    padding-right: max(8px, env(safe-area-inset-right));
+  }
+
+  :root[data-ui='native'] .back-mobile {
+    display: grid;
+  }
+
+  :root[data-ui='native'] .messages {
+    padding: 10px 8px 6px;
+  }
+
+  :root[data-ui='native'] .messages .bubble {
+    max-width: 86%;
+    font-size: 16px;
+  }
+
+  /* The composer sits on the home-indicator inset rather than behind it. */
+  :root[data-ui='native'] .shell > section > form {
+    margin: 0 8px calc(8px + env(safe-area-inset-bottom));
+  }
+
+  :root[data-ui='native'] .to-bottom {
+    right: 12px;
+    bottom: calc(78px + env(safe-area-inset-bottom));
+  }
+
+  :root[data-ui='native'] .chat-notice,
+  :root[data-ui='native'] button.error {
+    bottom: calc(76px + env(safe-area-inset-bottom));
+  }
+
+  /* A phone header is the peer, tappable across its whole width. */
+  :root[data-ui='native'] .peer-head {
+    padding: 2px 4px;
+  }
+
+  :root[data-ui='native'] .row-button {
+    padding: 9px 12px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }

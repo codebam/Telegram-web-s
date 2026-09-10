@@ -14,10 +14,15 @@ const DENSITY_KEY = 'tweb-svelte:density';
 const ACCENT_KEY = 'tweb-svelte:accent';
 const SCHEDULE_KEY = 'tweb-svelte:nightSchedule';
 
+/**
+ * The accent presets offered in Settings → Appearance. Blue is first because it
+ * is the default, and it is Telegram's own blue — the skin in `styles/app.css`
+ * is built around it, and every other entry is an alternative identity.
+ */
 export const ACCENTS = [
+  {name: 'Blue', value: '#3390ec'},
   {name: 'Iris', value: '#6e63ff'},
   {name: 'Indigo', value: '#4f46e5'},
-  {name: 'Blue', value: '#3390ec'},
   {name: 'Teal', value: '#0f9d8f'},
   {name: 'Violet', value: '#8b5cf6'},
   {name: 'Rose', value: '#e5484d'},
@@ -108,7 +113,7 @@ export function applyTheme(mode: ThemeMode = getThemeMode()) {
   const dark = resolved === 'dark' ||
     (resolved === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
   document.querySelector('meta[name="theme-color"]')
-    ?.setAttribute('content', dark ? '#0f1216' : '#ffffff');
+    ?.setAttribute('content', dark ? '#17212b' : '#ffffff');
 }
 
 /** Which of the two palettes is on screen right now — wallpapers pick per side. */

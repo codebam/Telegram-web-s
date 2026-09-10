@@ -66,10 +66,12 @@ export function setBubbleSpacing(spacing: BubbleSpacing) {
 export function applyBubbleSpacing(spacing: BubbleSpacing = getBubbleSpacing()) {
   const root = document.documentElement;
   const compact = spacing === 'compact';
-  root.style.setProperty('--bubble-gap', compact ? '3px' : '8px');
-  root.style.setProperty('--bubble-padding', compact ? '4px 10px' : '8px 12px');
-  root.style.setProperty('--bubble-inner-gap', compact ? '3px' : '6px');
-  root.style.setProperty('--messages-padding', compact ? '10px 14px' : '18px');
+  // The roomy numbers are Telegram's own: a 6px gap between bubbles, 11px of
+  // horizontal padding, and 16/20px of breathing room around the thread.
+  root.style.setProperty('--bubble-gap', compact ? '2px' : '6px');
+  root.style.setProperty('--bubble-padding', compact ? '4px 10px 3px' : '7px 11px 6px');
+  root.style.setProperty('--bubble-inner-gap', compact ? '4px' : '5px');
+  root.style.setProperty('--messages-padding', compact ? '10px 14px 6px' : '16px 20px 10px');
 }
 
 /* ------------------------------------------------------------------ */

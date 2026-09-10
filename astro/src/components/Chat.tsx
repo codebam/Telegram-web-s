@@ -41,6 +41,7 @@ import {tick} from '$lib/tick';
 
 import {Avatar} from './Avatar';
 import {Glyph} from './Glyph';
+import {Logo} from './Logo';
 import {ChatInfo} from './ChatInfo';
 import {ChecklistBubble} from './ChecklistBubble';
 import {Dice} from './Dice';
@@ -576,6 +577,17 @@ export function Chat() {
   const showSidebarOnMobile = useSignal(true);
   const showSettings = useSignal(false);
   const showAccounts = useSignal(false);
+
+  /*
+   * The shell has one column for a side panel, so Settings and a profile cannot
+   * both be open: a second one would wrap into a new grid row and tear the layout
+   * apart. Settings closes the profile itself (see its button); this is the other
+   * direction — a profile opened from anywhere at all (a sender's photo, a
+   * mention, an inline button) closes Settings.
+   */
+  useSignalEffect(() => {
+    if(profilePeerId.value !== null || showInfo.value) showSettings.value = false;
+  });
   /** A join-chat / add-folder invite awaiting confirmation. */
   const linkSheet = useSignal<Extract<LinkAction, {type: 'joinChat'} | {type: 'addList'}> | null>(null);
   /** The mini app currently hosted in an iframe, null when none is open. */
@@ -4214,7 +4226,16 @@ export function Chat() {
       >
         <aside>
           <header>
-            <button class="icon-button settings-open" onClick={() => (showSettings.value = true)} aria-label="Settings"><Glyph name="settings" /></button>
+            <button
+              class="icon-button settings-open"
+              onClick={() => {
+                showSettings.value = true;
+                // One side panel at a time — see the effect next to showSettings.
+                showInfo.value = false;
+                profilePeerId.value = null;
+              }}
+              aria-label="Settings"
+            ><Glyph name="settings" /></button>
             {sublistOpen.value ? (
               <>
                 {/* Leaving the sublist leaves the peer entirely, so the open thread has
@@ -4615,6 +4636,7 @@ export function Chat() {
           ) : null}
           {activePeerId.value === null || (sublistOpen.value && !topicOpen.value) ? (
             <div class="empty">
+              <div class="empty-logo" aria-hidden="true"><Logo size={72} /></div>
               <p class="muted">
                 {topicListOpen.value ? 'Select a topic' : savedListOpen.value ? 'Select a saved chat' : 'Select a chat'}
               </p>
@@ -4639,8 +4661,22 @@ export function Chat() {
             <>
               <header>
                 <button class="back-mobile" onClick={() => (showSidebarOnMobile.value = true)} aria-label="Back">←</button>
-                <button class="title-button" onClick={() => (showInfo.value = !showInfo.value)}
-                >{activeTitle.value}{activePeerId.value !== null && <EmojiStatus peerId={activePeerId.value} size={16} />}</button>
+                {/* The peer block every Telegram client opens a chat with: photo,
+                    name, and the line under it. Tapping it opens the profile. */}
+                <button class="title-button peer-head" onClick={() => (showInfo.value = !showInfo.value)}>
+                  {activePeerId.value !== null && <Avatar peerId={activePeerId.value} title={activeTitle.value} size={42} />}
+                  <span class="peer-titles">
+                    <span class="peer-name">
+                      {activeTitle.value}
+                      {activePeerId.value !== null && <EmojiStatus peerId={activePeerId.value} size={16} />}
+                    </span>
+                    <span class={['presence', 'peer-status', typingNames.value.length && 'typing'].filter(Boolean).join(' ')}>
+                      {typingNames.value.length
+                        ? `${typingNames.value.join(', ')} ${typingNames.value.length > 1 ? 'are' : 'is'} typing…`
+                        : presence.value}
+                    </span>
+                  </span>
+                </button>
                 {threadKind.value === 'comments' ? (
                   <button class="thread-tag thread-back" onClick={leaveCommentThread} title="Back to the post">
                     {threadCommentCount.value
@@ -4652,11 +4688,9 @@ export function Chat() {
                 ) : threadKind.value === 'saved' ? (
                   <span class="thread-tag">saved</span>
                 ) : null}
-                <span class="presence">
-                  {typingNames.value.length
-                    ? `${typingNames.value.join(', ')} ${typingNames.value.length > 1 ? 'are' : 'is'} typing…`
-                    : presence.value}
-                </span>
+                {/* Keeps the thread tag beside the name and the actions at the
+                    far end, whatever combination of the two is on screen. */}
+                <span class="peer-gap"></span>
                 {activeIsUser.value && !activeIsSelf.value ? (
                   <button class="icon-button" onClick={placeCall} aria-label="Call"><Glyph name="call" /></button>
                 ) : null}
@@ -5468,7 +5502,7 @@ export function Chat() {
                   ) : null}
                   <button
                     type="button"
-                    class="attach"
+                    class="attach emoji"
                     onClick={() => (showPicker.value = !showPicker.value)}
                     aria-label="Emoji, stickers and GIFs"
                     disabled={!!editing.value}

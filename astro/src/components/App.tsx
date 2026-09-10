@@ -12,6 +12,7 @@ import {useEffect, useRef} from 'preact/hooks';
 import {useSignal} from '@preact/signals';
 
 import {Chat} from './Chat';
+import {Logo} from './Logo';
 import {QrLogin} from './QrLogin';
 import {bootTelegram} from '$lib/telegram/client';
 import {GIT_COMMIT, GIT_COMMIT_SHORT, GIT_COMMIT_URL} from '$lib/buildInfo';
@@ -186,7 +187,7 @@ export function App() {
       <div class="card">
         {step.value === 'boot' && (
           <>
-            <div class="logo"></div>
+            <div class="logo"><Logo size={48} /></div>
             <h1>Connecting…</h1>
             <p class="sub">Starting the MTProto worker.</p>
           </>
@@ -194,7 +195,7 @@ export function App() {
 
         {step.value === 'phone' && (
           <>
-            <div class="logo"></div>
+            <div class="logo"><Logo size={48} /></div>
             <h1>Sign in to Web S</h1>
             <p class="sub">Enter your phone number in international format.</p>
             <form onSubmit={submitPhone}>
@@ -230,7 +231,7 @@ export function App() {
 
         {step.value === 'code' && (
           <>
-            <div class="logo"></div>
+            <div class="logo"><Logo size={48} /></div>
             <h1>{sentCode.value?.phone_number}</h1>
             <p class="sub">
               We sent a {sentCode.value ? codeLength(sentCode.value) : 5}-digit code to your other devices.
@@ -257,7 +258,7 @@ export function App() {
 
         {step.value === 'password' && (
           <>
-            <div class="logo"></div>
+            <div class="logo"><Logo size={48} /></div>
             <h1>Two-step verification</h1>
             <p class="sub">{passwordHint.value ? `Hint: ${passwordHint.value}` : 'Enter your cloud password.'}</p>
             <form onSubmit={submitPassword}>
