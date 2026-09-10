@@ -1893,6 +1893,21 @@ export async function pinMessage(peerId: number, mid: number, unpin = false): Pr
   await managers.appMessagesManager.updatePinnedMessage(peerId, mid, unpin);
 }
 
+/**
+ * Whether this message can be edited at all — Telegram's own rules, which no
+ * client-side flag can express: the 48-hour window for chats and groups, a
+ * forwarded message, a bot-authored one, a sticker or a round video. Asked when
+ * the message menu opens, because the answer needs the live config.
+ */
+export async function canEditMessage(peerId: number, mid: number): Promise<boolean> {
+  const {managers} = await bootTelegram();
+  const message = rawMessages.get(messageKey(peerId, mid)) ??
+    await managers.appMessagesManager.getMessageByPeer(peerId, mid);
+
+  if(!message) return false;
+  return !!(await managers.appMessagesManager.canEditMessage(message, 'text'));
+}
+
 export async function editMessage(
   peerId: number,
   mid: number,
@@ -2844,6 +2859,61 @@ export async function toggleMute(peerId: number, mute: boolean, threadId?: numbe
 export async function joinChat(peerId: number): Promise<void> {
   const {managers} = await bootTelegram();
   await managers.appChatsManager.joinPeer(peerId);
+}
+
+/** What a Clear History means for this chat — the description and the choice. */
+export type ClearHistoryInfo = {
+  can: boolean;
+  kind: 'saved' | 'user' | 'bot' | 'group' | 'megagroup' | 'broadcast';
+  /** Whether clearing can also apply to the other side, i.e. whether to offer it. */
+  canRevokeForBoth: boolean;
+};
+
+/**
+ * Whether this chat's history can be cleared, and what that would mean. The
+ * permission rules are tweb's own (`canClearHistory`), so they are asked rather
+ * than re-derived from the dialog flags — a member of a megagroup with no
+ * username may still clear it, an admin of one with a username may not.
+ */
+export async function clearHistoryInfo(peerId: number): Promise<ClearHistoryInfo> {
+  const {managers} = await bootTelegram();
+  const selfId = await getSelfId();
+  const peer = await getPeer(peerId);
+
+  if(!peer) return {can: false, kind: 'user', canRevokeForBoth: false};
+
+  const {default: canClear} = await import('@appManagers/utils/chats/canClearHistory');
+  const can = !!canClear(peer);
+
+  if(peer._ === 'user') {
+    // Saved Messages is its own kind: Telegram words it differently and offers no
+    // "also for them" — there is no other side.
+    const kind = peerId === selfId ? 'saved' : (peer.pFlags?.bot && !peer.pFlags?.support ? 'bot' : 'user');
+    return {
+      can,
+      kind,
+      canRevokeForBoth: (!peer.pFlags?.bot || !!peer.pFlags?.support) && !peer.pFlags?.deleted
+    };
+  }
+
+  if(peer._ === 'channel') {
+    const kind = peer.pFlags?.megagroup ? 'megagroup' : 'broadcast';
+    // Clearing a broadcast channel is always for everyone; a supergroup's members
+    // can only be included by its creator.
+    return {can, kind, canRevokeForBoth: kind === 'broadcast' ? true : !!peer.pFlags?.creator};
+  }
+
+  return {can, kind: 'group', canRevokeForBoth: !!peer.pFlags?.creator};
+}
+
+/**
+ * Empty a chat's history but keep the chat itself — `justClear` is what makes the
+ * difference: without it the manager drops the dialog entirely, which is
+ * `leaveOrDelete`, not this.
+ */
+export async function clearHistory(peerId: number, revoke = false): Promise<void> {
+  const {managers} = await bootTelegram();
+  await managers.appMessagesManager.flushHistory({peerId, justClear: true, revoke});
 }
 
 export async function leaveOrDelete(peerId: number): Promise<void> {

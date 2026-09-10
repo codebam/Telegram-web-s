@@ -49,14 +49,17 @@ import {
 import {
   clearRecentStickers,
   loadArchivedSets,
+  loadFavedStickers,
   loadFeaturedSets,
   loadInstalledSets,
   loadSetPreview,
+  onFavedStickersUpdate,
   removeRecentSticker,
   reorderSets,
   savedGifIds,
   searchGifs,
   searchStickerSets,
+  toggleFavedSticker,
   toggleSavedGif,
   toggleSetInstalled,
   type StickerSetInfo
@@ -118,6 +121,7 @@ export function Picker({onemoji, ondocument, oncustomemoji}: Props) {
   /* ---------- stickers ---------- */
 
   const setsView = useSignal<SetsView>('my');
+  const faved = useSignal<StickerItem[]>([]);
   const recent = useSignal<StickerItem[]>([]);
   const sets = useSignal<StickerSetInfo[]>([]);
   const featured = useSignal<StickerSetInfo[]>([]);
@@ -221,7 +225,11 @@ export function Picker({onemoji, ondocument, oncustomemoji}: Props) {
     } else if(next === 'stickers' && !recent.value.length && !sets.value.length) {
       loading.value = true;
       try {
-        [recent.value, sets.value] = await Promise.all([loadRecentStickers(), loadInstalledSets()]);
+        [faved.value, recent.value, sets.value] = await Promise.all([
+          loadFavedStickers(),
+          loadRecentStickers(),
+          loadInstalledSets()
+        ]);
       } finally {
         loading.value = false;
       }
@@ -241,6 +249,31 @@ export function Picker({onemoji, ondocument, oncustomemoji}: Props) {
     if(booted.current) return;
     booted.current = true;
     select('emoji');
+  }, []);
+
+  /*
+   * The favourites list is the account's, not the pane's: it changes when
+   * another client faves a sticker, and the manager reports that on
+   * `stickers_updated`. The unsubscribe has to be stored rather than returned
+   * directly because the listener is built asynchronously (see
+   * ScheduledMessages.tsx) — a component unmounted before the import resolved
+   * calls the unsubscribe itself.
+   */
+  useEffect(() => {
+    let unsubscribe: (() => void) | undefined;
+    let cancelled = false;
+
+    onFavedStickersUpdate((stickers) => {
+      if(!cancelled) faved.value = stickers;
+    }).then((off) => {
+      if(cancelled) off();
+      else unsubscribe = off;
+    });
+
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
   }, []);
 
   /*
@@ -492,6 +525,30 @@ export function Picker({onemoji, ondocument, oncustomemoji}: Props) {
     try {
       await clearRecentStickers();
     } catch (err) {}
+  }
+
+  /** Drives the tile's star: filled when the sticker is already a favourite. */
+  function isFaved(sticker: StickerItem) {
+    return faved.value.some((s) => s.docId === sticker.docId);
+  }
+
+  /**
+   * Fave / un-fave a sticker, optimistically — the same shape as `toggleGif`:
+   * the tile flips at once and the previous list comes back if the call throws.
+   * A new favourite goes to the front, which is where the manager puts it.
+   */
+  async function toggleFavourite(sticker: StickerItem) {
+    const remove = isFaved(sticker);
+    const previous = faved.value;
+    faved.value = remove ?
+      faved.value.filter((s) => s.docId !== sticker.docId) :
+      [sticker, ...faved.value];
+
+    try {
+      await toggleFavedSticker(sticker.docId, remove);
+    } catch (err) {
+      faved.value = previous;
+    }
   }
 
   function onGifQuery() {
@@ -786,6 +843,31 @@ export function Picker({onemoji, ondocument, oncustomemoji}: Props) {
     } else {
       pane = (
         <>
+          {/* Favourites come before Recent, and an empty list renders nothing at
+              all — no header, no grid, the same as upstream's hidden category. */}
+          {faved.value.length > 0 && (
+            <>
+              <p class="group">Favourites</p>
+              <div class="sticker-grid">
+                {faved.value.map((sticker) => (
+                  <div key={sticker.docId} class="recent-tile">
+                    <button onClick={() => ondocument(sticker.docId)}>
+                      <Sticker sticker={sticker} size={64} />
+                    </button>
+                    {/* The GIF tiles' ☆/★ button: `.forget` is the corner class
+                        a `.recent-tile` reveals on hover, and a filled star on a
+                        favourite means the click takes it back out. */}
+                    <button
+                      class="forget"
+                      title="Remove from favourites"
+                      aria-label="Remove from favourites"
+                      onClick={() => toggleFavourite(sticker)}
+                    >★</button>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
           {recent.value.length > 0 && (
             <>
               <p class="group">
@@ -799,6 +881,18 @@ export function Picker({onemoji, ondocument, oncustomemoji}: Props) {
                     <button onClick={() => ondocument(sticker.docId)}>
                       <Sticker sticker={sticker} size={64} />
                     </button>
+                    {/* Our picker has no context menu, so the tile carries the
+                        fave toggle upstream puts behind a right-click. It is a
+                        `.forget` for the same hover reason as above, offset by
+                        an inline `right` so the two corner buttons don't stack
+                        on one another. */}
+                    <button
+                      class="forget"
+                      style={{right: '20px'}}
+                      title={isFaved(sticker) ? 'Remove from favourites' : 'Add to favourites'}
+                      aria-label={isFaved(sticker) ? 'Remove from favourites' : 'Add to favourites'}
+                      onClick={() => toggleFavourite(sticker)}
+                    >{isFaved(sticker) ? '★' : '☆'}</button>
                     <button
                       class="forget"
                       title="Remove from recent"
@@ -842,7 +936,9 @@ export function Picker({onemoji, ondocument, oncustomemoji}: Props) {
               )}
             </Fragment>
           ))}
-          {!recent.value.length && !sets.value.length && (
+          {/* Favourites count as stickers: a pane showing the favourites grid
+              must not also say there are none. */}
+          {!faved.value.length && !recent.value.length && !sets.value.length && (
             <p class="muted">No stickers.</p>
           )}
         </>

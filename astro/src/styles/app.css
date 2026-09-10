@@ -603,3 +603,59 @@ button {
 .message-translation.pending {
   opacity: 0.6;
 }
+
+/* The confirmation line for actions with no visible effect of their own. */
+.chat-notice {
+  position: fixed;
+  left: 50%;
+  bottom: 76px;
+  transform: translateX(-50%);
+  z-index: 70;
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-solid);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+}
+
+/* The report flow: the server's option list, then its comment step. */
+.report-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.report-options button {
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: none;
+  color: var(--text);
+  font-size: 14px;
+  text-align: start;
+  cursor: pointer;
+}
+
+.report-options button:hover:not(:disabled) {
+  background: var(--bg-elevated);
+}
+
+.report-options button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.report-comment {
+  width: 100%;
+  margin: 8px 0 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-size: 14px;
+}

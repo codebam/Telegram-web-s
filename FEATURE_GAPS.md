@@ -55,13 +55,19 @@ Everything here is verified by `pnpm typecheck:astro`, the 456 guard tests,
 | Formatted dates, collapsible quotes, code blocks | `messageEntityFormattedDate` renders as a live-ticking relative date (or an absolute one) and copies on click; a collapsed blockquote clips to three lines and expands; a code block gets its language label and a copy header. |
 | Message menu reachability | The menu now anchors by its bottom edge when the click is in the lower half of the screen — with this many actions, its last entries used to fall off the bottom of the viewport. |
 
-Remaining from the P1 table below: copy-message-link and reporting a *specific*
-message, repeating scheduled messages, captions-above-media, favourite stickers,
-animated single-emoji messages, emoji suggestions, editing media messages,
-typing-action variety, and Clear History for a normal chat. The P2 areas
-(group calls, RTMP, conferences, star-gift actions, sign-up, passkey login,
-passcode lock, in-app browser and Instant View, channel statistics, settings
-search) are untouched.
+| Copy Message Link | A t.me link to one message, from the message menu: a public channel by username, a private one by its short id, a forum topic with its root in the path and a comment with the post it comments on. The seam now has one builder — `viewer.ts` and `reply.ts` each had their own, and only one of them converted the local message id, so the link the media viewer copied was wrong in every channel. |
+| Report a message | From the message menu on a channel's or supergroup's messages, with the server's own reason list (never a hardcoded one) and its optional comment step. Until now the client could only report a *peer*, by sending an empty message-id list. |
+| Editing a media message | Edit is offered on a photo, video, document or checklist by Telegram's own rule rather than our own flag, so a forwarded message, a bot-authored one, a sticker or one older than the chat's edit window is excluded; the composer edits the caption, and an empty caption is a valid edit. Replacing the file itself is not wired up yet. |
+| Clear History | Two entries in a chat's context menu — for me, and for everyone where the server's rules allow it — each behind an "are you sure?" prompt, keeping the chat itself (`justClear` is what separates this from Delete/Leave). The permission and the wording come from tweb's own rules per chat kind. |
+| Favourite stickers | A Favourites grid at the top of the picker's sticker pane, hidden entirely while empty, with a star on the recent and favourite tiles; the list and the live `stickers_updated` refresh come from the manager. |
+| Repeating schedules | A Repeat row in the send-options sheet (Never, daily, weekly, every 2 weeks, monthly, every 3/6 months, yearly), gated behind Premium the way Telegram's own picker is; the period is shown on the scheduled row, and editing a repeating message keeps its period (upstream drops it). |
+
+Remaining from the P1 table below: captions-above-media, animated single-emoji
+messages, emoji suggestions, typing-action variety, replacing the *file* of a
+media message (the caption can be edited today), and reporting several messages
+at once (the flow sends one). The P2 areas (group calls, RTMP, conferences,
+star-gift actions, sign-up, passkey login, passcode lock, in-app browser and
+Instant View, channel statistics, settings search) are untouched.
 
 ## P0 — messages that render wrong or not at all
 
@@ -148,9 +154,9 @@ colour picker (fixed 10-swatch palette) and a rotation wheel.
 The first slice is done (see "What has landed since this audit" above). The next
 natural slices, smallest first:
 
-1. **The rest of the P1 table** — copy-message-link and reporting a specific
-   message, editing a media message, Clear History for a normal chat, repeating
-   scheduled messages, favourite stickers.
+1. **The last of the P1 table** — captions-above-media, animated single-emoji
+   messages, emoji suggestions, typing-action variety, replacing a media
+   message's file, reporting a multi-selection.
 2. **Chat administration** — six settings have no UI at all (content protection,
    hidden members, join-to-send, pre-history, anti-spam, group location), the
    admin log cannot be filtered or paged, and there is no bulk delete by user or

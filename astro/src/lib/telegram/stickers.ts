@@ -1,7 +1,8 @@
 /**
- * Sticker-set and GIF *management* — installing, archiving, searching and
- * saving. Plain browsing (recent stickers, installed sets, saved GIFs) lives in
- * `chats.ts`; this module is everything that changes what the account has.
+ * Sticker-set and GIF *management* — installing, archiving, searching, saving
+ * and the favourites list. Plain browsing (recent stickers, installed sets,
+ * saved GIFs) lives in `chats.ts`; this module is everything that changes what
+ * the account has.
  *
  * Every call goes through a manager on the shared worker. The raw `stickerSet`
  * objects the managers hand back are kept here because `toggleStickerSet` and
@@ -180,6 +181,47 @@ export async function removeRecentSticker(docId: string): Promise<void> {
 export async function clearRecentStickers(): Promise<void> {
   const {managers} = await bootTelegram();
   await managers.appStickersManager.clearRecentStickers();
+}
+
+/* ------------------------------------------------------------------ */
+/* Favourite stickers                                                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The account's favourite stickers ("Favorites"), newest first — the order the
+ * manager keeps them in. Going through `toSticker` is what registers every
+ * document in `chats.ts`'s doc cache, so a favourited sticker is still sendable
+ * and drawable after a reload; `loadRecentStickers` does the same.
+ */
+export async function loadFavedStickers(): Promise<StickerItem[]> {
+  const {managers} = await bootTelegram();
+  const docs = await managers.appStickersManager.getFavedStickersStickers();
+  return (docs ?? []).map(toSticker);
+}
+
+/** Faves a sticker, or un-faves it when `remove` is set. */
+export async function toggleFavedSticker(docId: string, remove: boolean): Promise<void> {
+  const {managers} = await bootTelegram();
+  await managers.appStickersManager.faveSticker(docId, remove);
+}
+
+/**
+ * Fires with the refreshed list whenever the favourites change: the manager's
+ * own `stickers_updated {type: 'faved'}` follows both a fave made here and the
+ * same change made on another client, so one listener covers both.
+ */
+export async function onFavedStickersUpdate(
+  callback: (stickers: StickerItem[]) => void
+): Promise<() => void> {
+  const {default: rootScope} = await import('@lib/rootScope');
+
+  const handler = ({type, stickers}: any) => {
+    if(type !== 'faved') return;
+    callback((stickers ?? []).map(toSticker));
+  };
+
+  rootScope.addEventListener('stickers_updated', handler);
+  return () => rootScope.removeEventListener('stickers_updated', handler);
 }
 
 /* ------------------------------------------------------------------ */

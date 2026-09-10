@@ -21,9 +21,60 @@ export const SEND_WHEN_ONLINE = 0x7FFFFFFE;
 /** The server rejects anything scheduled less than ~10s out. */
 export const MIN_SCHEDULE_LEAD_SECONDS = 10;
 
+const SECONDS_IN_DAY = 86400;
+
+/**
+ * The periods a scheduled message may repeat on, in the order upstream offers
+ * them (`REPEAT_OPTIONS` in components/popups/scheduleSendingPopup.tsx). `0` is
+ * "Never" — the send paths turn it into `undefined`, so it never reaches the
+ * API.
+ */
+export const REPEAT_PERIOD_OPTIONS: {value: number; label: string}[] = [
+  {value: 0, label: 'Never'},
+  {value: SECONDS_IN_DAY, label: 'Daily'},
+  {value: 7 * SECONDS_IN_DAY, label: 'Weekly'},
+  {value: 14 * SECONDS_IN_DAY, label: 'Every 2 weeks'},
+  {value: 30 * SECONDS_IN_DAY, label: 'Monthly'},
+  {value: 91 * SECONDS_IN_DAY, label: 'Every 3 months'},
+  {value: 182 * SECONDS_IN_DAY, label: 'Every 6 months'},
+  {value: 365 * SECONDS_IN_DAY, label: 'Every year'}
+];
+
+/**
+ * How a repeating message describes itself, as a phrase to follow "repeats".
+ * These are the strings upstream's messageRender.ts prints from
+ * `Schedule.Repeated.*`; this client has no lang pack, so they are literals.
+ */
+const REPEAT_LABELS: {period: number; label: string}[] = [
+  {period: SECONDS_IN_DAY, label: 'daily'},
+  {period: 7 * SECONDS_IN_DAY, label: 'weekly'},
+  {period: 14 * SECONDS_IN_DAY, label: 'every 2 weeks'},
+  {period: 30 * SECONDS_IN_DAY, label: 'monthly'},
+  {period: 91 * SECONDS_IN_DAY, label: 'every 3 months'},
+  {period: 182 * SECONDS_IN_DAY, label: 'every 6 months'},
+  {period: 365 * SECONDS_IN_DAY, label: 'every year'}
+];
+
+/**
+ * The nearest period at or above `period`, so a value the server rounded still
+ * reads as a phrase; an off-map value falls back to the longest one. Upstream
+ * looks it up exactly this way. Only meaningful for `period > 0` — the caller
+ * decides whether the message repeats at all.
+ */
+export function repeatLabel(period: number): string {
+  const entry = REPEAT_LABELS.find((option) => option.period >= period) ??
+    REPEAT_LABELS[REPEAT_LABELS.length - 1];
+  return entry.label;
+}
+
 export type SendOptions = {
   /** Unix seconds, or {@link SEND_WHEN_ONLINE}. Unset sends immediately. */
   scheduleDate?: number;
+  /**
+   * Seconds between repeats of a scheduled message, 0/undefined to send once.
+   * Premium-only, enforced by the server — see the gate in SendOptionsSheet.
+   */
+  scheduleRepeatPeriod?: number;
   /** Deliver without a notification sound. */
   silent?: boolean;
   /** Effect document id from {@link loadEffects}. */
@@ -63,6 +114,7 @@ export async function sendMessageWithOptions(
     replyToQuote: args.replyToQuote,
     entities: args.entities,
     scheduleDate: args.scheduleDate,
+    scheduleRepeatPeriod: args.scheduleRepeatPeriod || undefined,
     silent: args.silent || undefined,
     effect: args.effect || undefined,
     sendAsPeerId: args.sendAsPeerId || undefined
@@ -109,6 +161,8 @@ export type ScheduledItem = {
   date: number;
   /** True when the message is queued for "when the recipient is online". */
   whenOnline: boolean;
+  /** Seconds between repeats, 0 when the message is sent once. */
+  repeatPeriod: number;
   /** Short label for media-only messages ('Photo', 'File', …), '' otherwise. */
   mediaLabel: string;
   silent: boolean;
@@ -142,6 +196,7 @@ function toScheduled(message: any): ScheduledItem {
     text: message.message ?? '',
     date: message.date,
     whenOnline: message.date === SEND_WHEN_ONLINE,
+    repeatPeriod: message.schedule_repeat_period ?? 0,
     mediaLabel: mediaLabelOf(message),
     silent: !!message.pFlags?.silent
   };
@@ -190,6 +245,11 @@ export async function deleteScheduled(peerId: number, mids: number[]): Promise<v
  * Rewrite a queued message. Passing `scheduleDate` also moves it in the queue;
  * omitting it keeps the existing time (the manager falls back to the message's
  * own date for scheduled messages).
+ *
+ * The message's repeat period is echoed back deliberately: upstream's plain
+ * text-edit path omits it, and the server then drops the repeat — so editing the
+ * text of a daily message would silently make it one-off. An edit here never
+ * changes the period, only preserves it.
  */
 export async function editScheduled(
   peerId: number,
@@ -203,7 +263,8 @@ export async function editScheduled(
 
   await managers.appMessagesManager.editMessage(message as any, text, {
     entities: options.entities,
-    scheduleDate: options.scheduleDate
+    scheduleDate: options.scheduleDate,
+    scheduleRepeatPeriod: (message as any).schedule_repeat_period || undefined
   });
 }
 

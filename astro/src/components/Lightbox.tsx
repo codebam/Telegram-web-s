@@ -34,11 +34,11 @@ import {
   loadViewerMedia,
   loadViewerThumb,
   mediaCount,
-  messageLink,
   videoQualities,
   type VideoQuality,
   type ViewerItem
 } from '$lib/telegram/viewer';
+import {messageLink} from '$lib/telegram/messageLink';
 import {staleUrlRetry} from '$lib/telegram/staleUrl';
 
 import './Lightbox.css';
@@ -380,17 +380,24 @@ export function Lightbox({
 
   async function copyLink() {
     if(!current.value) return;
-    const link = await messageLink(current.value.peerId, current.value.mid, threadId);
-    if(!link) {
+    // Inside a thread the link has to carry its root, and the viewer only knows
+    // the root's mid — the topic form is the one this media belongs to.
+    const link = await messageLink(
+      current.value.peerId,
+      current.value.mid,
+      threadId ? {kind: 'topic', rootMid: threadId} : undefined
+    );
+
+    if(!link.url) {
       flash('This chat has no public link');
       return;
     }
 
     try {
-      await navigator.clipboard.writeText(link);
+      await navigator.clipboard.writeText(link.url);
       flash('Link copied');
     } catch (err) {
-      flash(link);
+      flash(link.url);
     }
   }
 

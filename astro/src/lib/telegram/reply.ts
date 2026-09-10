@@ -14,9 +14,9 @@
  */
 
 import getPeerId from '@appManagers/utils/peers/getPeerId';
-import getServerMessageId from '@appManagers/utils/messageId/getServerMessageId';
 
 import {bootTelegram} from './client';
+import {messageLink} from './messageLink';
 
 /** The excerpt attached to a reply. `offset` is into the original's text. */
 export type ReplyQuote = {
@@ -238,7 +238,7 @@ export async function buildForwardInfo(message: any, selfId: number): Promise<Fo
   const peer = fromId && fromId !== selfId ? await getPeer(fromId) : null;
 
   const sourceMid = header.channel_post ?? 0;
-  const link = fromId && sourceMid ? await messageLink(fromId, sourceMid) : '';
+  const link = fromId && sourceMid ? (await messageLink(fromId, sourceMid)).url : '';
 
   return {
     title: hidden ?
@@ -254,28 +254,6 @@ export async function buildForwardInfo(message: any, selfId: number): Promise<Fo
   };
 }
 
-/**
- * Public link to a message. Peers with a username get the pretty form; a
- * private channel gets the `/c/` form, which only members can open. Anything
- * else — a user chat, a basic group — has no addressable message.
- */
-export async function messageLink(peerId: number, mid: number): Promise<string> {
-  if(!peerId || peerId > 0 || !mid) return '';
-
-  const {managers} = await bootTelegram();
-  const serverId = getServerMessageId(mid);
-
-  try {
-    const username = await managers.appPeersManager.getPeerUsername(peerId);
-    if(username) return `https://t.me/${username}/${serverId}`;
-
-    const chat: any = await managers.appPeersManager.getPeer(peerId);
-    if(chat?._ !== 'channel') return '';
-    return `https://t.me/c/${chat.id}/${serverId}`;
-  } catch(err) {
-    return '';
-  }
-}
 
 /**
  * A thumbnail for the message a reply points at. Resolved separately from the

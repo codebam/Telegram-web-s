@@ -7,6 +7,10 @@
  *    tracks signal reads and would never reload the queue for another chat;
  *  - `<svelte:window onkeydown={onKey}/>` is the `useEffect` at the end, which
  *    adds and removes the same listener.
+ *
+ * The "repeats …" suffix on the when line is a post-port addition: repeating
+ * scheduled messages have no Svelte original here. It mirrors the phrase
+ * upstream's messageRender.ts prints on the message's own row.
  */
 import {useEffect} from 'preact/hooks';
 import {useSignal} from '@preact/signals';
@@ -18,6 +22,7 @@ import {
   editScheduled,
   loadScheduled,
   onScheduledUpdate,
+  repeatLabel,
   sendScheduledNow,
   type ScheduledItem
 } from '$lib/telegram/sendOptions';
@@ -143,7 +148,7 @@ export function ScheduledMessages({peerId, title = '', onclose}: Props) {
               <div class="list">
                 {items.value.map((item) => (
                   <div class="row" key={item.mid}>
-                    <span class="when">{whenText(item)}{item.silent ? ' · silent' : ''}</span>
+                    <span class="when">{whenText(item)}{item.repeatPeriod ? ` · repeats ${repeatLabel(item.repeatPeriod)}` : ''}{item.silent ? ' · silent' : ''}</span>
 
                     {editingMid.value === item.mid ?
                       <>

@@ -449,23 +449,29 @@ function toStep(result: any): ReportStep {
   return {kind: 'done', title: 'Report sent', options: [], commentOptional: false};
 }
 
-/** Opens the report flow for the peer itself (no messages selected). */
-export async function startReport(peerId: number): Promise<ReportStep> {
+/**
+ * Opens the report flow. An empty `mids` reports the peer itself, which is what
+ * the profile pane does; passing message ids reports those messages instead, and
+ * every step of the flow has to send the same ids — the server's state machine is
+ * keyed to the peer and the id list.
+ */
+export async function startReport(peerId: number, mids: number[] = []): Promise<ReportStep> {
   const {managers} = await bootTelegram();
-  const result = await managers.appMessagesManager.reportMessages(peerId, [], new Uint8Array());
+  const result = await managers.appMessagesManager.reportMessages(peerId, mids, new Uint8Array());
   return toStep(result);
 }
 
 export async function submitReport(
   peerId: number,
   optionId: number,
-  comment = ''
+  comment = '',
+  mids: number[] = []
 ): Promise<ReportStep> {
   const {managers} = await bootTelegram();
   const option = reportOptions.get(optionId);
   if(!option) throw new Error('That report option expired');
 
-  const result = await managers.appMessagesManager.reportMessages(peerId, [], option, comment || undefined);
+  const result = await managers.appMessagesManager.reportMessages(peerId, mids, option, comment || undefined);
   return toStep(result);
 }
 

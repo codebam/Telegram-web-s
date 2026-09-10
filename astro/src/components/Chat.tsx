@@ -113,6 +113,9 @@ import {
 } from '$lib/telegram/links';
 import {
   clickSponsored,
+  canEditMessage,
+  clearHistory,
+  clearHistoryInfo,
   deleteMessage,
   deleteMessages,
   canPin,
@@ -167,6 +170,8 @@ import {
 } from '$lib/telegram/chats';
 import {sendContact} from '$lib/telegram/messageTypes';
 import {transcribeVoice, translateMessage} from '$lib/telegram/translation';
+import {messageLink, type MessageLinkThread} from '$lib/telegram/messageLink';
+import {startReport, submitReport, type ReportStep} from '$lib/telegram/profile';
 import {
   FOLDER_ID_ARCHIVE,
   getArchiveSummary,
@@ -506,6 +511,30 @@ export function Chat() {
   const translations = useSignal<Map<number, string>>(new Map());
   const transcripts = useSignal<Map<number, string>>(new Map());
   const busyMids = useSignal<Set<number>>(new Set());
+  /** A short-lived confirmation, for actions whose only result is a copy. */
+  const notice = useSignal('');
+  const noticeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  /**
+   * What Clear History would mean for the chat whose menu is open — loaded when
+   * that menu opens, because the permission is the server's to answer and the
+   * dialog's own flags cannot express it.
+   */
+  const clearInfo = useSignal<{peerId: number; can: boolean; canRevokeForBoth: boolean} | null>(null);
+  /**
+   * The report flow for a message, when one is running. The steps and their
+   * wording come from the server; this holds which message we are reporting and
+   * the option the user picked, because every step has to send both back.
+   */
+  const reportState = useSignal<{peerId: number; mids: number[]; step: ReportStep} | null>(null);
+  const reportComment = useSignal('');
+  const reportOptionId = useSignal(0);
+  const reportBusy = useSignal(false);
+  /**
+   * Whether the message whose menu is open can be edited — Telegram's own rules,
+   * which the client-side `editable` flag cannot express (the 48-hour window, a
+   * forwarded or bot-authored message, a sticker). Loaded when the menu opens.
+   */
+  const canEditHere = useSignal(false);
   /**
    * The channel's sponsored message. Telegram's API terms require third-party
    * clients to show these unmodified and to report views and clicks, so nothing
@@ -999,6 +1028,7 @@ export function Chat() {
       const oncontextmenu = (event: MouseEvent) => {
         event.preventDefault();
         messageMenu.value = {mid: currentMid, x: event.clientX, y: event.clientY};
+        refreshEditable(currentMid);
       };
 
       const ontouchstart = (event: TouchEvent) => {
@@ -1012,6 +1042,7 @@ export function Chat() {
           timer = null;
           node.addEventListener('click', swallowClick, true);
           messageMenu.value = {mid: currentMid, x: startX, y: startY};
+          refreshEditable(currentMid);
         }, 450);
       };
 
@@ -1768,6 +1799,206 @@ export function Chat() {
   function copyDate(unix: number) {
     const text = new Date(unix * 1000).toLocaleString();
     navigator.clipboard?.writeText(text).catch(() => {});
+  }
+
+  async function refreshEditable(mid: number) {
+    canEditHere.value = false;
+
+    const peerId = activePeerId.value;
+    if(peerId === null) return;
+
+    try {
+      const allowed = await canEditMessage(peerId, mid);
+      if(messageMenu.value?.mid === mid) canEditHere.value = allowed;
+    } catch (err) {
+      // No Edit entry rather than one that fails.
+    }
+  }
+
+  function flash(text: string) {
+    clearTimeout(noticeTimer.current);
+    notice.value = text;
+    noticeTimer.current = setTimeout(() => (notice.value = ''), 4000);
+  }
+
+  async function refreshClearInfo(peerId: number) {
+    try {
+      const info = await clearHistoryInfo(peerId);
+      if(menuFor.value?.peerId === peerId) {
+        clearInfo.value = {peerId, can: info.can, canRevokeForBoth: info.canRevokeForBoth};
+      }
+    } catch (err) {
+      // No entry rather than a wrong one.
+    }
+  }
+
+  /**
+   * Clear History asks first, and the two halves of Telegram's checkbox are two
+   * entries here: "just for me" is always on offer, "for everyone" only when the
+   * server's rules allow it. The prompt reuses the bot-request overlay — it is a
+   * message, a cancel and a confirm, which is all this needs.
+   */
+  function askClearHistory(dialog: DialogItem, revoke: boolean) {
+    const title = dialog.title;
+    const description = dialog.isSelf ?
+      'Are you sure you want to clear Saved Messages?' :
+      dialog.isBroadcast ?
+        `Are you sure you want to clear the channel history in ${title}?` :
+        dialog.isUser ?
+          `Are you sure you want to clear your chat history with ${title}?` :
+          'Are you sure you want to delete all messages in this chat?';
+
+    menuFor.value = null;
+    linkPrompt.value = {
+      text: description,
+      confirm: revoke ? 'Clear for everyone' : 'Clear history',
+      onconfirm: () => clearChatHistory(dialog.peerId, revoke)
+    };
+  }
+
+  /**
+   * Reporting one message. Upstream offers it on a channel's or supergroup's
+   * messages and not in a private chat, and the reason list is the server's —
+   * the options, their order and their wording all come back from the first
+   * call, so nothing is hardcoded here. Every step sends the same message ids
+   * back: the server's state machine is keyed to the peer and the id list.
+   */
+  function canReportMessage(message: MessageItem) {
+    if(message.service) return false;
+    const dialog = dialogs.value.find((d) => d.peerId === activePeerId.value);
+    return !!dialog && (dialog.isMegagroup || dialog.isBroadcast);
+  }
+
+  async function startMessageReport(message: MessageItem) {
+    const peerId = activePeerId.value;
+    if(peerId === null) return;
+
+    reportBusy.value = true;
+    try {
+      const step = await startReport(peerId, [message.mid]);
+      reportOptionId.value = 0;
+      reportComment.value = '';
+
+      if(step.kind === 'done') {
+        finishReport(step);
+        return;
+      }
+
+      reportState.value = {peerId, mids: [message.mid], step};
+    } catch (err: any) {
+      error.value = errorOf(err, 'Could not start the report');
+    } finally {
+      reportBusy.value = false;
+    }
+  }
+
+  async function chooseReportOption(optionId: number) {
+    const state = reportState.value;
+    if(!state) return;
+
+    reportBusy.value = true;
+    reportOptionId.value = optionId;
+    try {
+      const step = await submitReport(state.peerId, optionId, '', state.mids);
+      if(step.kind === 'done') {
+        finishReport(step);
+        return;
+      }
+
+      reportState.value = {...state, step};
+    } catch (err: any) {
+      error.value = errorOf(err, 'Could not send the report');
+    } finally {
+      reportBusy.value = false;
+    }
+  }
+
+  async function sendReportComment() {
+    const state = reportState.value;
+    if(!state || !reportOptionId.value) return;
+
+    reportBusy.value = true;
+    try {
+      const step = await submitReport(state.peerId, reportOptionId.value, reportComment.value.trim(), state.mids);
+      finishReport(step);
+    } catch (err: any) {
+      error.value = errorOf(err, 'Could not send the report');
+    } finally {
+      reportBusy.value = false;
+    }
+  }
+
+  function cancelReport() {
+    reportState.value = null;
+    reportComment.value = '';
+    reportOptionId.value = 0;
+  }
+
+  function finishReport(step: ReportStep) {
+    cancelReport();
+    flash(step.title || 'Report sent');
+  }
+
+  async function clearChatHistory(peerId: number, revoke: boolean) {
+    let cleared = false;
+    await runDialogAction(async() => {
+      await clearHistory(peerId, revoke);
+      cleared = true;
+    });
+
+    if(!cleared) return;
+
+    // The manager empties its own storage and dispatches the update, but the open
+    // pane holds the messages, the pinned bar and the read divider itself.
+    if(activePeerId.value === peerId) {
+      messages.value = [];
+      pinnedMessage.value = null;
+      firstUnreadMid.value = null;
+      selected.value = new Set();
+      selecting.value = false;
+      editing.value = null;
+      replyTo.value = null;
+    }
+
+    flash('History cleared');
+  }
+
+  /**
+   * Copy a t.me link to the message. Only a channel or supergroup has a link
+   * that opens from outside, and a private channel's is member-only — which the
+   * notice says, the way Telegram's own does. Unlike upstream we also offer it on
+   * our own messages: copying a link to your own channel post is the common case,
+   * and tweb hides it there.
+   */
+  function canCopyLink(message: MessageItem) {
+    if(message.service || threadKind.value === 'saved') return false;
+    const dialog = dialogs.value.find((d) => d.peerId === activePeerId.value);
+    return !!dialog && (dialog.isMegagroup || dialog.isBroadcast);
+  }
+
+  async function copyMessageLink(message: MessageItem) {
+    const peerId = activePeerId.value;
+    if(peerId === null) return;
+
+    const kind = threadKind.value;
+    const rootMid = activeThreadId.value;
+    const thread: MessageLinkThread | undefined =
+      rootMid !== null && (kind === 'topic' || kind === 'comments') ?
+        {kind, rootMid} :
+        undefined;
+
+    try {
+      const link = await messageLink(peerId, message.mid, thread);
+      if(!link.url) {
+        flash('This chat has no message link');
+        return;
+      }
+
+      await navigator.clipboard.writeText(link.url);
+      flash(link.isPrivate ? 'This link will only work for members of this chat.' : 'Link copied to clipboard');
+    } catch (err: any) {
+      error.value = errorOf(err, 'Could not copy the link');
+    }
   }
 
   /**
@@ -2923,7 +3154,7 @@ export function Chat() {
       !draft.value &&
       !editing.value
     ) {
-      const last = [...messages.value].reverse().find((m) => m.editable && m.text && !m.service);
+      const last = [...messages.value].reverse().find((m) => m.editable && !m.service);
       if(!last) return;
       e.preventDefault();
       startEdit(last);
@@ -3837,9 +4068,11 @@ export function Chat() {
     await deliver();
   }
 
-  async function deliver(options: {scheduleDate?: number; silent?: boolean} = {}) {
+  async function deliver(options: {scheduleDate?: number; silent?: boolean; scheduleRepeatPeriod?: number} = {}) {
     const typed = draft.value.trim();
-    if(!typed || activePeerId.value === null) return;
+    // Removing a caption is a legitimate edit of a media message, so empty text is
+    // only fatal when there is nothing else to send either.
+    if((!typed && !editing.value?.media) || activePeerId.value === null) return;
     // Slow mode blocks sending now, but never blocks scheduling for later.
     if(!editing.value && !options.scheduleDate && slowModeLeft.value > 0) return;
 
@@ -3905,6 +4138,7 @@ export function Chat() {
         threadId: activeThreadId.value,
         entities,
         scheduleDate,
+        scheduleRepeatPeriod: options.scheduleRepeatPeriod,
         silent: options.silent ?? silentDefault.value,
         effect: effect || undefined,
         sendAsPeerId: sendAsPeerId.value ?? undefined
@@ -4224,7 +4458,10 @@ export function Chat() {
                         onContextMenu={(e) => {
                           e.preventDefault();
                           folderMenuFor.value = null;
-                          menuFor.value = menuFor.value?.peerId === dialog.peerId ? null : dialog;
+                          const opening = menuFor.value?.peerId !== dialog.peerId;
+                          menuFor.value = opening ? dialog : null;
+                          clearInfo.value = null;
+                          if(opening) refreshClearInfo(dialog.peerId);
                         }}
                       >
                         <span class="avatar-wrap">
@@ -4330,6 +4567,18 @@ export function Chat() {
                                 : 'View as messages'}
                             </button>
                           )}
+                          {clearInfo.value?.peerId === dialog.peerId && clearInfo.value.can ? (
+                            <>
+                              <button class="danger" onClick={() => askClearHistory(dialog, false)}>
+                                Clear history
+                              </button>
+                              {clearInfo.value.canRevokeForBoth ? (
+                                <button class="danger" onClick={() => askClearHistory(dialog, true)}>
+                                  Clear history for everyone
+                                </button>
+                              ) : null}
+                            </>
+                          ) : null}
                           <button class="danger" onClick={() => runDialogAction(() => leaveOrDelete(dialog.peerId))}>
                             Delete / Leave
                           </button>
@@ -5307,7 +5556,7 @@ export function Chat() {
                     <button
                       type="submit"
                       class={['send-button', silentDefault.value && !editing.value && 'silent'].filter(Boolean).join(' ')}
-                      disabled={!draft.value.trim() || (!editing.value && slowModeLeft.value > 0)}
+                      disabled={(!draft.value.trim() && !editing.value?.media) || (!editing.value && slowModeLeft.value > 0)}
                       aria-label={editing.value ? 'Save' : 'Send'}
                       title={editing.value ?
                         'Save' :
@@ -5507,6 +5756,9 @@ export function Chat() {
                 {menuMessage.text ? (
                   <button onClick={() => { copyText(menuMessage); messageMenu.value = null; }}>Copy text</button>
                 ) : null}
+                {canCopyLink(menuMessage) ? (
+                  <button onClick={() => { copyMessageLink(menuMessage); messageMenu.value = null; }}>Copy Message Link</button>
+                ) : null}
                 {/* Translation and transcription are Premium on Telegram's side; a
                      free account gets the server's refusal, which the error bar
                      shows, rather than a control that always fails silently. */}
@@ -5533,9 +5785,11 @@ export function Chat() {
                     {menuMessage.pinned ? 'Unpin' : 'Pin'}
                   </button>
                 ) : null}
-                {/* A sticker or a bare media message is editable in the API sense but
-                     has no text to edit; deleting it is still fair game. */}
-                {menuMessage.editable && menuMessage.text ? (
+                {/* Editing a media message means editing its caption, which the
+                     composer already carries — so a message with media but no text
+                     is editable too. The gate is the server's own rule, not our
+                     `editable` flag. */}
+                {canEditHere.value ? (
                   <button onClick={() => { startEdit(menuMessage); messageMenu.value = null; }}>Edit</button>
                 ) : null}
                 {menuMessage.editable ? (
@@ -5545,6 +5799,9 @@ export function Chat() {
                      channel cannot express it, so it is not offered there. */}
                 {canDeleteLocally() ? (
                   <button onClick={() => { removeMessageLocally(menuMessage); messageMenu.value = null; }}>Delete for me</button>
+                ) : null}
+                {canReportMessage(menuMessage) ? (
+                  <button onClick={() => { startMessageReport(menuMessage); messageMenu.value = null; }}>Report</button>
                 ) : null}
               </>
             ) : null}
@@ -5654,8 +5911,54 @@ export function Chat() {
         />
       ) : null}
 
+      {reportState.value ? (
+        /* The report flow: the server's own option list, then its comment step. */
+        <div class="reactors-backdrop" onClick={cancelReport} role="presentation">
+          <div
+            class="reactors-dialog bot-prompt"
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Report"
+          >
+            <p class="bot-prompt-text">{reportState.value.step.title}</p>
+            {reportState.value.step.kind === 'choose' ? (
+              <div class="report-options">
+                {reportState.value.step.options.map((option) => (
+                  <button key={option.id} disabled={reportBusy.value} onClick={() => chooseReportOption(option.id)}>
+                    {option.text}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <>
+                <input
+                  class="report-comment"
+                  maxlength={512}
+                  placeholder={reportState.value.step.commentOptional ? 'Add Comment (Optional)' : 'Add Comment'}
+                  value={reportComment.value}
+                  onInput={(e) => (reportComment.value = (e.target as HTMLInputElement).value)}
+                />
+                <div class="bot-prompt-actions">
+                  <button class="bot-prompt-cancel" onClick={cancelReport}>Cancel</button>
+                  <button class="bot-prompt-ok" disabled={reportBusy.value} onClick={sendReportComment}>
+                    {reportBusy.value ? 'Sending…' : 'Send Report'}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      ) : null}
+
       {error.value ? (
         <button class="error" onClick={() => (error.value = '')} title="Dismiss">{error.value}</button>
+      ) : null}
+
+      {/* A confirmation for what has no visible effect — copying a link, mostly.
+           `error` is red and reads as a failure, so this is its own line. */}
+      {notice.value ? (
+        <button class="chat-notice" onClick={() => (notice.value = '')} title="Dismiss">{notice.value}</button>
       ) : null}
     </>
   );

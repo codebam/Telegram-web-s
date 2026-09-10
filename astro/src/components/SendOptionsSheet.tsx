@@ -7,24 +7,38 @@
  *    value is only ever read at mount, so the seeds are plain expressions now.
  *  - `<svelte:window onkeydown={onKey}/>` is the `useEffect` at the end, which
  *    adds and removes the same listener.
+ *
+ * The Repeat row has no Svelte original — it is a post-port feature mirroring
+ * upstream's picker (components/popups/scheduleSendingPopup.tsx). It reuses the
+ * sheet's own `.pill` / `.pill.on` idiom, so no stylesheet change was needed.
  */
 import {useEffect} from 'preact/hooks';
 import {useSignal} from '@preact/signals';
 
 import {
   MIN_SCHEDULE_LEAD_SECONDS,
+  REPEAT_PERIOD_OPTIONS,
   SEND_WHEN_ONLINE,
   setSilentByDefault
 } from '$lib/telegram/sendOptions';
+import {isPremium} from '$lib/telegram/reactions';
 
 import './SendOptionsSheet.css';
+
+/** Shown when a non-premium account tries to make a message repeat. */
+const PREMIUM_HINT = 'Repeating messages need Telegram Premium.';
 
 interface Props {
   peerId: number;
   /** "Send when online" only exists for a private chat. */
   isUser?: boolean;
   defaultSilent?: boolean;
-  onsend: (options: {scheduleDate?: number; silent: boolean}) => void;
+  onsend: (options: {
+    scheduleDate?: number;
+    silent: boolean;
+    /** Seconds between repeats; unset sends the message once. */
+    scheduleRepeatPeriod?: number;
+  }) => void;
   onclose: () => void;
 }
 
@@ -48,9 +62,40 @@ export function SendOptionsSheet({
   const when = useSignal(toLocalInput(new Date(Date.now() + 60 * 60 * 1000)));
   const silent = useSignal(defaultSilent);
   const remember = useSignal(defaultSilent);
+  /** Seconds between repeats; 0 is "Never" and is never sent. */
+  const repeat = useSignal(0);
+  /**
+   * Upstream gates the repeat period behind Premium in the picker itself and
+   * the server enforces it, so the same gate lives here: it explains the locked
+   * row instead of letting the API answer with PREMIUM_ACCOUNT_REQUIRED.
+   * `null` is "not read yet" — the selection stays open then, so a premium
+   * account is never blocked by a slow read, and a non-premium one is caught a
+   * moment later by the same check the click runs.
+   */
+  const premium = useSignal<boolean | null>(null);
   const error = useSignal('');
 
   const minWhen = toLocalInput(new Date(Date.now() + MIN_SCHEDULE_LEAD_SECONDS * 1000));
+
+  // Reads a manager cache through $lib/telegram/reactions, no request.
+  useEffect(() => {
+    let cancelled = false;
+    isPremium().then((value) => {
+      if(!cancelled) premium.value = value;
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  function pickRepeat(value: number) {
+    if(value && premium.value === false) {
+      error.value = PREMIUM_HINT;
+      return;
+    }
+    if(error.value === PREMIUM_HINT) error.value = '';
+    repeat.value = value;
+  }
 
   function persist() {
     // Only write when the user asked us to remember, so a one-off silent send
@@ -60,11 +105,14 @@ export function SendOptionsSheet({
 
   function sendNow() {
     persist();
+    // Sending immediately ignores the repeat row: only a scheduled message can
+    // repeat, so no period travels on this path.
     onsend({silent: silent.value});
   }
 
   function sendWhenOnline() {
     persist();
+    // "When online" never repeats either — upstream passes no period here.
     onsend({scheduleDate: SEND_WHEN_ONLINE, silent: silent.value});
   }
 
@@ -80,7 +128,12 @@ export function SendOptionsSheet({
       return;
     }
     persist();
-    onsend({scheduleDate: seconds, silent: silent.value});
+    onsend({
+      scheduleDate: seconds,
+      silent: silent.value,
+      // 0 is "Never", which must reach the API as no period at all.
+      scheduleRepeatPeriod: repeat.value || undefined
+    });
   }
 
   function onKey(e: KeyboardEvent) {
@@ -108,6 +161,23 @@ export function SendOptionsSheet({
             onInput={(e) => (when.value = (e.target as HTMLInputElement).value)}
           />
         </label>
+
+        <div class="field">
+          <span>Repeat{premium.value === false ? ' — needs Telegram Premium' : ''}</span>
+          <div class="toggles">
+            {REPEAT_PERIOD_OPTIONS.map((option) => (
+              <button
+                type="button"
+                key={option.value}
+                class={['pill', repeat.value === option.value && 'on'].filter(Boolean).join(' ')}
+                onClick={() => pickRepeat(option.value)}
+                title={option.value ?
+                  `Schedule this message again, ${option.label.toLowerCase()}` :
+                  'Send this message once'}
+              >{option.label}</button>
+            ))}
+          </div>
+        </div>
 
         <div class="toggles">
           <button

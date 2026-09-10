@@ -325,27 +325,3 @@ export async function videoQualities(peerId: number, mid: number): Promise<Video
     .filter((quality) => (seen.has(quality.height) ? false : (seen.add(quality.height), true)));
 }
 
-/**
- * A t.me link to a message, built from what the client already knows: a public
- * peer links by username, a private channel by its short id. Returns '' when
- * the chat has no linkable form (an ordinary private chat).
- */
-export async function messageLink(peerId: number, mid: number, threadId?: number): Promise<string> {
-  const {managers} = await bootTelegram();
-
-  let username = '';
-  try {
-    username = (await managers.appPeersManager.getPeerUsername(peerId)) ?? '';
-  } catch(err) {
-    username = '';
-  }
-
-  const suffix = threadId ? `?thread=${threadId}` : '';
-  if(username) return `https://t.me/${username}/${mid}${suffix}`;
-
-  // tweb encodes a chat as the negated chat id (`toPeerId(true)`), and t.me/c
-  // wants that bare chat id back.
-  if(peerId < 0) return `https://t.me/c/${Math.abs(peerId)}/${mid}${suffix}`;
-
-  return '';
-}
