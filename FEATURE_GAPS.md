@@ -76,6 +76,8 @@ Everything here is verified by `pnpm typecheck:astro`, the 456 guard tests,
 | Speakers & Camera settings | A Calls tab in Settings picks the microphone, speakers and camera and toggles noise suppression; `changeCallDevice` persists the choice and applies it to a live call, and the main-thread `appSettings` store is now hydrated at boot so the choice survives a reload. The call pre-flight is acquired through `getStream` with the engine's own constraint helpers, so it honours the selected device and self-heals a stale id. |
 | Mini apps: fullscreen, location, emoji status, link safety | `web_app_request_fullscreen` fills the host window and reports `fullscreen_changed` (the browser Fullscreen API is unusable from a bot's postMessage, which is why it used to fail); `web_app_check_location` / `web_app_request_location` report the real browser permission, ask once per bot and return the position; `web_app_request_emoji_status_access` / `web_app_set_emoji_status` ask once and set the status (with the protocol's duration); and outbound links are vetted against `web_app_allowed_protocols` while same-origin apps get their messages pinned to the frame's origin. |
 | Public posts search | A lazy "Posts" tab in the sidebar search uses `channels.searchPosts` — a method nothing in either client called — for hashtags and topics across public channels, with its own rate cursor. `appChatsManager.searchPosts` normalises the raw posts so the rows match the other message searches. |
+| Joining a group voice chat | A group or channel shows a call action when a voice chat is live or `manage_call` is held; it joins, or creates the call first when there is none, loads after render and refuses a second simultaneous call. A floating panel lists the participants and offers mute, camera, screen share and leave. |
+| Voice-chat moderation | The microphone button raises a hand when an admin has taken the microphone away, and an admin can mute or unmute participants from their rows. |
 
 The P1 table below is clear. Its last six entries — captions above media,
 animated single-emoji messages, emoji suggestions, typing-action variety,
@@ -118,12 +120,11 @@ untouched.
 
 ## P2 — whole feature areas
 
-**Calls** — 1:1 calls are complete now: a video call can be placed, and the
-Speakers & Camera settings pick the devices (see above). Still missing: group
-calls / voice chats have no create, join, participant list, video, scheduling or
-settings UI (`appGroupCallsManager`, `groupCallsController` never called); RTMP
-live streaming is absent ("rtmp" is not a string in the client); conference calls
-and shareable call links are absent.
+**Calls** — 1:1 calls are complete, and a group voice chat can now be joined,
+started, listed and moderated (see above). Still missing: remote video tiles (the
+camera and screen buttons share, but the panel does not render the streams yet),
+scheduling, per-call settings and invite links; RTMP live streaming is absent
+("rtmp" is not a string in the client); conference calls are absent.
 
 **Stars & gifts** — star gifts are receive-only: no info popup, upgrade to
 collectible, wear, transfer, resale/buy-resale, collections, gifts on profiles,
@@ -176,10 +177,10 @@ did the earlier slices. People Nearby has since been removed from the service
 (and `contacts.getLocated` with it), so it is not a gap to close. The next
 natural slices, smallest first:
 
-1. **Group calls / voice chats** — the largest missing area: nothing in the
-   client calls `appGroupCallsManager` or `groupCallsController`, so a voice chat
-   cannot be created, joined or scheduled. (1:1 calls — placing audio and video,
-   and the Speakers & Camera tab — are done.)
+1. **Group calls / voice chats (continued)** — joining, starting, the participant
+   list and moderation have landed (see above); what is left is remote video
+   tiles, scheduling, per-call settings and invite links, then RTMP and
+   conferences.
 2. **Stars & gifts** — gifts are receive-only: no info popup, upgrade, wear,
    transfer, resale, collections or profile display.
 3. **Smaller surfaces** — recommended channels, sign-up / passkey login /
