@@ -11,7 +11,13 @@ import {getPeerBrief} from './chats';
  */
 
 /** One row of the composer's `/`, `@` or `#` autocomplete strip. */
-export type SuggestionItem = {key: string; title: string; subtitle: string};
+export type SuggestionItem = {
+  key: string;
+  title: string;
+  subtitle: string;
+  /** The title is an emoji glyph rather than a word, and is drawn as one. */
+  emoji?: true;
+};
 
 /* ------------------------------------------------------------------ */
 /* Reply keyboards                                                     */

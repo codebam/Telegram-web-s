@@ -28,7 +28,7 @@ export function Suggestions({items, active = 0, label, onpick}: Props) {
   }, [active]);
 
   return (
-    <div class="suggestions" ref={list} role="listbox" aria-label={label}>
+    <div class={['suggestions', items.some((item) => item.emoji) && 'emoji'].filter(Boolean).join(' ')} ref={list} role="listbox" aria-label={label}>
       {items.map((item, index) => (
         <button
           key={item.key}

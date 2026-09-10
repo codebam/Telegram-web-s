@@ -793,6 +793,13 @@ button {
   line-height: 1.15;
 }
 
+/* The emoji the composer is suggesting for the word being typed are glyphs, not
+   words, so they are drawn at glyph size beside the keyword that matched. */
+:root[data-ui='native'] .suggestions.emoji .suggestion-title {
+  font-size: 22px;
+  line-height: 1.2;
+}
+
 /* Date and unread dividers read as glass pills laid on the wallpaper. */
 :root[data-ui='native'] .messages .day-divider,
 :root[data-ui='native'] .messages .service {

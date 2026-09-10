@@ -174,6 +174,7 @@ import {
   type TypingKind
 } from '$lib/telegram/chats';
 import {sendContact} from '$lib/telegram/messageTypes';
+import {searchEmoji} from '$lib/telegram/emoji';
 import {transcribeVoice, translateMessage} from '$lib/telegram/translation';
 import {messageLink, type MessageLinkThread} from '$lib/telegram/messageLink';
 import {startReport, submitReport, type ReportStep} from '$lib/telegram/profile';
@@ -629,7 +630,7 @@ export function Chat() {
   const botBusy = useSignal(false);
   const botCommands = useRef<BotCommandItem[]>([]);
   /** Which trigger opened the suggestion strip, null when it is closed. */
-  const suggestKind = useSignal<'command' | 'mention' | 'hashtag' | null>(null);
+  const suggestKind = useSignal<'command' | 'mention' | 'hashtag' | 'emoji' | null>(null);
   const suggestItems = useSignal<SuggestionItem[]>([]);
   const suggestIndex = useSignal(0);
   /** Range in the draft the picked suggestion replaces. */
@@ -3041,7 +3042,7 @@ export function Chat() {
     const before = draft.value.slice(0, caret);
     const match = /(?:^|\s)([@#/])([^\s@#/]*)$/.exec(before);
     if(!match) {
-      closeSuggestions();
+      await updateEmojiSuggestions(caret, before);
       return;
     }
 
@@ -3099,6 +3100,42 @@ export function Chat() {
     suggestValues.current = values;
     suggestIndex.value = 0;
     suggestFrom.current = from;
+    suggestTo.current = caret;
+  }
+
+  /**
+   * A word being typed is offered the emoji Telegram knows for it — type "smile"
+   * and the strip above the composer fills with the emoji whose keywords match.
+   * The keywords come from the server's language pack, so they are the ones the
+   * user's own language has, and the word is replaced rather than appended to.
+   */
+  async function updateEmojiSuggestions(caret: number, before: string) {
+    const word = /(?:^|\s)(\p{L}{2,})$/u.exec(before);
+    if(!word) {
+      closeSuggestions();
+      return;
+    }
+
+    const query = word[1];
+    const token = ++suggestToken.current;
+    const found = await searchEmoji(query, 8);
+    /* Only the native ones — a custom emoji has no glyph to type into the text —
+       and each glyph once: the search answers per keyword, so one emoji can come
+       back several times over. */
+    const emoji = [...new Set(found.filter((item) => item.emoji).map((item) => item.emoji))];
+
+    if(token !== suggestToken.current || activePeerId.value === null) return;
+
+    if(!emoji.length) {
+      closeSuggestions();
+      return;
+    }
+
+    suggestKind.value = 'emoji';
+    suggestItems.value = emoji.map((glyph) => ({key: glyph, title: glyph, subtitle: query, emoji: true as const}));
+    suggestValues.current = emoji.map((glyph) => `${glyph} `);
+    suggestIndex.value = 0;
+    suggestFrom.current = caret - query.length;
     suggestTo.current = caret;
   }
 
@@ -5488,7 +5525,7 @@ export function Chat() {
                 <Suggestions
                   items={suggestItems.value}
                   active={suggestIndex.value}
-                  label={suggestKind.value === 'command' ? 'Bot commands' : suggestKind.value === 'mention' ? 'Members' : 'Hashtags'}
+                  label={suggestKind.value === 'command' ? 'Bot commands' : suggestKind.value === 'mention' ? 'Members' : suggestKind.value === 'emoji' ? 'Emoji' : 'Hashtags'}
                   onpick={applySuggestion}
                 />
               ) : null}
