@@ -1574,6 +1574,29 @@ export function Chat() {
     }
   }
 
+  /** The selected messages themselves, oldest first — the order the server and
+   *  every batch action expect. */
+  function selectedMessages(): MessageItem[] {
+    return messages.value
+    .filter((message) => selected.value.has(message.mid))
+    .sort((a, b) => a.mid - b.mid);
+  }
+
+  /** Whether a report is on offer for the current selection. */
+  function canReportSelection(): boolean {
+    const first = selectedMessages()[0];
+    return !!first && canReportMessage(first);
+  }
+
+  /** Report everything selected at once; Telegram takes the whole id list. */
+  function reportSelected() {
+    const mids = selectedMessages().map((message) => message.mid);
+    if(!mids.length) return;
+    selecting.value = false;
+    selected.value = new Set();
+    startMessageReport(mids);
+  }
+
   async function forwardSelected() {
     if(!selected.value.size) return;
     // Oldest first, so the batch lands in the target chat in the order it was
@@ -1891,13 +1914,18 @@ export function Chat() {
     return !!dialog && (dialog.isMegagroup || dialog.isBroadcast);
   }
 
-  async function startMessageReport(message: MessageItem) {
+  /**
+   * Report one message, or a whole selection of them at once — the server's
+   * state machine is keyed to the peer and the id list, so both are the same
+   * call with a different list.
+   */
+  async function startMessageReport(mids: number[]) {
     const peerId = activePeerId.value;
-    if(peerId === null) return;
+    if(peerId === null || !mids.length) return;
 
     reportBusy.value = true;
     try {
-      const step = await startReport(peerId, [message.mid]);
+      const step = await startReport(peerId, mids);
       reportOptionId.value = 0;
       reportComment.value = '';
 
@@ -1906,7 +1934,7 @@ export function Chat() {
         return;
       }
 
-      reportState.value = {peerId, mids: [message.mid], step};
+      reportState.value = {peerId, mids, step};
     } catch (err: any) {
       error.value = errorOf(err, 'Could not start the report');
     } finally {
@@ -4839,6 +4867,7 @@ export function Chat() {
                   <span>{selected.value.size} selected</span>
                   <span class="spacer"></span>
                   <button onClick={forwardSelected}>Forward</button>
+                  {canReportSelection() ? <button onClick={reportSelected}>Report</button> : null}
                   <button class="danger" onClick={deleteSelected}>Delete</button>
                   {canDeleteLocally() ? <button onClick={deleteSelectedLocally}>Delete for me</button> : null}
                   <button onClick={() => { selecting.value = false; selected.value = new Set(); }}>Cancel</button>
@@ -5860,7 +5889,7 @@ export function Chat() {
                   <button onClick={() => { removeMessageLocally(menuMessage); messageMenu.value = null; }}>Delete for me</button>
                 ) : null}
                 {canReportMessage(menuMessage) ? (
-                  <button onClick={() => { startMessageReport(menuMessage); messageMenu.value = null; }}>Report</button>
+                  <button onClick={() => { startMessageReport([menuMessage.mid]); messageMenu.value = null; }}>Report</button>
                 ) : null}
               </>
             ) : null}
