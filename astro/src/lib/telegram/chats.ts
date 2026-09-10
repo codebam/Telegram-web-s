@@ -160,6 +160,11 @@ export type MessageItem = {
   reactions: ReactionItem[];
   /** Album id — consecutive messages sharing one render as a single bubble. */
   groupedId: string;
+  /**
+   * Telegram's "caption above media": the sender asked for the text to lead and
+   * the attachment to follow, which is what the bubble has to draw.
+   */
+  captionAboveMedia: boolean;
   /** Sticker document id, when the media is a sticker. */
   stickerDocId: string;
   /** '' when not a sticker; 'animated' means .tgs and needs the Lottie worker. */
@@ -1499,6 +1504,7 @@ async function toItem(message: any, peerId: number, selfId: number): Promise<Mes
       .filter(Boolean),
     reactions: reactionsOf(message),
     groupedId: message.grouped_id ? '' + message.grouped_id : '',
+    captionAboveMedia: !!message.pFlags?.invert_media,
     stickerDocId: isStickerMessage(message) ? '' + message.media.document.id : '',
     stickerKind: isStickerMessage(message) ? stickerKind(message.media.document) : '',
     pending: !!message.pFlags?.is_outgoing,

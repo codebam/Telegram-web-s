@@ -2243,7 +2243,7 @@ export function Chat() {
    * Upload the confirmed batch, keeping the dialog up while it runs so the
    * progress bars and the cancel button have somewhere to live.
    */
-  async function confirmSend(items: SendFileItem[], caption: string) {
+  async function confirmSend(items: SendFileItem[], caption: string, invertMedia: boolean) {
     if(activePeerId.value === null || upload.value) return;
 
     const replyToMsgId = replyTo.value?.mid;
@@ -2254,6 +2254,7 @@ export function Chat() {
 
     const handle = sendFilesGrouped(activePeerId.value, items, {
       caption,
+      invertMedia,
       threadId: activeThreadId.value,
       replyToMsgId,
       onprogress: (state) => (uploadProgress.value = state)
@@ -4904,6 +4905,15 @@ export function Chat() {
                          is free to hang it off any item — so the bubble shows whichever
                          item actually has the text. */
                       const captioned = group.items.find((item) => item.rich || item.parts.length) ?? message;
+                      /* The caption is built once and placed above or below the media,
+                         which is what `invert_media` ("caption above media") asks for —
+                         Telegram moves the attachment node rather than restyling it, and
+                         so do we: the reading order has to match what is on screen. */
+                      const captionNode = captioned.rich ?
+                        <RichMessage blocks={captioned.rich} onmention={openMention} ontag={openTag} ondate={copyDate} /> :
+                      captioned.parts.length ?
+                        <FormattedText parts={captioned.parts} onmention={openMention} onlink={openLink} ontag={openTag} ondate={copyDate} /> :
+                      null;
                       // The two `use:` actions of a bubble, as cached ref factories
                       // rather than hooks: this runs once per rendered group, and a
                       // component must call the same hooks in the same order on every
@@ -5042,6 +5052,8 @@ export function Chat() {
                                   <ReplyHeader reply={message.reply} onjump={() => jumpToReply(message.reply!)} />
                                 ) : null}
 
+                                {message.captionAboveMedia ? captionNode : null}
+
                                 {group.items.length > 1 ? (
                                   /* Album tiling, the way the official clients lay it out: a
                                        pair side by side, a hero plus a stack at three, a hero
@@ -5152,11 +5164,7 @@ export function Chat() {
                                   </div>
                                 ) : null}
 
-                                {captioned.rich ?
-                                  <RichMessage blocks={captioned.rich} onmention={openMention} ontag={openTag} ondate={copyDate} /> :
-                                captioned.parts.length ?
-                                  <FormattedText parts={captioned.parts} onmention={openMention} onlink={openLink} ontag={openTag} ondate={copyDate} /> :
-                                null}
+                                {message.captionAboveMedia ? null : captionNode}
 
                                 {/* Translation and transcript sit under the message they
                                      belong to. Both are asked for from the message menu. */}

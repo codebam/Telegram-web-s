@@ -25,6 +25,8 @@ export type UploadProgress = {
 
 export type SendFilesOptions = {
   caption?: string;
+  /** Telegram's "caption above media": the text leads and the attachment follows. */
+  invertMedia?: boolean;
   threadId?: number;
   replyToMsgId?: number;
   /** Called on every progress tick with the whole batch's state. */
@@ -237,6 +239,8 @@ export function sendFilesGrouped(
             // Only the first album carries the caption, like the official
             // clients — repeating it under every group would be noise.
             caption: chunkIndex === 0 ? options.caption : undefined,
+            // Telegram's "caption above media", carried per album like the caption.
+            invertMedia: chunkIndex === 0 ? options.invertMedia : undefined,
             threadId: options.threadId,
             replyToMsgId: options.replyToMsgId ?? options.threadId,
             clearDraft: chunkIndex === 0,

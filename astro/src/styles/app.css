@@ -1290,6 +1290,23 @@ button {
   padding: 0;
 }
 
+/* The send sheet's caption and the control that flips it above the media share a
+   line — the pill follows the field it applies to. */
+:root[data-ui='native'] .caption-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+:root[data-ui='native'] .caption-row .caption {
+  flex: 1;
+  min-width: 0;
+}
+
+:root[data-ui='native'] .caption-row .pill {
+  flex: none;
+}
+
 /* ------------------------------------------------------------------ */
 /* Sign-in                                                             */
 /*                                                                     */

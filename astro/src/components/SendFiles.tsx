@@ -45,7 +45,8 @@ interface Props {
   files: File[];
   /** Per-item upload state while the batch is in flight, null before sending. */
   progress?: UploadProgress[] | null;
-  onsend: (items: SendFileItem[], caption: string) => void;
+  /** `invertMedia` is Telegram's "caption above media", an album-wide choice. */
+  onsend: (items: SendFileItem[], caption: string, invertMedia: boolean) => void;
   oncancelupload: () => void;
   onclose: () => void;
 }
@@ -72,6 +73,8 @@ export function SendFiles({
   })), []));
 
   const caption = useSignal('');
+  /** Telegram's "caption above media" — the text leads and the attachment follows. */
+  const invertMedia = useSignal(false);
 
   /** Index of the row open in the media editor, null when it is closed. */
   const editing = useSignal<number | null>(null);
@@ -139,7 +142,8 @@ export function SendFiles({
     // File objects straight through to sendFile — hand over plain copies.
     onsend(
       rows.value.map((row) => ({file: row.file, asPhoto: row.asPhoto, spoiler: row.spoiler})),
-      caption.value.trim()
+      caption.value.trim(),
+      invertMedia.value
     );
   }
 
@@ -265,14 +269,25 @@ export function SendFiles({
             {/* `autofocus` is deliberate: the dialog only exists because the user
                 already picked files to send. The original carried the equivalent
                 svelte-ignore a11y_autofocus. */}
-            <input
-              class="caption"
-              autofocus
-              placeholder="Caption"
-              disabled={sending}
-              value={caption.value}
-              onInput={(e) => (caption.value = (e.target as HTMLInputElement).value)}
-            />
+            <div class="caption-row">
+              <input
+                class="caption"
+                autofocus
+                placeholder="Caption"
+                disabled={sending}
+                value={caption.value}
+                onInput={(e) => (caption.value = (e.target as HTMLInputElement).value)}
+              />
+              {rows.value.some((row) => row.asPhoto) ? (
+                <button
+                  type="button"
+                  class={['pill', invertMedia.value && 'on'].filter(Boolean).join(' ')}
+                  disabled={sending || !caption.value.trim()}
+                  onClick={() => (invertMedia.value = !invertMedia.value)}
+                  title="Draw the caption above the media instead of under it"
+                >Caption above</button>
+              ) : null}
+            </div>
 
             <footer>
               {sending ?
