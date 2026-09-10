@@ -26,12 +26,15 @@ import {
   clearDeviceStorage,
   readMiniAppPermission,
   writeMiniAppPermission,
+  botCanManageEmojiStatus,
+  allowBotEmojiStatus,
   getPreparedMessage,
   sendPreparedMessage,
   themeParams,
   type MiniAppRequest,
   type PreparedMessage
 } from '$lib/telegram/miniApps';
+import {loadCustomEmoji, setEmojiStatus} from '$lib/telegram/emoji';
 
 import './MiniApp.css';
 
@@ -200,6 +203,47 @@ export function MiniApp({request, onclose, onswitchinline, onlink}: Props) {
     );
   }
 
+  /** The bot wants to change our emoji status; ask once, then remember it. */
+  async function handleEmojiStatusAccess() {
+    try {
+      if(await botCanManageEmojiStatus(request.botId)) {
+        send('emoji_status_access_requested', {status: 'allowed'});
+        return;
+      }
+
+      if(!confirm(`Allow ${title.value} to change your emoji status?`)) {
+        send('emoji_status_access_requested', {status: 'cancelled'});
+        return;
+      }
+
+      await allowBotEmojiStatus(request.botId);
+      send('emoji_status_access_requested', {status: 'allowed'});
+    } catch(err) {
+      send('emoji_status_access_requested', {status: 'cancelled'});
+    }
+  }
+
+  async function handleSetEmojiStatus(data: any) {
+    try {
+      const docId = '' + (data?.custom_emoji_id ?? '');
+      // The id has to resolve to a real custom emoji before we offer it.
+      if(!docId || !(await loadCustomEmoji(docId))) {
+        send('emoji_status_failed', {error: 'SUGGESTED_EMOJI_INVALID'});
+        return;
+      }
+
+      if(!confirm('Set this emoji as your status?')) {
+        send('emoji_status_failed', {error: 'USER_DECLINED'});
+        return;
+      }
+
+      await setEmojiStatus(docId, Number(data?.duration ?? 0) || 0);
+      send('emoji_status_set', undefined);
+    } catch(err) {
+      send('emoji_status_failed', {error: 'SERVER_ERROR'});
+    }
+  }
+
   async function handle(eventType: string, data: any) {
     switch(eventType) {
       case 'iframe_ready':
@@ -315,6 +359,14 @@ export function MiniApp({request, onclose, onswitchinline, onlink}: Props) {
 
       case 'web_app_request_phone':
         send('phone_requested', {status: 'cancelled'});
+        break;
+
+      case 'web_app_request_emoji_status_access':
+        handleEmojiStatusAccess();
+        break;
+
+      case 'web_app_set_emoji_status':
+        handleSetEmojiStatus(data);
         break;
 
       case 'web_app_invoke_custom_method': {

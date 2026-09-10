@@ -395,10 +395,14 @@ export async function loadEmojiStatus(peerId: number): Promise<string> {
   }
 }
 
-/** Sets — or with an empty docId clears — the signed-in user's status. */
-export async function setEmojiStatus(docId: string): Promise<void> {
+/** Sets — or with an empty docId clears — the signed-in user's status. `duration` is seconds, 0 for indefinite. */
+export async function setEmojiStatus(docId: string, duration = 0): Promise<void> {
   const {managers} = await bootTelegram();
   await managers.appUsersManager.updateEmojiStatus(
-    docId ? {_: 'emojiStatus', document_id: docId} : {_: 'emojiStatusEmpty'}
+    docId ? {
+      _: 'emojiStatus',
+      document_id: docId,
+      until: duration ? Math.floor(Date.now() / 1000) + duration : undefined
+    } : {_: 'emojiStatusEmpty'}
   );
 }

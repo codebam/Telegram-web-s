@@ -348,6 +348,27 @@ export async function writeMiniAppPermission(
 }
 
 /* ------------------------------------------------------------------ */
+/* Emoji status                                                        */
+/* ------------------------------------------------------------------ */
+
+/** True once the user has allowed this bot to change their emoji status. */
+export async function botCanManageEmojiStatus(botId: number): Promise<boolean> {
+  const {managers} = await bootTelegram();
+  try {
+    const full: any = await managers.appProfileManager.getProfile(botId);
+    return !!full?.pFlags?.bot_can_manage_emoji_status;
+  } catch(err) {
+    return false;
+  }
+}
+
+/** Record that this bot may change the user's emoji status. */
+export async function allowBotEmojiStatus(botId: number): Promise<void> {
+  const {managers} = await bootTelegram();
+  await managers.appBotsManager.toggleEmojiStatusPermission(botId, true);
+}
+
+/* ------------------------------------------------------------------ */
 /* Bot menu button                                                     */
 /* ------------------------------------------------------------------ */
 
