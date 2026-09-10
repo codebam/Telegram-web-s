@@ -30,7 +30,8 @@ type GlyphName =
   | 'file'
   | 'save'
   | 'close'
-  | 'archive';
+  | 'archive'
+  | 'video';
 
 interface Props {
   name: GlyphName;
@@ -55,6 +56,14 @@ export function Glyph({name, size = 18}: Props) {
     case 'call':
       icon = (
         <path d="M6.3 3.6l2 .3 1 2.6-1.5 1.3a8.6 8.6 0 004.4 4.4l1.3-1.5 2.6 1 .3 2a1.4 1.4 0 01-1.5 1.5C9.6 15 5 10.4 4.8 5.1A1.4 1.4 0 016.3 3.6z" />
+      );
+      break;
+    case 'video':
+      icon = (
+        <>
+          <rect x="3.2" y="5.8" width="9.6" height="8.4" rx="1.6" />
+          <path d="M12.8 9l3.6-2.2v6.4L12.8 11" />
+        </>
       );
       break;
     case 'search':

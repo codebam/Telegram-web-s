@@ -2104,23 +2104,24 @@ export function Chat() {
   }
 
   /** Place a call, explaining the failure rather than opening a dead screen. */
-  async function placeCall() {
+  async function placeCall(isVideo = false) {
     if(activePeerId.value === null) return;
 
-    const result = await startCall(activePeerId.value);
+    const result = await startCall(activePeerId.value, isVideo);
     if(result.ok) return;
 
     // `strictNullChecks` is off in this app, which also switches off TypeScript's
     // narrowing of a `boolean` discriminant; the failure fields are therefore
     // picked out by shape. The original read `result.reason` / `result.detail`.
     const failure = 'reason' in result ? result : {reason: 'failed', detail: undefined};
+    const device = isVideo ? 'camera or microphone' : 'microphone';
 
     error.value =
       failure.reason === 'mic-blocked' ?
-        'Microphone blocked. Allow microphone access for this site in your browser settings, then try again.' :
+        `Access to the ${device} is blocked. Allow it for this site in your browser settings, then try again.` :
       failure.reason === 'no-mic' ?
-        (failure.detail ?? 'No microphone found. Connect one and try again.') :
-        `Could not start the call${failure.detail ? `: ${failure.detail}` : ''}`;
+        (failure.detail ?? `No ${device} found. Connect one and try again.`) :
+        `Could not start the ${isVideo ? 'video call' : 'call'}${failure.detail ? `: ${failure.detail}` : ''}`;
   }
 
   /**
@@ -4799,7 +4800,10 @@ export function Chat() {
                     far end, whatever combination of the two is on screen. */}
                 <span class="peer-gap"></span>
                 {activeIsUser.value && !activeIsSelf.value ? (
-                  <button class="icon-button" onClick={placeCall} aria-label="Call"><Glyph name="call" /></button>
+                  <>
+                    <button class="icon-button" onClick={() => placeCall(false)} aria-label="Call"><Glyph name="call" /></button>
+                    <button class="icon-button" onClick={() => placeCall(true)} aria-label="Video call"><Glyph name="video" /></button>
+                  </>
                 ) : null}
                 <button class="icon-button" onClick={() => (chatSearchOpen.value = !chatSearchOpen.value)} aria-label="Search messages"><Glyph name="search" /></button>
               </header>
