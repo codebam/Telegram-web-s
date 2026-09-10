@@ -1,0 +1,74 @@
+
+  .backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    display: grid;
+    place-items: center;
+    z-index: 95;
+  }
+
+  .dialog {
+    width: min(360px, calc(100vw - 32px));
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 18px;
+    background: var(--bg-solid);
+    border: 1px solid var(--border);
+    border-radius: var(--pane-radius);
+    color: var(--text);
+  }
+
+  header {
+    font-weight: 600;
+  }
+
+  .muted,
+  .coords {
+    margin: 0;
+    font-size: 13px;
+    color: var(--text-dim);
+  }
+
+  .section {
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  .periods {
+    display: flex;
+    gap: 6px;
+  }
+
+  button {
+    padding: 8px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text);
+    font-size: 13px;
+    cursor: pointer;
+  }
+
+  .periods button {
+    flex: 1;
+  }
+
+  .primary {
+    color: var(--accent);
+  }
+
+  .danger {
+    color: var(--danger);
+  }
+
+  button:disabled {
+    opacity: 0.55;
+    cursor: default;
+  }
+
+  footer {
+    display: flex;
+    justify-content: flex-end;
+  }

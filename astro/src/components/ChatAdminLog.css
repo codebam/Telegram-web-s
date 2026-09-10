@@ -1,0 +1,31 @@
+
+  .pane {
+    display: grid;
+    gap: 8px;
+    align-content: start;
+  }
+
+  .event {
+    display: grid;
+    gap: 4px;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+  }
+
+  .detail {
+    margin: 0 0 0 38px;
+    font-size: 13px;
+    color: var(--text-dim);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .admin-sub {
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  strong {
+    font-weight: 600;
+  }

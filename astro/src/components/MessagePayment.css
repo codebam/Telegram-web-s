@@ -1,0 +1,135 @@
+
+  .payment,
+  .paid-reaction {
+    display: grid;
+    gap: 4px;
+    margin-top: 6px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    font-size: 13px;
+  }
+
+  .head {
+    font-weight: 600;
+  }
+
+  .price {
+    font-weight: 700;
+    color: var(--accent);
+  }
+
+  .row {
+    display: flex;
+    gap: 6px;
+  }
+
+  button {
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    font-size: 13px;
+    justify-self: start;
+  }
+
+  .primary {
+    background: var(--accent);
+    border-color: transparent;
+    color: #fff;
+    font-weight: 600;
+  }
+
+  .primary:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  .ghost {
+    padding: 6px 10px;
+    font-size: 12px;
+  }
+
+  .field {
+    display: grid;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  .toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+  }
+
+  .field input {
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text);
+    outline: none;
+  }
+
+  .backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    display: grid;
+    place-items: center;
+    z-index: 96;
+  }
+
+  .dialog {
+    width: min(380px, calc(100vw - 32px));
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .close {
+    border: none;
+    background: none;
+    color: var(--accent);
+    padding: 0;
+  }
+
+  .dialog-body {
+    padding: 16px 18px;
+    display: grid;
+    gap: 6px;
+  }
+
+  .status {
+    margin: 0;
+    font-weight: 600;
+  }
+
+  .muted {
+    color: var(--text-dim);
+  }
+
+  .small {
+    font-size: 12px;
+    margin: 0;
+  }
+
+  .error {
+    color: var(--danger);
+  }
+
+  .ok {
+    color: var(--accent);
+  }

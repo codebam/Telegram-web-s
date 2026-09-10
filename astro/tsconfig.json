@@ -1,0 +1,55 @@
+{
+  "extends": "astro/tsconfigs/base",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "jsxImportSource": "preact",
+    // Matches the tolerance the Svelte client was written against: it ran with
+    // `strict: false`, and the ported code relies on `strictNullChecks` being
+    // off (a missing peer is often read as `undefined` and guarded at runtime).
+    "strict": false,
+    "strictNullChecks": false,
+    // tweb's own 24k lines are type-checked as dependencies of this program and
+    // do not opt into type-only imports, which Astro's base config turns on.
+    "verbatimModuleSyntax": false,
+    // Matters for class field behaviour in tweb's managers — see the root
+    // tsconfig, which sets the same.
+    "useDefineForClassFields": false,
+    "allowJs": true,
+    "checkJs": false,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "sourceMap": true,
+    "moduleResolution": "bundler",
+    "types": ["vite/client", "astro/client", "chrome", "dom-webcodecs"],
+    "paths": {
+      "$lib/*": ["./src/lib/*"],
+      "@components/*": ["../src/components/*"],
+      "@helpers/*": ["../src/helpers/*"],
+      "@hooks/*": ["../src/hooks/*"],
+      "@stores/*": ["../src/stores/*"],
+      "@lib/*": ["../src/lib/*"],
+      "@appManagers/*": ["../src/lib/appManagers/*"],
+      "@richTextProcessor/*": ["../src/lib/richTextProcessor/*"],
+      "@environment/*": ["../src/environment/*"],
+      "@customEmoji/*": ["../src/lib/customEmoji/*"],
+      "@config/*": ["../src/config/*"],
+      "@vendor/*": ["../src/vendor/*"],
+      "@layer": ["../src/layer.d.ts"],
+      "@types": ["../src/types.d.ts"],
+      "@/*": ["../src/*"]
+    }
+  },
+  // tweb's ambient declarations: `PeerId`, `ChatId`, `Long` … are global types in
+  // src/global.d.ts, and half of the manager signatures use them.
+  "include": [
+    ".astro/types.d.ts",
+    "src/**/*",
+    "../src/global.d.ts",
+    "../src/types.d.ts",
+    "../src/env.d.ts"
+  ],
+  "exclude": ["dist", "node_modules"]
+}

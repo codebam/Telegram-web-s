@@ -1,0 +1,155 @@
+
+  .global-search {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+  }
+
+  .section-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px 4px;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-dim);
+  }
+
+  .link {
+    background: none;
+    border: 0;
+    color: var(--accent);
+    cursor: pointer;
+    font-size: 12px;
+    padding: 0;
+  }
+
+  .tabs {
+    display: flex;
+    gap: 4px;
+    padding: 8px 10px;
+    position: sticky;
+    top: 0;
+    background: var(--bg-solid);
+    z-index: 1;
+  }
+
+  .tabs button {
+    flex: 1;
+    border: 0;
+    border-radius: 8px;
+    padding: 6px 8px;
+    font-size: 13px;
+    cursor: pointer;
+    background: transparent;
+    color: inherit;
+    opacity: 0.7;
+  }
+
+  .tabs button.active {
+    background: var(--row-active);
+    opacity: 1;
+  }
+
+  .recent-row {
+    display: flex;
+    align-items: center;
+  }
+
+  .peer-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 8px 14px;
+    background: none;
+    border: 0;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+    min-width: 0;
+  }
+
+  .peer-row:hover {
+    background: var(--bg-elevated);
+  }
+
+  .meta {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    flex: 1;
+    gap: 2px;
+  }
+
+  .row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .title {
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .subtitle {
+    font-size: 12px;
+    color: var(--text-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .time {
+    font-size: 11px;
+    color: var(--text-dim);
+    flex: none;
+  }
+
+  .forget {
+    background: none;
+    border: 0;
+    color: var(--text-dim);
+    cursor: pointer;
+    padding: 0 12px;
+  }
+
+  .top-peers {
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    padding: 4px 10px 10px;
+  }
+
+  .top-peer {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    width: 68px;
+    flex: none;
+    background: none;
+    border: 0;
+    color: inherit;
+    cursor: pointer;
+  }
+
+  .top-name {
+    font-size: 11px;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .muted {
+    padding: 14px;
+    color: var(--text-dim);
+    font-size: 13px;
+  }

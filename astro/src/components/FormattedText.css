@@ -1,0 +1,78 @@
+
+  .text {
+    margin: 0;
+    white-space: pre-wrap;
+    min-width: 0;
+    word-break: break-word;
+  }
+
+  .bold {
+    font-weight: 600;
+  }
+
+  .italic {
+    font-style: italic;
+  }
+
+  .underline {
+    text-decoration: underline;
+  }
+
+  .strike {
+    text-decoration: line-through;
+  }
+
+  .code,
+  .pre {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.92em;
+    background: color-mix(in srgb, currentColor 12%, transparent);
+    border-radius: 4px;
+    padding: 0 4px;
+  }
+
+  .pre {
+    display: block;
+    padding: 8px 10px;
+    margin: 4px 0;
+    white-space: pre;
+    overflow-x: auto;
+  }
+
+  .quote {
+    display: inline-block;
+    border-left: 2px solid currentColor;
+    padding-left: 8px;
+    opacity: 0.9;
+  }
+
+  a {
+    color: inherit;
+    text-decoration: underline;
+  }
+
+  .mention {
+    color: var(--accent);
+  }
+
+  button.mention {
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  button.mention:hover {
+    text-decoration: underline;
+  }
+
+  .spoiler {
+    font: inherit;
+    color: transparent;
+    background: color-mix(in srgb, currentColor 35%, transparent);
+    border: none;
+    border-radius: 4px;
+    padding: 0 2px;
+    cursor: pointer;
+  }

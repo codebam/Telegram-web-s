@@ -1,0 +1,85 @@
+
+  .checklist {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 220px;
+    max-width: 340px;
+  }
+
+  .title {
+    font-weight: 600;
+    font-size: 14px;
+  }
+
+  .count {
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  ul {
+    list-style: none;
+    margin: 4px 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  label {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+
+  label.done span {
+    text-decoration: line-through;
+    color: var(--text-dim);
+  }
+
+  input[type='checkbox'] {
+    margin-top: 2px;
+    accent-color: var(--accent);
+  }
+
+  .actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 4px;
+  }
+
+  .actions button,
+  form button {
+    padding: 5px 9px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--accent);
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .actions button:disabled,
+  form button:disabled {
+    color: var(--text-dim);
+    cursor: default;
+  }
+
+  form {
+    display: flex;
+    gap: 6px;
+    margin-top: 4px;
+  }
+
+  form input {
+    flex: 1;
+    min-width: 0;
+    padding: 5px 8px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text);
+    font-size: 13px;
+  }

@@ -1,0 +1,97 @@
+
+  .label {
+    margin: 18px 0 6px;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    opacity: 0.6;
+  }
+
+  .toggle {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 0;
+    cursor: pointer;
+  }
+
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 0;
+  }
+
+  .row-label {
+    min-width: 90px;
+  }
+
+  select {
+    flex: 1;
+    padding: 7px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: transparent;
+    color: inherit;
+  }
+
+  button {
+    padding: 7px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+  }
+
+  button:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--text) 6%, transparent);
+  }
+
+  button:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  button.danger {
+    color: var(--danger, #e05c5c);
+  }
+
+  .exception {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .exception-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .name {
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .muted {
+    opacity: 0.65;
+  }
+
+  .small {
+    font-size: 12px;
+  }
+
+  .error {
+    color: var(--danger, #e05c5c);
+  }

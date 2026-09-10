@@ -1,0 +1,39 @@
+
+  .game {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-width: 320px;
+  }
+
+  img {
+    width: 100%;
+    border-radius: 10px;
+    display: block;
+  }
+
+  .title {
+    font-weight: 600;
+    font-size: 14px;
+  }
+
+  .desc {
+    font-size: 13px;
+    color: var(--text-dim);
+  }
+
+  button {
+    margin-top: 4px;
+    padding: 7px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--accent);
+    font-size: 13px;
+    cursor: pointer;
+  }
+
+  button:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }

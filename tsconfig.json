@@ -105,6 +105,10 @@
   "exclude": [
     "node_modules",
     ".claude",
+    /* The Astro app has its own tsconfig (astro/tsconfig.json): its JSX is Preact
+       and this one's is Solid, and one program cannot hold both. `pnpm typecheck`
+       runs it as well — see astro/scripts/typecheck.mjs. */
+    "astro",
     "public",
     "dist",
     "coverage",

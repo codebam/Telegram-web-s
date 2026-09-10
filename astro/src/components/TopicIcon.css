@@ -1,0 +1,22 @@
+
+  .topic-icon {
+    display: inline-grid;
+    place-items: center;
+    flex: none;
+  }
+
+  .fallback {
+    width: 100%;
+    height: 100%;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    color: #fff;
+    font-weight: 600;
+    line-height: 1;
+  }
+
+  .general {
+    color: var(--muted, #8b97a3);
+    line-height: 1;
+  }

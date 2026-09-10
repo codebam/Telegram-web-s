@@ -4,33 +4,51 @@ Canonical instructions for **every** coding agent working in this repo (Claude
 Code, Codex, Cursor, Zed, …). `CLAUDE.md` is only a pointer that imports this
 file — edit AGENTS.md, never CLAUDE.md.
 
-## Two apps live here — read this first
+## Three apps live here — read this first
 
-| | `svelte/` | `src/` |
-|---|---|---|
-| What | **Web S** — the app this repo ships | tweb (Telegram Web K), upstream client |
-| Framework | SvelteKit + Svelte 5 runes | Solid.js (custom fork in `src/vendor/solid/`) |
-| Deployed | **yes** — https://telegram.codebam.ca | no |
-| Role | the product | MTProto stack + managers the product imports |
+| | `astro/` | `svelte/` | `src/` |
+|---|---|---|---|
+| What | **Web S** — the client being migrated to | the previous client, still the one deployed | tweb (Telegram Web K), upstream client |
+| Framework | Astro + Preact islands (`@preact/signals`) | SvelteKit + Svelte 5 runes | Solid.js (custom fork in `src/vendor/solid/`) |
+| Deployed | not yet | **yes** — https://telegram.codebam.ca | no |
+| Role | the target product | kept until the deploy switches | MTProto stack + managers both clients import |
 
-**The application in this repo is the SvelteKit one.** `svelte/` is what gets
-built and deployed; a user-facing bug ("the web app crashes", "the picker is
-broken") means `svelte/`, and a fix landed only in `src/` ships to nobody.
+**`svelte/` is being ported to `astro/`, file by file, and the port is complete in
+the working tree.** Both clients are complete and independent: `astro/src/lib/telegram/`
+is a copy of `svelte/src/lib/telegram/` (framework-clean, so the only edits were
+import paths and comments), and every one of the 85 components has a Preact port.
+`svelte/` stays in the tree, and stays the deployed app, until the Cloudflare Pages
+build is pointed at `astro/` — that switch is a dashboard change, not a commit.
 
-`src/` is not dead code — it is the whole MTProto/worker/manager layer plus the
-original Solid client, and `svelte/` imports it directly through the tweb path
-aliases. Touch `src/` when the fix genuinely belongs to that shared layer (a
-manager, the protocol, a helper), and expect it to reach users only through the
-Svelte app.
+Which one to work on:
 
-Default to `svelte/` unless the task names tweb, the Solid client, or a manager.
+* **A user-facing bug** ("the app crashes", "the picker is broken") — fix `astro/`;
+  that is the client being shipped. If the same bug is still live on the deployed
+  site and the switch has not happened yet, port the fix to `svelte/` too, or say
+  plainly that the fix only reaches users after the switch.
+* **Anything in `src/`** — it is the whole MTProto/worker/manager layer plus the
+  original Solid client, imported by *both* clients through the tweb path aliases.
+  A fix there reaches users through whichever client is deployed.
+* **`svelte/`** — only for that deploy-continuity case above, or when the task names
+  the Svelte client explicitly. `astro/CONVERSION.md` documents the full mapping
+  between the two, and is the reference to read before touching either.
+
+`astro/CONVERSION.md` is the porting contract; `astro/scripts/` holds the tooling and
+guards that keep the port honest (see "Migrating to Astro" below).
 
 ## Development
 
 ```bash
 pnpm install
 
-pnpm start:svelte      # Web S dev server on :8081   <- the usual one
+pnpm start:astro       # Web S (Astro + Preact) dev server on :8082   <- the usual one
+pnpm build:astro       # -> astro/dist/
+pnpm preview:astro
+pnpm deploy:astro      # manual wrangler push — an escape hatch, NOT how we deploy
+pnpm typecheck:astro   # astro/src only (tweb's own errors are not gated)
+npx vitest run astro/scripts/   # the porting guards: class/markup/text parity, stylesheet invariants
+
+pnpm start:svelte      # the previous client's dev server on :8081
 pnpm build:svelte      # -> svelte/build/
 pnpm preview:svelte
 pnpm deploy:svelte     # manual wrangler push — an escape hatch, NOT how we deploy
@@ -38,11 +56,35 @@ pnpm deploy:svelte     # manual wrangler push — an escape hatch, NOT how we de
 pnpm start             # tweb (Solid) dev server on :8080
 pnpm build             # typecheck + changelog + tweb build -> dist/
 
-pnpm typecheck         # tsc --noEmit over the whole repo
-pnpm lint              # oxlint, src/ only (tweb) — does not cover svelte/
+pnpm typecheck         # tsc --noEmit over tweb and the svelte client, then the astro app
+pnpm lint              # oxlint, src/ only (tweb) — does not cover either client's UI
 pnpm test              # Vitest
 pnpm test:lottie       # Playwright specs in e2e/
 ```
+
+## Migrating to Astro
+
+The conversion is done but the deploy has not moved, so the rules below still matter.
+
+* **Component stylesheets are copied verbatim** into `astro/src/components/X.css`
+  with `node astro/scripts/extract-style.mjs X`. Scoping is added at build time:
+  `scripts/babel-plugin-scope-jsx.mjs` (via `scripts/vite-plugin-scope-jsx.mjs`)
+  stamps every host element with `data-ws="x"` and `scripts/postcss-plugin-scope-css.mjs`
+  appends `[data-ws='x']` to the matching selectors, in exactly the places Svelte's
+  compiler put its scope class. Class names are load-bearing outside the component —
+  `src/app.css` styles bare `.bubble`, `.messages`, `.row-button` …, and tweb's layer
+  adds classes imperatively — so renaming one is a silently unstyled element.
+  `scripts/verify-scoping.mjs` checks the scheme against `svelte/compiler` itself.
+* **The guards are the review**: `class-parity`, `markup-parity` and `text-parity`
+  compare every ported component with its Svelte original, `components-css` checks
+  the stylesheet invariants, and `audit-mutations.mjs` / `audit-hooks.mjs` flag the
+  two translations that are silent when wrong (nested writes into a signal-held
+  object, and hooks called from inside a callback).
+* **`patches/@astrojs__preact@6.0.5.patch`** removes the integration's dependency on
+  its `astro:preact:opts` virtual module (which Astro externalises, so Node dies on
+  the `astro:` URL) and stops it forcing Babel's JSX transform (whose dev-mode plugin
+  calls an API `@babel/core` 8 removed, which breaks `astro dev`). Read the patch
+  before upgrading that package.
 
 Deployment is **CI**: the Cloudflare Pages GitHub integration builds `svelte/`
 on every push to `master` and publishes it to https://telegram.codebam.ca. It is
@@ -51,6 +93,12 @@ file for it (`.github/workflows/production-image.yml` is upstream tweb's
 tag-triggered Docker build and has nothing to do with the site). Pushing to
 master ships. `pnpm deploy:svelte` exists as a manual wrangler escape hatch;
 prefer the pipeline.
+
+**Switching the deploy to the Astro client** is a dashboard change: build command
+`pnpm run build:astro`, output directory `astro/dist`. Nothing in the repo needs to
+change for it, and `astro/public/_headers` / `_redirects` already carry the
+Cloudflare rules the new asset layout needs (`/_astro/*` immutable, SPA fallback,
+real 404s for missing chunks).
 
 Anything the build reads from its environment is compiled into a **public**
 bundle. Pages clones with a credentialed origin
@@ -81,22 +129,40 @@ the script directly and open the printed URL.
 ## Directory structure
 
 ```
-svelte/                       # THE APP
+astro/                        # THE CLIENT — Astro + Preact islands
 ├── src/
-│   ├── routes/
-│   │   ├── +page.svelte      # auth flow (phone → code → password) + <Chat/>
-│   │   └── +layout.svelte
+│   ├── pages/index.astro     # prerendered shell + the one client:only island
+│   ├── layouts/Base.astro    # head; replaces SvelteKit's app.html
+│   ├── components/           # 85 Preact components + one .css each (verbatim from svelte/)
+│   │   └── App.tsx           # auth flow (phone → code → password) + <Chat/>
 │   ├── lib/
-│   │   ├── components/       # 18 components: Chat, Picker, Sticker, Media, …
-│   │   ├── telegram/         # the seam onto tweb's managers
+│   │   ├── telegram/         # the seam onto tweb's managers (copy of svelte/src/lib/telegram)
 │   │   │   ├── client.ts     # bootTelegram(): boots the worker, returns managers
 │   │   │   ├── auth.ts       # sendCode / signIn / checkPassword
-│   │   │   ├── chats.ts      # dialogs, messages, media, stickers, GIFs (~1.8k lines)
+│   │   │   ├── chats.ts      # dialogs, messages, media, stickers, GIFs (~2.3k lines)
 │   │   │   ├── extras.ts     # calls, stories, mini apps, folders
 │   │   │   ├── loadQueue.ts  # bounded media-download queue
-│   │   │   ├── staleGuard.ts # __BUILD_ID__ check for cached bundles
-│   │   │   └── settings.ts / theme.ts / markdown.ts / notifications.ts
+│   │   │   └── staleGuard.ts # __BUILD_ID__ check for cached bundles
+│   │   ├── portal.tsx        # <Portal>, the port of Svelte's `use:portal`
+│   │   ├── tick.ts           # `tick()` — flush Preact's pending render
 │   │   └── buildInfo.ts      # __GIT_COMMIT__ → link to the built commit
+│   ├── styles/app.css        # the design tokens + console density (same as svelte/src/app.css)
+├── public/                   # _redirects, _headers, manifest, icons
+├── scripts/                  # the porting tooling and guards (see "Migrating to Astro")
+├── dist/                     # build output (gitignored)
+├── astro.config.mjs          # integrations, aliases, defines, scope tooling
+├── tsconfig.json             # Preact JSX + tweb aliases
+└── CONVERSION.md             # the porting contract: every Svelte → Preact mapping
+
+svelte/                       # the previous client — SvelteKit, still deployed
+├── src/
+│   ├── routes/
+│   │   ├── +page.svelte      # auth flow + <Chat/>
+│   │   └── +layout.svelte
+│   ├── lib/
+│   │   ├── components/       # 85 Svelte components — the source of truth for the port
+│   │   ├── telegram/         # the same seam, Svelte-era copy
+│   │   └── buildInfo.ts
 │   ├── app.html / app.css
 ├── static/                   # _redirects, _headers, manifest, icons
 ├── build/                    # adapter-static output (gitignored)
@@ -106,7 +172,7 @@ svelte/                       # THE APP
 src/                          # tweb — shared stack + the Solid client
 ├── components/               # Solid UI (.tsx), 200+ feature folders
 ├── lib/
-│   ├── appManagers/          # 55+ domain managers — the API the Svelte app uses
+│   ├── appManagers/          # 55+ domain managers — the API both clients use
 │   ├── mtproto/              # MTProto implementation
 │   ├── storages/             # IndexedDB/localStorage wrappers
 │   └── rootScope.ts          # global event emitter & app context
@@ -120,12 +186,13 @@ e2e/                          # Playwright (lottie rendering)
 
 ## Path aliases
 
-`svelte/` uses SvelteKit's `$lib` for its own code **and** tweb's aliases for the
-shared layer — both are declared in `svelte/svelte.config.js` and mirrored in
+Both clients use `$lib` for their own code **and** tweb's aliases for the shared
+layer. In `astro/` they are declared in `astro/astro.config.mjs` (mirrored in
+`astro/tsconfig.json`); in `svelte/` in `svelte/svelte.config.js` and
 `svelte/vite.config.ts`. Never reach into tweb with relative `../../src/…`.
 
 ```typescript
-$lib/*          → svelte/src/lib/           // Svelte app's own code
+$lib/*          → astro/src/lib/ (or svelte/src/lib/)   // the client's own code
 @appManagers/*  → src/lib/appManagers/
 @components/*   → src/components/
 @helpers/*      → src/helpers/
@@ -157,7 +224,27 @@ Two conventions coexist; match the file you are in.
 Shared: 2-space indent, single quotes, LF + final newline, no trailing
 whitespace, max 2 blank lines, `prefer-const`.
 
-## Svelte 5 conventions
+## Preact + signals conventions (`astro/`)
+
+The full mapping from Svelte to Preact is `astro/CONVERSION.md` — read it before
+changing a component. The short version:
+
+- State is `@preact/signals`: `$state` → `useSignal`, `$derived` → `useComputed`
+  (signals only) or a plain const/`useMemo` (props), `$effect` →
+  `useSignalEffect` (signals only) or `useEffect` with the props in its deps.
+  Reading a signal is always `.value`.
+- A signal is **shallow** where `$state` was a deep proxy: `obj.value.field = x`
+  notifies nobody, so nested writes are reassignments
+  (`astro/scripts/audit-mutations.mjs` lists them).
+- Anything created in the component body that holds state (a helper object, a
+  copy of a prop read inside an `await`) must be `useMemo`/`useRef` — a Preact
+  body runs on every render, a Svelte body ran once per instance.
+- Values crossing into the worker are `sig.value`, never the signal.
+- Components are **named exports**; the island in `index.astro` names the export.
+- Component CSS is copied verbatim from `svelte/` (`extract-style.mjs`) and scoped
+  at build time by the `data-ws` tooling — never rename a class.
+
+## Svelte 5 conventions (`svelte/` — the previous client)
 
 Runes only — no legacy `export let`, no `$:` labels:
 
@@ -264,16 +351,25 @@ import {Message, Chat, User, InputPeer} from '@layer';
 - `jsxImportSource: solid-js` — JSX in `src/` is Solid, not React
 - Globals available everywhere: `PeerId`, `UserId`, `ChatId`, `BotId`, `DocId`,
   `Long`, `Icon`, `ApiError`, `ErrorType`, `MaybePromise<T>` (`src/global.d.ts`)
-- `pnpm typecheck` covers both apps and currently reports pre-existing errors in
-  `src/tests/**` and a few `svelte/src/lib/telegram/*` signatures — check that
-  your file is clean rather than expecting a clean run
+- `pnpm typecheck` runs root `tsc` over tweb and `svelte/`, then
+  `astro/scripts/typecheck.mjs` for the Astro app. Root `tsc` currently reports
+  pre-existing errors in `src/tests/**` and a few `svelte/src/lib/telegram/*`
+  signatures; the Astro run gates only `astro/src/**` for the same reason — check
+  that your own file is clean rather than expecting a clean run.
+- `astro/tsconfig.json` sets `jsxImportSource: preact` and enables
+  `verbatimModuleSyntax: false` / `useDefineForClassFields: false` so tweb's own
+  modules stay type-checkable as dependencies.
 
 ## Important files
 
 | File | Purpose |
 |---|---|
-| `svelte/src/routes/+page.svelte` | auth flow and app entry |
-| `svelte/src/lib/components/Chat.svelte` | the whole chat UI |
+| `astro/src/components/App.tsx` | auth flow and app entry (the island) |
+| `astro/src/components/Chat.tsx` | the whole chat UI |
+| `astro/astro.config.mjs` | integrations, aliases, defines, scope tooling, prerender fix |
+| `astro/CONVERSION.md` | the Svelte → Preact porting contract |
+| `svelte/src/routes/+page.svelte` | the same auth flow, Svelte-era |
+| `svelte/src/lib/components/Chat.svelte` | the same chat UI, Svelte-era (port source) |
 | `svelte/src/lib/telegram/chats.ts` | dialogs, messages, media, stickers, GIFs |
 | `svelte/src/lib/telegram/client.ts` | `bootTelegram()` — worker boot |
 | `svelte/vite.config.ts` | aliases, `__BUILD_ID__`, `__GIT_COMMIT__` |
@@ -294,9 +390,10 @@ import {Message, Chat, User, InputPeer} from '@layer';
   Iterating on a feature must not produce a trail of commits: keep the work in
   the working tree, and when asked to commit, fold the whole feature into ONE
   commit (directly on master, no feature branch) unless told otherwise.
-- **Do not fix a user-facing bug in `src/` without checking `svelte/` first.**
-  The two apps have separate UIs for the same features (pickers, chat, media);
-  a fix in the Solid client does not reach the deployed app.
+- **Do not fix a user-facing bug in `src/` without checking `astro/` first** (and
+  `svelte/` while it is still the deployed client). The three codebases have
+  separate UIs for the same features (pickers, chat, media); a fix in the Solid
+  client reaches users only through whichever client is deployed.
 - Do not hand-deploy with `pnpm deploy:svelte` when the intent is to ship —
   pushing to master is the deploy. A manual wrangler push puts the site on a
   build nobody can trace back to a commit.
@@ -330,8 +427,13 @@ pnpm test:lottie           # Playwright (e2e/), tweb only
 ```
 
 Vitest: `globals: true`, jsdom, `pool: 'forks'`, setup in `src/tests/setup.ts`.
-There is no test suite for `svelte/` — verify Svelte changes by driving the app
-in a browser against `pnpm start:svelte`.
+
+Neither client has a unit-test suite. The Astro client's coverage is the guard
+suites in `astro/scripts/*.test.mjs` (`npx vitest run astro/scripts/`), which
+compare every component with its Svelte original, plus the browser check:
+`pnpm build:astro`, serve `astro/dist`, and drive it — sign-in and the chat UI
+need a real account, and a session stored in a Chrome profile can be reused for
+that. Svelte-side changes are verified by driving `pnpm start:svelte`.
 
 ## Agents & shared tooling
 

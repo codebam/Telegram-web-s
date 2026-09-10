@@ -2,6 +2,7 @@ allowBuilds:
   '@parcel/watcher@2.6.0': true
   'cpu-features@0.0.10': true
   'esbuild@0.27.4': true
+  'esbuild@0.28.2': true
   'ssh2@1.17.0': true
 minimumReleaseAgeExclude:
   - 'baseline-browser-mapping@2.11.0'
@@ -36,3 +37,5 @@ minimumReleaseAgeExclude:
   - '@oxlint/binding-win32-arm64-msvc@1.75.0'
   - '@oxlint/binding-win32-ia32-msvc@1.75.0'
   - '@oxlint/binding-win32-x64-msvc@1.75.0'
+patchedDependencies:
+  '@astrojs/preact@6.0.5': patches/@astrojs__preact@6.0.5.patch
