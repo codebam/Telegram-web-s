@@ -329,3 +329,86 @@ export async function onCallState(callback: (state: CallState | null) => void): 
     }
   };
 }
+
+/* ------------------------------------------------------------------ */
+/* Call devices (Settings → Calls)                                     */
+/* ------------------------------------------------------------------ */
+
+export type CallDeviceKind = 'speaker' | 'microphone' | 'camera';
+
+export type CallDeviceOption = {
+  /** '' is the OS default — the absence of a stored choice. */
+  id: string;
+  label: string;
+};
+
+export type CallDevices = {
+  microphone: CallDeviceOption[];
+  speaker: CallDeviceOption[];
+  camera: CallDeviceOption[];
+  /** The persisted choice per kind; '' means default. */
+  selected: Record<CallDeviceKind, string>;
+  noiseSuppression: boolean;
+};
+
+const CALL_DEVICE_MEDIA_KIND: Record<CallDeviceKind, MediaDeviceKind> = {
+  microphone: 'audioinput',
+  speaker: 'audiooutput',
+  camera: 'videoinput'
+};
+
+const CALL_DEVICE_KINDS: CallDeviceKind[] = ['microphone', 'speaker', 'camera'];
+
+/**
+ * The devices the browser offers, plus the saved call choice.
+ *
+ * The choice lives in the main-thread `appSettings` store because that is what
+ * `getAudioConstraints` / `getVideoConstraints` read when a call acquires its
+ * stream; `setCallDevice` writes there and swaps the device on a live call.
+ */
+export async function loadCallDevices(): Promise<CallDevices> {
+  const {appSettings} = await import('@stores/appSettings');
+
+  const info: MediaDeviceInfo[] = navigator.mediaDevices?.enumerateDevices ?
+    await navigator.mediaDevices.enumerateDevices() :
+    [];
+
+  const options: Record<CallDeviceKind, CallDeviceOption[]> = {microphone: [], speaker: [], camera: []};
+  for(const kind of CALL_DEVICE_KINDS) {
+    const mediaKind = CALL_DEVICE_MEDIA_KIND[kind];
+    options[kind] = info
+      .filter((device) => device.kind === mediaKind)
+      .map((device) => ({
+        id: device.deviceId,
+        label: device.label || device.deviceId || 'Unknown device'
+      }));
+  }
+
+  const saved = appSettings.callDevices;
+  return {
+    ...options,
+    selected: {
+      microphone: saved?.microphoneId || '',
+      speaker: saved?.speakerId || '',
+      camera: saved?.cameraId || ''
+    },
+    noiseSuppression: saved?.noiseSuppression ?? true
+  };
+}
+
+/**
+ * Persist a device choice and apply it to a call that is already live. The
+ * store may clear a stale id itself when the chosen device turns out to be gone
+ * and the stream falls back to the OS default — `loadCallDevices` re-reads the
+ * result.
+ */
+export async function setCallDevice(kind: CallDeviceKind, id: string): Promise<void> {
+  const {changeCallDevice} = await import('@lib/calls/applyDeviceToActiveCall');
+  await changeCallDevice(kind, id);
+}
+
+/** Toggle the in-call noise suppression — the one audio-DSP switch there is. */
+export async function setCallNoiseSuppression(enabled: boolean): Promise<void> {
+  const {setAppSettings} = await import('@stores/appSettings');
+  await setAppSettings('callDevices', 'noiseSuppression', enabled);
+}

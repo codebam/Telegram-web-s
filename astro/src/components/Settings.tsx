@@ -17,6 +17,7 @@ import {useSignal, useSignalEffect} from '@preact/signals';
 import {AppearanceSettings} from './AppearanceSettings';
 import {Avatar} from './Avatar';
 import {BusinessSettings} from './BusinessSettings';
+import {CallSettings} from './CallSettings';
 import {DataSettings} from './DataSettings';
 import {ImageCropper} from './ImageCropper';
 import {NotificationSettings} from './NotificationSettings';
@@ -54,6 +55,7 @@ type Section =
   | 'profile'
   | 'appearance'
   | 'notifications'
+  | 'calls'
   | 'privacy'
   | 'security'
   | 'data'
@@ -69,6 +71,7 @@ const SECTIONS: [Section, string][] = [
   ['profile', 'Profile'],
   ['appearance', 'Appearance'],
   ['notifications', 'Notifications'],
+  ['calls', 'Calls'],
   ['privacy', 'Privacy'],
   ['security', 'Security'],
   ['data', 'Data'],
@@ -368,6 +371,8 @@ export function Settings({onclose, onminiapp}: Props) {
     body = <AppearanceSettings />;
   } else if(section.value === 'notifications') {
     body = <NotificationSettings />;
+  } else if(section.value === 'calls') {
+    body = <CallSettings />;
   } else if(section.value === 'privacy' || section.value === 'security') {
     body = <PrivacySettings view={section.value} />;
   } else if(section.value === 'data') {

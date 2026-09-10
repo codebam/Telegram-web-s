@@ -53,6 +53,23 @@ async function doBoot(): Promise<TelegramClient> {
   await apiManagerProxy.sendAllStates(allStates);
   apiManagerProxy.sendEnvironment();
 
+  // Hydrate the main-thread settings store. The calls stack reads the saved
+  // microphone, camera and speaker ids from it when it acquires media
+  // (`getAudioConstraints` / `getVideoConstraints`), and main-thread tweb
+  // modules read theme and time settings from it too. tweb does this during its
+  // own boot; this client never did, so a chosen device was invisible to
+  // `getStream` and every call opened on the OS defaults.
+  try {
+    const [{default: commonStateStorage}, {setAppSettingsSilent}] = await Promise.all([
+      import('@lib/commonStateStorage'),
+      import('@stores/appSettings')
+    ]);
+    const settings = await commonStateStorage.get('settings');
+    settings && setAppSettingsSilent(settings);
+  } catch(err) {
+    console.warn('Failed to load the persisted settings', err);
+  }
+
   // Main-thread singletons that tweb wires up in appDialogsManager.start().
   // Without this the download manager has no `managers` and every media
   // download throws "Cannot read properties of undefined (reading

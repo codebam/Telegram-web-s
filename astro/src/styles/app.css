@@ -1942,3 +1942,55 @@ button {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* Speakers & Camera (Settings → Calls)                                */
+/*                                                                     */
+/* A brand-new pane with no Svelte original, so its rules live here     */
+/* rather than in a ported component stylesheet. The field look mirrors */
+/* the ported Settings form so the two sit alike.                       */
+/* ------------------------------------------------------------------ */
+.call-settings {
+  display: grid;
+  gap: 16px;
+}
+
+.call-device {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.call-device select {
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+  outline: none;
+}
+
+.call-device select:focus {
+  border-color: var(--accent);
+}
+
+.call-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.call-settings-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.call-settings-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 13px;
+}
