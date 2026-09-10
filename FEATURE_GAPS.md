@@ -159,9 +159,9 @@ above).
 per-chat notifications are mute-only; the language picker switches the shared
 lang pack but the client's own labels stay English; several animation toggles
 persist without a consumer; business chat links are absent and quick replies
-cannot be created (which also blocks greeting/away); no people-nearby or
-recommended-channels surface (the global posts search landed — see above);
-passkeys and multiple usernames are not manageable.
+cannot be created (which also blocks greeting/away); no recommended-channels
+surface (the global posts search landed — see above); passkeys and multiple
+usernames are not manageable.
 
 **Media editor** — the strongest area (crop, adjustments, five brush tools,
 text/sticker layers, real video re-encode all work); missing WebGL, a real
@@ -172,15 +172,15 @@ colour picker (fixed 10-swatch palette) and a rotation wheel.
 ## Where to go next
 
 The public-posts scope landed (see "What has landed since this audit" above), as
-did the earlier slices. The next natural slices, smallest first:
+did the earlier slices. People Nearby has since been removed from the service
+(and `contacts.getLocated` with it), so it is not a gap to close. The next
+natural slices, smallest first:
 
-1. **People nearby & recommended channels** — the last search/discovery gaps:
-   `contacts.getLocated` has a manager wrapper but no UI, and there is no
-   "recommended channels" surface. The in-chat filters (media, sender, date) are
-   already there.
-2. **Group calls / voice chats** — the largest missing area: nothing in the
+1. **Group calls / voice chats** — the largest missing area: nothing in the
    client calls `appGroupCallsManager` or `groupCallsController`, so a voice chat
    cannot be created, joined or scheduled. (1:1 calls — placing audio and video,
    and the Speakers & Camera tab — are done.)
-3. **Stars & gifts** — gifts are receive-only: no info popup, upgrade, wear,
+2. **Stars & gifts** — gifts are receive-only: no info popup, upgrade, wear,
    transfer, resale, collections or profile display.
+3. **Smaller surfaces** — recommended channels, sign-up / passkey login /
+   passcode lock, and the in-app browser / Instant View.
